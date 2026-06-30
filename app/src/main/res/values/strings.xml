@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">hyperSidebar</string>
+    <string name="module_description">替换 MIUI 原生侧边栏为双层半圆扇形摇杆菜单。侧滑唤醒，松手即小窗。</string>
+    <string name="tab_home">首页</string>
+    <string name="tab_settings">设置</string>
+    <string name="tab_about">关于</string>
+    <string name="module_enabled">启用超级侧边栏</string>
+    <string name="module_enabled_summary">替换原生侧边栏为扇形菜单</string>
+    <string name="icon_size">图标大小</string>
+    <string name="inner_radius">内圈半径</string>
+    <string name="outer_radius_max">外圈最大半径</string>
+    <string name="vibrate_feedback">触觉反馈</string>
+    <string name="vibrate_feedback_summary">选中应用时轻微震动</string>
+    <string name="module_active">模块已激活</string>
+    <string name="module_inactive">模块未激活</string>
+    <string name="module_waiting">等待框架连接</string>
+</resources>

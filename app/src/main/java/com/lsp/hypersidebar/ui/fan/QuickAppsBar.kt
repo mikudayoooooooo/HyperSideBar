@@ -7,7 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -19,7 +19,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.platform.LocalContext
@@ -43,24 +42,27 @@ fun QuickAppsBar(
     val density = LocalDensity.current.density
     val pxIconSize = iconSizeDp * density
     val pxSpacing = pxIconSize * 0.35f
-    val pxTotalWidth = quickApps.size * pxIconSize + (quickApps.size - 1) * pxSpacing
+    val barPadding = pxIconSize * 0.5f
 
     Box(
         modifier = Modifier.fillMaxSize()
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .offset {
                     IntOffset(
-                        (geometry.quickBarCenterX - pxTotalWidth / 2f).toInt(),
-                        (geometry.quickBarCenterY - pxIconSize / 2f).toInt()
+                        geometry.quickBarX.toInt(),
+                        geometry.quickBarY.toInt()
                     )
                 }
-                .clip(RoundedCornerShape((iconSizeDp / 2f).dp))
-                .background(colors.surfaceContainer.copy(alpha = 0.85f))
-                .padding(horizontal = (iconSizeDp * 0.25f).dp, vertical = (iconSizeDp * 0.15f).dp),
-            horizontalArrangement = Arrangement.spacedBy((iconSizeDp * 0.35f).dp),
-            verticalAlignment = Alignment.CenterVertically
+                .clip(RoundedCornerShape((iconSizeDp / 2f + 4f).dp))
+                .background(colors.surfaceContainer.copy(alpha = 0.9f))
+                .padding(
+                    horizontal = (iconSizeDp * 0.25f).dp,
+                    vertical = (iconSizeDp * 0.25f).dp
+                ),
+            verticalArrangement = Arrangement.spacedBy((iconSizeDp * 0.35f).dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             quickApps.forEach { app ->
                 QuickAppIcon(

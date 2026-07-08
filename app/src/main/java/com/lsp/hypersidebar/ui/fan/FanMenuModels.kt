@@ -3,9 +3,6 @@ package com.lsp.hypersidebar.ui.fan
 import android.graphics.drawable.Drawable
 import androidx.compose.ui.graphics.Color
 
-/**
- * 扇形菜单中单个应用/快捷项的数据模型。
- */
 data class FanAppInfo(
     val packageName: String,
     val appName: String = "",
@@ -14,36 +11,19 @@ data class FanAppInfo(
     val isAction: Boolean get() = actionHandle != null
 }
 
-/**
- * 扇形菜单配置，由设置页和 TurboLayout 注入。
- */
 data class FanConfig(
-    /** 图标直径 dp */
     val iconSizeDp: Float = 48f,
-    /** 快捷栏图标直径 dp */
     val quickIconSizeDp: Float = 36f,
-    /** 内圈半径 dp（双圈内层） */
     val innerRadiusDp: Float = 150f,
-    /** 外圈最大半径 dp（双圈外层） */
     val outerRadiusDp: Float = 200f,
-    /** 默认扇形张角（角度） */
     val defaultSpanAngle: Float = 150f,
-    /** 摇杆死区 dp */
+    val landscapeSpanAngle: Float = 90f,
     val deadZoneDp: Float = 12f,
-    /** 摇杆有效区半径 dp，触摸超出此范围视为放弃 */
     val activeZoneDp: Float = 60f,
-    /** 是否使用双层环 */
     val useDualRing: Boolean = true,
-    /** 最小可用半径 dp，低于此值回退到单环 */
     val minRadiusDp: Float = 80f
 )
 
-/**
- * 扇形菜单运行时颜色。
- *
- * 由于 hook 侧运行在系统进程，无法直接复用 Compose LocalProvider，
- * 因此把需要使用的颜色打包传入。
- */
 data class FanThemeColors(
     val primary: Color,
     val onPrimary: Color,
@@ -76,9 +56,6 @@ data class FanThemeColors(
     }
 }
 
-/**
- * 加载后的图标包装。
- */
 internal data class AppIcon(
     val app: FanAppInfo,
     val drawable: Drawable?,

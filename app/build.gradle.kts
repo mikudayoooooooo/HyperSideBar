@@ -1,3 +1,23 @@
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Properties
+
+val versionFile = rootProject.file("version.properties")
+val props = Properties()
+if (versionFile.exists()) {
+    versionFile.inputStream().use { props.load(it) }
+}
+val lastCode = props.getProperty("VERSION_CODE", "0").toInt()
+
+val todayPrefix = SimpleDateFormat("yyyyMMdd").format(Date()) // e.g. "20260707"
+val dailySeq = if (lastCode / 100 == todayPrefix.toInt()) {
+    lastCode % 100 + 1
+} else {
+    1
+}
+val computedVersionCode = todayPrefix.toInt() * 100 + dailySeq
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -11,10 +31,14 @@ android {
         applicationId = "com.lsp.hypersidebar"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20260512
+        versionCode = computedVersionCode
         versionName = "0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // 注入依赖版本到 BuildConfig，运行时可通过 BuildConfig.XXX 读取
+        buildConfigField("String", "XPOSED_API_VERSION", "\"101.0.1\"")
+        buildConfigField("String", "EZXHELPER_VERSION", "\"3.2.0-preview1\"")
     }
 
     buildTypes {
@@ -29,6 +53,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -41,6 +66,14 @@ android {
             merges += "META-INF/xposed/*"
             excludes += "**"
         }
+    }
+}
+
+// 编译后将本次 versionCode 写回 version.properties，供下次编译递增
+tasks.named("preBuild").configure {
+    doLast {
+        props.setProperty("VERSION_CODE", computedVersionCode.toString())
+        versionFile.outputStream().use { props.store(it, null) }
     }
 }
 

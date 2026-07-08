@@ -32,10 +32,6 @@ import kotlin.math.sqrt
 
 private const val TAG = "ComposeFanHost"
 
-/**
- * 触摸状态，由 dispatchTouchEvent 覆写更新，Compose UI 读取做视觉渲染。
- * touchAction: 0=DOWN, 1=MOVE, 2=UP, 3=CANCEL
- */
 data class FanTouchState(
     val x: Float,
     val y: Float,
@@ -43,13 +39,6 @@ data class FanTouchState(
     val selectedIndex: Int
 )
 
-/**
- * 在 WindowManager 中承载 Compose 扇形菜单。
- *
- * 关键：ComposeView 是 final 类不能继承，且作为 ViewGroup 其
- * setOnTouchListener 无效。因此用 FrameLayout 包裹 ComposeView，
- * 覆写 FrameLayout.dispatchTouchEvent 在 super 调用之前拦截事件。
- */
 class ComposeFanHost(
     private val context: Context,
     private val prefs: SharedPreferences
@@ -58,6 +47,7 @@ class ComposeFanHost(
     private var composeView: ComposeView? = null
     private var windowManager: WindowManager? = null
     private var lifecycleOwner: FanLifecycleOwner? = null
+    private var lastSelectedIndex = -1
 
     var onAppSelected: ((FanAppInfo) -> Unit)? = null
     var onQuickAppSelected: ((FanAppInfo) -> Unit)? = null
@@ -67,7 +57,8 @@ class ComposeFanHost(
         anchorX: Float,
         anchorY: Float,
         apps: List<FanAppInfo>,
-        quickApps: List<FanAppInfo>
+        quickApps: List<FanAppInfo>,
+        isLandscape: Boolean
     ) {
         if (wrapperView != null) return
 
@@ -82,9 +73,8 @@ class ComposeFanHost(
         val config = buildFanConfig()
         val anchorOffset = Offset(anchorX, anchorY)
 
-        // 预计算 geometry（纯数学，不依赖 Compose）
         val geometry = computeFanGeometry(
-            anchorOffset, screenSize, apps, quickApps, config, density
+            anchorOffset, screenSize, apps, quickApps, config, density, isLandscape
         )
 
         val touchState = mutableStateOf(FanTouchState(0f, 0f, 3, -1))
@@ -93,13 +83,11 @@ class ComposeFanHost(
         val ax = anchorX
         val ay = anchorY
 
-        // ── Lifecycle ──
         val lcOwner = FanLifecycleOwner()
         this.lifecycleOwner = lcOwner
         lcOwner.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         lcOwner.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
 
-        // ── ComposeView（常规创建，不继承） ──
         val composeView = ComposeView(context).apply {
             setViewTreeLifecycleOwner(lcOwner)
             setViewTreeSavedStateRegistryOwner(lcOwner)
@@ -119,8 +107,6 @@ class ComposeFanHost(
         }
         this.composeView = composeView
 
-        // ── FrameLayout 包裹层：覆写 dispatchTouchEvent 拦截触摸 ──
-        // ComposeView 是 final 不能继承，所以用 FrameLayout 包一层
         val wrapper = object : FrameLayout(context) {
             override fun dispatchTouchEvent(event: MotionEvent): Boolean {
                 val x = event.rawX
@@ -128,37 +114,37 @@ class ComposeFanHost(
                 val dx = x - ax
                 val dy = y - ay
                 val dist = sqrt(dx * dx + dy * dy)
+                val iconPx = geometry.iconSize * context.resources.displayMetrics.density
+                val outerHitRadius = geometry.outerRadius + iconPx * 1.2f
 
                 when (event.action) {
-                    MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
-                        if (dist <= activeZonePx) {
-                            val selIdx = calcSelectedIndex(
-                                dx, dy, dist, deadZonePx, activeZonePx, geometry
-                            )
-                            touchState.value = FanTouchState(x, y, 0, selIdx)
-                            Log.d(TAG, "touch MOVE sel=$selIdx dist=${dist.toInt()}")
-                            return true  // 消费，不传给 ComposeView
-                        } else {
-                            touchState.value = FanTouchState(x, y, 0, -1)
-                        }
+                    MotionEvent.ACTION_DOWN -> {
+                        lastSelectedIndex = -1
+                        val selected = resolveSelection(x, y, dx, dy, dist, deadZonePx, activeZonePx, outerHitRadius, geometry)
+                        touchState.value = FanTouchState(x, y, 0, selected)
+                        Log.d(TAG, "touch DOWN sel=$selected dist=${dist.toInt()}")
+                        return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val selected = resolveSelection(x, y, dx, dy, dist, deadZonePx, activeZonePx, outerHitRadius, geometry)
+                        touchState.value = FanTouchState(x, y, 0, selected)
+                        Log.d(TAG, "touch MOVE sel=$selected dist=${dist.toInt()}")
+                        return true
                     }
                     MotionEvent.ACTION_UP -> {
+                        val selected = resolveSelection(x, y, dx, dy, dist, deadZonePx, activeZonePx, outerHitRadius, geometry)
                         touchState.value = FanTouchState(x, y, 2, -1)
-                        Log.d(TAG, "ACTION_UP dist=${dist.toInt()} zone=${activeZonePx.toInt()}")
-                        if (dist <= activeZonePx) {
-                            val idx = calcSelectedIndex(
-                                dx, dy, dist, deadZonePx, activeZonePx, geometry
-                            )
-                            if (idx in geometry.items.indices) {
-                                Log.i(TAG, "selected: ${geometry.items[idx].app.packageName}")
-                                onAppSelected?.invoke(geometry.items[idx].app)
-                            }
+                        Log.d(TAG, "ACTION_UP sel=$selected dist=${dist.toInt()}")
+                        if (selected in geometry.items.indices) {
+                            Log.i(TAG, "selected: ${geometry.items[selected].app.packageName}")
+                            onAppSelected?.invoke(geometry.items[selected].app)
                         } else {
                             handleQuickBarTap(x, y, geometry, config, density)
                         }
                     }
                     MotionEvent.ACTION_CANCEL -> {
                         touchState.value = FanTouchState(x, y, 3, -1)
+                        lastSelectedIndex = -1
                     }
                 }
                 return super.dispatchTouchEvent(event)
@@ -168,8 +154,6 @@ class ComposeFanHost(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
-        // ComposeView 在 onAttachedToWindow 时会从窗口根 View 向上查找
-        // LifecycleOwner，所以 wrapper 上也必须设置
         wrapper.setViewTreeLifecycleOwner(lcOwner)
         wrapper.setViewTreeSavedStateRegistryOwner(lcOwner)
         this.wrapperView = wrapper
@@ -206,6 +190,7 @@ class ComposeFanHost(
         wrapperView = null
         val cv = composeView
         composeView = null
+        lastSelectedIndex = -1
 
         try {
             windowManager?.removeViewImmediate(wv)
@@ -226,57 +211,120 @@ class ComposeFanHost(
         onDismiss?.invoke()
     }
 
-    // ── 同步计算选中索引（角度 + 环区分） ──
-    private fun calcSelectedIndex(
+    private fun resolveSelection(
+        x: Float, y: Float,
+        dx: Float, dy: Float,
+        dist: Float,
+        deadZonePx: Float,
+        activeZonePx: Float,
+        outerHitRadius: Float,
+        geometry: FanGeometry
+    ): Int {
+        if (dist < deadZonePx) {
+            lastSelectedIndex = -1
+            return -1
+        }
+
+        return when {
+            dist <= activeZonePx -> {
+                val candidate = calcSelectedIndexHybrid(dx, dy, dist, deadZonePx, geometry)
+                applyHysteresis(candidate, dx, dy, geometry)
+            }
+            dist <= outerHitRadius -> {
+                calcSelectedIndexByPosition(x, y, geometry)
+            }
+            else -> {
+                lastSelectedIndex = -1
+                -1
+            }
+        }
+    }
+
+    private fun calcSelectedIndexHybrid(
         dx: Float, dy: Float, dist: Float,
-        deadZonePx: Float, activeZonePx: Float, geometry: FanGeometry
+        deadZonePx: Float, geometry: FanGeometry
     ): Int {
         if (dist < deadZonePx) return -1
-        val touchDeg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
-        val start = geometry.startAngle
-        val end = start + geometry.spanAngle
-        var ta = touchDeg
-        while (ta < start) ta += 360f
-        while (ta > start + 360f) ta -= 360f
-        if (ta < start || ta > end) return -1
+        if (geometry.items.isEmpty()) return -1
 
-        // 用推动比例区分内外圈：轻推（< 50%）→ 内圈，重推（≥ 50%）→ 外圈
-        val pushRatio = ((dist - deadZonePx) / (activeZonePx - deadZonePx)).coerceIn(0f, 1f)
-        val preferOuter = pushRatio >= 0.5f
+        val touchDeg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+        val touchPos = Offset(geometry.anchor.x + dx, geometry.anchor.y + dy)
+        val density = context.resources.displayMetrics.density
+        val iconPx = geometry.iconSize * density
+        val hitRadius = iconPx * 1.2f
 
         var bestIdx = -1
-        var bestDiff = Float.MAX_VALUE
-        // 先只在目标环中找
+        var bestScore = Float.MAX_VALUE
+
         geometry.items.forEachIndexed { index, item ->
-            if (item.isOuter == preferOuter) {
-                var ia = item.angle
-                while (ia < start) ia += 360f
-                while (ia > start + 360f) ia -= 360f
-                val diff = abs(ta - ia)
-                if (diff < bestDiff) {
-                    bestDiff = diff
-                    bestIdx = index
-                }
+            val itemPos = Offset(item.centerX, item.centerY)
+            val distancePx = distance(touchPos, itemPos)
+            val angleDiff = angleDiffDeg(touchDeg, item.angle)
+
+            val score = distancePx * 0.6f + angleDiff * 3f
+            if (score < bestScore && distancePx < hitRadius * 1.5f) {
+                bestScore = score
+                bestIdx = index
             }
         }
-        // 目标环没东西时回退到全部
-        if (bestIdx == -1) {
-            bestDiff = Float.MAX_VALUE
-            geometry.items.forEachIndexed { index, item ->
-                var ia = item.angle
-                while (ia < start) ia += 360f
-                while (ia > start + 360f) ia -= 360f
-                val diff = abs(ta - ia)
-                if (diff < bestDiff) {
-                    bestDiff = diff
-                    bestIdx = index
-                }
-            }
-        }
+
         return bestIdx
     }
 
-    // ── 快捷栏点击检测 ──
+    private fun calcSelectedIndexByPosition(
+        x: Float, y: Float,
+        geometry: FanGeometry
+    ): Int {
+        if (geometry.items.isEmpty()) return -1
+
+        val touchPos = Offset(x, y)
+        val density = context.resources.displayMetrics.density
+        val iconPx = geometry.iconSize * density
+        val hitRadius = iconPx * 0.8f
+
+        var bestIdx = -1
+        var bestDist = Float.MAX_VALUE
+        geometry.items.forEachIndexed { index, item ->
+            val itemPos = Offset(item.centerX, item.centerY)
+            val dist = distance(touchPos, itemPos)
+            if (dist < hitRadius && dist < bestDist) {
+                bestDist = dist
+                bestIdx = index
+            }
+        }
+
+        return bestIdx
+    }
+
+    private fun applyHysteresis(
+        candidate: Int,
+        dx: Float, dy: Float,
+        geometry: FanGeometry
+    ): Int {
+        if (candidate == -1) return lastSelectedIndex
+        if (lastSelectedIndex == -1 || lastSelectedIndex !in geometry.items.indices) {
+            lastSelectedIndex = candidate
+            return candidate
+        }
+
+        val touchDeg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
+        val currentDiff = angleDiffDeg(touchDeg, geometry.items[lastSelectedIndex].angle)
+        val candidateDiff = angleDiffDeg(touchDeg, geometry.items[candidate].angle)
+
+        return if (candidateDiff < currentDiff - 8f) {
+            lastSelectedIndex = candidate
+            candidate
+        } else {
+            lastSelectedIndex
+        }
+    }
+
+    private fun angleDiffDeg(a: Float, b: Float): Float {
+        var d = abs(a - b)
+        while (d > 180f) d -= 360f
+        return abs(d)
+    }
+
     private fun handleQuickBarTap(
         x: Float, y: Float,
         geometry: FanGeometry, config: FanConfig, density: Float
@@ -288,17 +336,20 @@ class ComposeFanHost(
         }
         val quickIconPx = config.quickIconSizeDp * density
         val pxSpacing = quickIconPx * 0.35f
-        val totalWidth = quickAppsList.size * quickIconPx +
-            (quickAppsList.size - 1) * pxSpacing
-        val barStartX = geometry.quickBarCenterX - totalWidth / 2f
-        Log.d(TAG, "quickBarTap: touch=($x,$y) barCenter=(${geometry.quickBarCenterX},${geometry.quickBarCenterY}) totalW=${totalWidth.toInt()}")
-        for (i in quickAppsList.indices) {
-            val cx = barStartX + i * (quickIconPx + pxSpacing) + quickIconPx / 2f
-            val d = sqrt((x - cx) * (x - cx) + (y - geometry.quickBarCenterY) * (y - geometry.quickBarCenterY))
-            if (d <= quickIconPx * 0.7f) {
-                Log.i(TAG, "quickSelected: ${quickAppsList[i].packageName}")
-                onQuickAppSelected?.invoke(quickAppsList[i])
-                return
+        val barPadding = quickIconPx * 0.5f
+
+        Log.d(TAG, "quickBarTap: touch=($x,$y) barX=${geometry.quickBarX.toInt()} barY=${geometry.quickBarY.toInt()}")
+
+        if (geometry.quickBarVertical) {
+            for (i in quickAppsList.indices) {
+                val cy = geometry.quickBarY + barPadding + i * (quickIconPx + pxSpacing) + quickIconPx / 2f
+                val cx = geometry.quickBarX + barPadding + quickIconPx / 2f
+                val d = sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy))
+                if (d <= quickIconPx * 0.7f) {
+                    Log.i(TAG, "quickSelected: ${quickAppsList[i].packageName}")
+                    onQuickAppSelected?.invoke(quickAppsList[i])
+                    return
+                }
             }
         }
     }
@@ -311,7 +362,6 @@ class ComposeFanHost(
         }
     }
 
-    /** 非 @Composable，可在 View 层调用 */
     private fun buildFanConfig(): FanConfig {
         return FanConfig(
             iconSizeDp = readFloat("iconSize", 48f),

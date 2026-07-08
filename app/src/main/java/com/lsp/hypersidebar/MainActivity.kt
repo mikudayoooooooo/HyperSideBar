@@ -1,6 +1,8 @@
 package com.lsp.hypersidebar
 
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.util.Log
@@ -45,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.libxposed.service.XposedService
@@ -176,28 +179,28 @@ private fun MainScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(title = tabTitle(selectedTab))
+            TopAppBar(title = tabTitle(selectedTab, context))
         },
         bottomBar = {
             NavigationBar(mode = NavigationBarDisplayMode.IconAndText) {
-                NavigationBarItem(
-                    selected = selectedTab == Tab.HOME,
-                    onClick = { selectedTab = Tab.HOME },
-                    icon = MiuixIcons.All,
-                    label = "首页"
-                )
-                NavigationBarItem(
-                    selected = selectedTab == Tab.SETTINGS,
-                    onClick = { selectedTab = Tab.SETTINGS },
-                    icon = MiuixIcons.Settings,
-                    label = "设置"
-                )
-                NavigationBarItem(
-                    selected = selectedTab == Tab.ABOUT,
-                    onClick = { selectedTab = Tab.ABOUT },
-                    icon = MiuixIcons.Info,
-                    label = "关于"
-                )
+    NavigationBarItem(
+        selected = selectedTab == Tab.HOME,
+        onClick = { selectedTab = Tab.HOME },
+        icon = MiuixIcons.All,
+        label = stringResource(R.string.tab_home)
+    )
+    NavigationBarItem(
+        selected = selectedTab == Tab.SETTINGS,
+        onClick = { selectedTab = Tab.SETTINGS },
+        icon = MiuixIcons.Settings,
+        label = stringResource(R.string.tab_settings)
+    )
+    NavigationBarItem(
+        selected = selectedTab == Tab.ABOUT,
+        onClick = { selectedTab = Tab.ABOUT },
+        icon = MiuixIcons.Info,
+        label = stringResource(R.string.tab_about)
+    )
             }
         }
     ) { padding ->
@@ -221,14 +224,14 @@ private fun MainScreen(
                             prefs = prefs.value,
                             savePref = ::savePref,
                             prefsKey = "customApps",
-                            title = "选择应用",
+                            title = stringResource(R.string.select_apps),
                             onBack = { showAppSelection = false }
                         )
                         showShortcutSelection -> AppSelectionPage(
                             prefs = prefs.value,
                             savePref = ::savePref,
                             prefsKey = "shortcutApps",
-                            title = "选择快捷应用",
+                            title = stringResource(R.string.select_shortcut_apps),
                             onBack = { showShortcutSelection = false }
                         )
                         else -> SettingsPage(
@@ -247,10 +250,10 @@ private fun MainScreen(
     }
 }
 
-private fun tabTitle(tab: Tab): String = when (tab) {
-    Tab.HOME -> "hyperSidebar"
-    Tab.SETTINGS -> "设置"
-    Tab.ABOUT -> "关于"
+private fun tabTitle(tab: Tab, context: android.content.Context): String = when (tab) {
+    Tab.HOME -> context.getString(R.string.app_name)
+    Tab.SETTINGS -> context.getString(R.string.tab_settings)
+    Tab.ABOUT -> context.getString(R.string.tab_about)
 }
 
 private fun openLsposedManager(context: android.content.Context) {
@@ -259,7 +262,7 @@ private fun openLsposedManager(context: android.content.Context) {
             setClassName("org.lsposed.manager", "org.lsposed.manager.ui.activity.MainActivity")
         })
     } catch (_: Exception) {
-        Toast.makeText(context, "未找到 LSPosed Manager", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, context.getString(R.string.lsposed_not_found), Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -271,7 +274,7 @@ private fun HomePage(service: XposedService?, status: ModuleStatus) {
 
     val frameworkName by remember(service) {
         derivedStateOf {
-            try { service?.frameworkName?.toString() } catch (_: Exception) { null } ?: "未知"
+            try { service?.frameworkName?.toString() } catch (_: Exception) { null } ?: context.getString(R.string.unknown)
         }
     }
     val frameworkVersion by remember(service) {
@@ -298,22 +301,22 @@ private fun HomePage(service: XposedService?, status: ModuleStatus) {
         item { StatusCard(status, context) }
 
         item {
-            SmallTitle(text = "框架信息")
+            SmallTitle(text = stringResource(R.string.framework_info))
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
-                    ArrowPreference(title = "框架名称", summary = frameworkName, onClick = { })
-                    ArrowPreference(title = "框架版本", summary = frameworkVersion, onClick = { })
-                    ArrowPreference(title = "API 版本", summary = apiVersion, onClick = { })
+                    ArrowPreference(title = stringResource(R.string.framework_name), summary = frameworkName, onClick = { })
+                    ArrowPreference(title = stringResource(R.string.framework_version), summary = frameworkVersion, onClick = { })
+                    ArrowPreference(title = stringResource(R.string.api_version), summary = apiVersion, onClick = { })
                 }
             }
         }
 
         item {
-            SmallTitle(text = "作用域")
+            SmallTitle(text = stringResource(R.string.scope))
             Card(modifier = Modifier.fillMaxWidth()) {
                 if (scopeList.isEmpty()) {
                     Text(
-                        text = "等待框架连接…",
+                        text = stringResource(R.string.waiting_for_scope),
                         modifier = Modifier.padding(16.dp),
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary
                     )
@@ -329,24 +332,25 @@ private fun HomePage(service: XposedService?, status: ModuleStatus) {
 private fun StatusCard(status: ModuleStatus, context: android.content.Context) {
     val semantic = LocalSemanticColors.current
     val error = MiuixTheme.colorScheme.error
+    val scopePkg = "com.miui.securitycenter"
     val (dotColor, bgColor, statusText, hintText) = when (status) {
         ModuleStatus.ACTIVE -> Quad(
             semantic.success,
             semantic.successContainer,
-            "模块已激活",
-            "作用域已包含 com.miui.securitycenter"
+            stringResource(R.string.module_active),
+            stringResource(R.string.scope_contains, scopePkg)
         )
         ModuleStatus.UNKNOWN -> Quad(
             semantic.warning,
             semantic.warningContainer,
-            "等待框架连接",
-            "LSPosed 框架正在连接，请稍候…"
+            stringResource(R.string.module_waiting),
+            stringResource(R.string.waiting_hint)
         )
         ModuleStatus.INACTIVE -> Quad(
             error,
             error.copy(alpha = 0.12f),
-            "模块未激活",
-            "请在 LSPosed Manager 中启用本模块并勾选作用域"
+            stringResource(R.string.module_inactive),
+            stringResource(R.string.deactivation_hint)
         )
     }
 
@@ -442,12 +446,12 @@ private fun SettingsPage(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(vertical = 16.dp)
     ) {
-        item { SmallTitle(text = "基本设置") }
+        item { SmallTitle(text = stringResource(R.string.basic_settings)) }
         item {
             SwitchPreference(
-                title = "启用超级侧边栏",
-                summary = if (moduleActive) "替换原生侧边栏为扇形菜单"
-                else "请在首页启用模块后再调整此设置",
+                title = stringResource(R.string.module_enabled),
+                summary = if (moduleActive) stringResource(R.string.module_enabled_summary)
+                else stringResource(R.string.enable_module_first),
                 checked = enabled,
                 enabled = moduleActive,
                 onCheckedChange = {
@@ -457,20 +461,20 @@ private fun SettingsPage(
             )
         }
 
-        item { SmallTitle(text = "主题") }
+        item { SmallTitle(text = stringResource(R.string.theme)) }
         item {
             ArrowPreference(
-                title = "主题模式",
+                title = stringResource(R.string.theme_mode),
                 summary = ThemeModes.toDisplayName(currentThemeMode),
                 onClick = onNavigateToThemeSelection
             )
         }
 
-        item { SmallTitle(text = "扇形菜单设置") }
+        item { SmallTitle(text = stringResource(R.string.fan_menu_settings)) }
         item {
             SettingsSliderItem(
-                title = "图标大小",
-                summary = "${iconSize.toInt()} dp",
+                title = stringResource(R.string.icon_size),
+                summary = stringResource(R.string.icon_size_summary, iconSize.toInt()),
                 value = iconSize,
                 valueRange = 32f..80f,
                 onValueChange = { iconSize = it; savePref("iconSize", it) }
@@ -478,8 +482,8 @@ private fun SettingsPage(
         }
         item {
             SettingsSliderItem(
-                title = "内圈半径",
-                summary = "${innerRadius.toInt()} dp",
+                title = stringResource(R.string.inner_radius),
+                summary = stringResource(R.string.inner_radius_summary, innerRadius.toInt()),
                 value = innerRadius,
                 valueRange = 100f..200f,
                 steps = 9,
@@ -488,8 +492,8 @@ private fun SettingsPage(
         }
         item {
             SettingsSliderItem(
-                title = "外圈最大半径",
-                summary = "${outerRadiusMax.toInt()} dp",
+                title = stringResource(R.string.outer_radius_max),
+                summary = stringResource(R.string.outer_radius_summary, outerRadiusMax.toInt()),
                 value = outerRadiusMax,
                 valueRange = 150f..300f,
                 steps = 14,
@@ -497,11 +501,11 @@ private fun SettingsPage(
             )
         }
 
-        item { SmallTitle(text = "数量限制") }
+        item { SmallTitle(text = stringResource(R.string.quantity_limit)) }
         item {
             SettingsSliderItem(
-                title = "外圈应用数",
-                summary = "${maxAppsOuter.toInt()} 个",
+                title = stringResource(R.string.outer_apps_count),
+                summary = stringResource(R.string.outer_apps_summary, maxAppsOuter.toInt()),
                 value = maxAppsOuter,
                 valueRange = 4f..12f,
                 steps = 7,
@@ -510,8 +514,8 @@ private fun SettingsPage(
         }
         item {
             SettingsSliderItem(
-                title = "内圈应用数",
-                summary = "${maxAppsInner.toInt()} 个",
+                title = stringResource(R.string.inner_apps_count),
+                summary = stringResource(R.string.inner_apps_summary, maxAppsInner.toInt()),
                 value = maxAppsInner,
                 valueRange = 2f..8f,
                 steps = 5,
@@ -520,8 +524,8 @@ private fun SettingsPage(
         }
         item {
             SettingsSliderItem(
-                title = "摇杆灵敏度",
-                summary = "${activeZone.toInt()} dp（越小越灵敏）",
+                title = stringResource(R.string.stick_sensitivity),
+                summary = stringResource(R.string.stick_sensitivity_summary, activeZone.toInt()),
                 value = activeZone,
                 valueRange = 30f..120f,
                 steps = 8,
@@ -529,20 +533,20 @@ private fun SettingsPage(
             )
         }
 
-        item { SmallTitle(text = "自定义应用") }
+        item { SmallTitle(text = stringResource(R.string.custom_apps)) }
         item {
             ArrowPreference(
-                title = "选择应用",
-                summary = "在扇形区域显示的已安装应用",
+                title = stringResource(R.string.select_apps),
+                summary = stringResource(R.string.custom_apps_summary),
                 onClick = onNavigateToAppSelection
             )
         }
 
-        item { SmallTitle(text = "快捷应用栏") }
+        item { SmallTitle(text = stringResource(R.string.quick_apps_bar)) }
         item {
             ArrowPreference(
-                title = "选择快捷应用",
-                summary = "在扇形上方显示的快捷启动 app",
+                title = stringResource(R.string.select_shortcut_apps),
+                summary = stringResource(R.string.quick_apps_bar_summary),
                 onClick = onNavigateToShortcutSelection
             )
         }
@@ -580,8 +584,8 @@ private fun SettingsSliderItem(
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary
                 )
             }
-            Text(
-                text = "${value.toInt()}",
+                Text(
+                    text = "${value.toInt()}",
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary
             )
         }
@@ -603,8 +607,11 @@ private fun AboutPage() {
     val context = LocalContext.current
     val versionName = remember {
         try {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "未知"
-        } catch (_: Exception) { "未知" }
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                ?: context.getString(R.string.unknown)
+        } catch (_: Exception) {
+            context.getString(R.string.unknown)
+        }
     }
     val sdkVersion = remember { android.os.Build.VERSION.SDK_INT.toString() }
 
@@ -623,7 +630,7 @@ private fun AboutPage() {
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                        contentDescription = "应用图标",
+                        contentDescription = stringResource(R.string.app_icon_content_desc),
                         modifier = Modifier
                             .size(72.dp)
                             .clip(CircleShape)
@@ -631,12 +638,12 @@ private fun AboutPage() {
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "hyperSidebar",
+                        text = stringResource(R.string.app_name),
                         style = MiuixTheme.textStyles.title3,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "替换原生 MIUI 侧边栏为扇形摇杆菜单",
+                        text = stringResource(R.string.module_description),
                         style = MiuixTheme.textStyles.body2,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         modifier = Modifier.padding(top = 8.dp)
@@ -646,22 +653,28 @@ private fun AboutPage() {
         }
 
         item {
-            SmallTitle(text = "信息")
+            SmallTitle(text = stringResource(R.string.about_info))
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
-                    ArrowPreference(title = "版本", summary = versionName, onClick = { })
-                    ArrowPreference(title = "基于", summary = "LSPosed API 101 · EzXHelper", onClick = { })
-                    ArrowPreference(title = "编译 SDK", summary = sdkVersion, onClick = { })
+                    ArrowPreference(title = stringResource(R.string.about_version), summary = versionName, onClick = { })
+                    ArrowPreference(title = stringResource(R.string.about_version_code), summary = BuildConfig.VERSION_CODE.toString(), onClick = {
+                        val versionCodeStr = BuildConfig.VERSION_CODE.toString()
+                        val clipboard = context.getSystemService(ClipboardManager::class.java)
+                        clipboard.setPrimaryClip(ClipData.newPlainText("versionCode", versionCodeStr))
+                        Toast.makeText(context, context.getString(R.string.version_code_copied), Toast.LENGTH_SHORT).show()
+                    })
+                    ArrowPreference(title = stringResource(R.string.about_based_on), summary = stringResource(R.string.about_based_on_value, BuildConfig.XPOSED_API_VERSION, BuildConfig.EZXHELPER_VERSION), onClick = { })
+                    ArrowPreference(title = stringResource(R.string.about_sdk), summary = sdkVersion, onClick = { })
                 }
             }
         }
 
         item {
-            SmallTitle(text = "管理")
+            SmallTitle(text = stringResource(R.string.about_manage))
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
                     ArrowPreference(
-                        title = "模块作用域",
+                        title = stringResource(R.string.about_module_scope),
                         summary = "com.miui.securitycenter",
                         onClick = { openLsposedManager(context) }
                     )
@@ -717,7 +730,7 @@ private fun AppSelectionPage(
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = MiuixIcons.Back,
-                            contentDescription = "返回"
+                            contentDescription = stringResource(R.string.back)
                         )
                     }
                 }
@@ -737,7 +750,7 @@ private fun AppSelectionPage(
                         onSearch = { searchExpanded = false },
                         expanded = searchExpanded,
                         onExpandedChange = { searchExpanded = it },
-                        label = "搜索应用…"
+                        label = stringResource(R.string.search_apps_hint)
                     )
                 },
                 expanded = searchExpanded,
@@ -809,12 +822,12 @@ private fun ThemeSelectionPage(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = "主题模式",
+                title = stringResource(R.string.theme_mode),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = MiuixIcons.Back,
-                            contentDescription = "返回"
+                            contentDescription = stringResource(R.string.back)
                         )
                     }
                 }
@@ -828,13 +841,14 @@ private fun ThemeSelectionPage(
         ) {
             items(ThemeModes.ALL, key = { it }) { mode ->
                 val isSelected = mode == currentThemeMode
+                val themeApplyHint = stringResource(R.string.theme_apply_hint)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
                             currentThemeMode = mode
                             savePref(KEY_THEME_MODE, mode)
-                            Toast.makeText(context, "重启应用后生效", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, themeApplyHint, Toast.LENGTH_SHORT).show()
                         }
                         .padding(horizontal = 16.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -847,7 +861,7 @@ private fun ThemeSelectionPage(
                     if (isSelected) {
                         Icon(
                             imageVector = MiuixIcons.Ok,
-                            contentDescription = "已选择",
+                            contentDescription = stringResource(R.string.ok_selected),
                             tint = MiuixTheme.colorScheme.primary
                         )
                     }

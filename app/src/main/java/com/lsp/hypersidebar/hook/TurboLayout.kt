@@ -15,6 +15,8 @@ import com.lsp.hypersidebar.util.FreeformLauncher
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHook
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createBeforeHook
+import kotlin.math.abs
+import kotlin.math.sqrt
 
 class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
@@ -31,6 +33,9 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private var lastTouchView: WeakReference<View>? = null
     private val fanTriggerThresholdPx = 30f
     private var sidebarWrapperRef: WeakReference<Any>? = null
+
+    private var fixedAnchorX = 0f
+    private var fixedAnchorY = 0f
 
     private fun readPref(key: String, default: Float): Float {
         return try { remotePrefs.getFloat(key, default) } catch (_: Exception) { default }
@@ -71,7 +76,14 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         lastTouchRawX = event.rawX
                         lastTouchRawY = event.rawY
                         lastTouchView = WeakReference(view)
-                        Log.d(TAG, "onTouch: DOWN at (${event.rawX}, ${event.rawY})")
+
+                        val loc = IntArray(2)
+                        view.getLocationOnScreen(loc)
+                        val dm = view.context.resources.displayMetrics
+                        fixedAnchorX = if (loc[0] <= dm.widthPixels / 2) 0f else dm.widthPixels.toFloat()
+                        fixedAnchorY = loc[1] + view.height / 2f
+
+                        Log.d(TAG, "onTouch: DOWN raw=(${event.rawX}, ${event.rawY}) viewLoc=(${loc[0]}, ${loc[1]}) viewSize=(${view.width}x${view.height}) screen=(${dm.widthPixels}x${dm.heightPixels}) anchor=($fixedAnchorX, $fixedAnchorY)")
                     }
                     MotionEvent.ACTION_MOVE -> {
                         val wasShowing = isFanMenuShowing
@@ -111,10 +123,10 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             }
     }
 
-    private fun showFanMenu(context: Context, rawX: Float, rawY: Float) {
+    private fun showFanMenu(context: Context, anchorX: Float, anchorY: Float) {
         if (isFanMenuShowing) return
         isFanMenuShowing = true
-        Log.i(TAG, "showFanMenu: anchor=($rawX, $rawY)")
+        Log.i(TAG, "showFanMenu: anchor=($anchorX, $anchorY)")
 
         try {
             val maxOuter = readPref("maxAppsOuter", 7)
@@ -143,13 +155,11 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
             val allQuick = mutableListOf<FanAppInfo>()
 
-            // 场景面板按钮
             allQuick.add(FanAppInfo(
                 "__open_panel__", getPanelLabel(context),
                 actionHandle = { ctx -> openNativePanel(ctx) }
             ))
 
-            // 系统快捷操作（QuickInfo 来自 global_dock_apps）
             val systemActions = DataLoader.loadQuickActions(context)
             systemActions.forEach { qa ->
                 allQuick.add(FanAppInfo(
@@ -159,7 +169,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 ))
             }
 
-            // 用户自定义快捷应用
             val shortcutPkgs = readStringSetPref("shortcutApps", emptySet())
             shortcutPkgs.forEach { pkg ->
                 try {
@@ -169,6 +178,9 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                     allQuick.add(FanAppInfo(pkg, label))
                 } catch (_: Exception) { }
             }
+
+            val isLandscape = context.resources.configuration.orientation ==
+                android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
             val host = ComposeFanHost(context, remotePrefs).apply {
                 onAppSelected = { appInfo ->
@@ -205,8 +217,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             }
 
             fanMenu = host
-            host.show(rawX, rawY, apps, allQuick)
-            Log.i(TAG, "showFanMenu: compose fan overlay added, ${allQuick.size} quick actions")
+            host.show(anchorX, anchorY, apps, allQuick, isLandscape)
+            Log.i(TAG, "showFanMenu: compose fan overlay added, ${allQuick.size} quick actions, landscape=$isLandscape")
 
         } catch (e: Throwable) {
             Log.e(TAG, "showFanMenu FAILED: ${e.message}", e)
@@ -288,9 +300,23 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
     private fun maybeTriggerFanMenu() {
         if (isFanMenuShowing) return
+
         val dx = lastTouchRawX - touchDownRawX
         val dy = lastTouchRawY - touchDownRawY
-        if (Math.abs(dx) < fanTriggerThresholdPx && Math.abs(dy) < fanTriggerThresholdPx) return
+        val moveDistance = sqrt(dx * dx + dy * dy)
+
+        // 1. 最小触发距离
+        if (moveDistance < 40f) return
+
+        // 2. 必须向外移动（远离边缘）
+        val isOutward = if (fixedAnchorX == 0f) dx > 0 else dx < 0
+        if (!isOutward) return
+
+        // 3. 移动方向与水平方向夹角不能太大
+        val moveAngle = Math.toDegrees(
+            Math.atan2(abs(dy).toDouble(), abs(dx).toDouble())
+        ).toFloat()
+        if (moveAngle > 60f) return
 
         val view = lastTouchView?.get()
         val ctx = view?.context
@@ -298,8 +324,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             Log.w(TAG, "maybeTriggerFanMenu: view/context null, abort")
             return
         }
-        Log.i(TAG, "maybeTriggerFanMenu: dx=$dx dy=$dy anchor=($lastTouchRawX, $lastTouchRawY)")
-        showFanMenu(ctx, lastTouchRawX, lastTouchRawY)
+        Log.i(TAG, "maybeTriggerFanMenu: dx=$dx dy=$dy moveAngle=$moveAngle anchor=($fixedAnchorX, $fixedAnchorY)")
+        showFanMenu(ctx, fixedAnchorX, fixedAnchorY)
     }
 
     private fun dismissFanMenu() {

@@ -3,11 +3,15 @@ package com.lsp.hypersidebar.hook
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import android.widget.FrameLayout
 import java.lang.ref.WeakReference
 import java.util.LinkedHashSet
+import java.util.concurrent.atomic.AtomicBoolean
 import com.lsp.hypersidebar.ui.fan.ComposeFanHost
 import com.lsp.hypersidebar.ui.fan.FanAppInfo
 import com.lsp.hypersidebar.util.DataLoader
@@ -33,6 +37,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private var lastTouchView: WeakReference<View>? = null
     private val fanTriggerThresholdPx = 30f
     private var sidebarWrapperRef: WeakReference<Any>? = null
+    private var hideDockLayout = AtomicBoolean(false)
 
     private var fixedAnchorX = 0f
     private var fixedAnchorY = 0f
@@ -58,6 +63,14 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             ?.createBeforeHook {
                 val event = it.args[1] as? MotionEvent ?: return@createBeforeHook
                 val view = it.args[0] as? View ?: return@createBeforeHook
+
+                val viewClass = view.javaClass.name
+                Log.d(TAG, "onTouch view: $viewClass")
+                var p: Any? = view.parent
+                while (p != null) {
+                    Log.d(TAG, "onTouch parent: ${p.javaClass.name}")
+                    p = (p as? View)?.parent
+                }
 
                 if (isFanMenuShowing) {
                     val copy = MotionEvent.obtain(event).apply { setLocation(event.rawX, event.rawY) }
@@ -119,7 +132,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             .firstOrNull()
             ?.createAfterHook {
                 sidebarWrapperRef = WeakReference(it.thisObject)
-                Log.d(TAG, "Q afterHook: saved wrapper ref")
+                Log.d(TAG, "Q afterHook: saved wrapper ref, class=${it.thisObject.javaClass.name}")
             }
     }
 
@@ -129,8 +142,15 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         Log.i(TAG, "showFanMenu: anchor=($anchorX, $anchorY)")
 
         try {
-            val maxOuter = readPref("maxAppsOuter", 7)
-            val maxInner = readPref("maxAppsInner", 4)
+            val isLandscape = context.resources.configuration.orientation ==
+                android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+            val (maxOuter, maxInner) = if (isLandscape) {
+                readPref("landscapeMaxAppsOuter", 5) to readPref("landscapeMaxAppsInner", 3)
+            } else {
+                readPref("maxAppsOuter", 7) to readPref("maxAppsInner", 4)
+            }
+
             val customApps = readStringSetPref("customApps", emptySet())
 
             val allSystemApps = DataLoader.loadApps(context)
@@ -178,9 +198,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                     allQuick.add(FanAppInfo(pkg, label))
                 } catch (_: Exception) { }
             }
-
-            val isLandscape = context.resources.configuration.orientation ==
-                android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
             val host = ComposeFanHost(context, remotePrefs).apply {
                 onAppSelected = { appInfo ->
@@ -237,27 +254,17 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     }
 
     private fun openNativePanel(context: Context) {
-        val wrapper = sidebarWrapperRef?.get()
-        if (wrapper != null) {
-            try {
-                wrapper.javaClass.getMethod("Q").invoke(wrapper)
-                Log.i(TAG, "openNativePanel: invoked Q()")
-                return
-            } catch (e: Exception) {
-                Log.w(TAG, "openNativePanel: Q() failed: ${e.message}")
-            }
-        }
-        for (cn in listOf("C0406n", "D4.n")) {
-            try {
-                val cls = Class.forName(cn)
-                val m = cls.getMethod("o0", Boolean::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
-                m.invoke(cls.getMethod("getInstance").invoke(null), true, true)
-                Log.i(TAG, "openNativePanel: invoked $cn.o0(true,true)")
-                return
-            } catch (_: ClassNotFoundException) { }
-            catch (_: Exception) { }
-        }
-        Log.w(TAG, "openNativePanel: all methods failed")
+        hideDockLayout.set(true)
+
+        val intent = Intent("com.miui.gamebooster.PANNEL_OPEN")
+        intent.setPackage("com.miui.securitycenter")
+        context.sendBroadcast(intent, "com.miui.gamebooster.permission.PANNEL_OPEN")
+        Log.i(TAG, "openNativePanel: broadcast sent")
+
+        // 面板关闭后恢复，避免影响后续原生行为
+        Handler(Looper.getMainLooper()).postDelayed({
+            hideDockLayout.set(false)
+        }, 5000)
     }
 
     private fun executeQuickAction(context: Context, qa: DataLoader.QuickAction) {
@@ -349,6 +356,39 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         Log.i(TAG, "=== TurboLayout init ===")
         hookOnTouch()
         hookM26633Q()
+        hookDockLayoutVisibility()
         Log.i(TAG, "init done: ${getStats()}")
+    }
+
+    private fun hookDockLayoutVisibility() {
+        // DockLayout 运行时类名可能是 com.miui.gamebooster.windowmanager.newbox.e
+        // 或者尝试常见混淆名
+        val classNames = listOf(
+            "com.miui.gamebooster.windowmanager.newbox.e",
+            "com.miui.gamebooster.windowmanager.newbox.d",
+            "com.miui.gamebooster.ui.DockLayout"
+        )
+        
+        var hooked = false
+        for (className in classNames) {
+            Log.d(TAG, "hookDockLayoutVisibility: trying class $className")
+            val hooked = MethodFinder.fromClass(className)
+                .filterByName("setVisibility")
+                .filterByParamTypes(Int::class.javaPrimitiveType)
+                .firstOrNull()
+                ?.createBeforeHook {
+                    if (hideDockLayout.get()) {
+                        it.args[0] = View.GONE
+                        Log.d(TAG, "hookDockLayoutVisibility: intercepted setVisibility, set to GONE")
+                    }
+                }
+            if (hooked != null) {
+                Log.i(TAG, "hookDockLayoutVisibility: hooked $className")
+                return
+            } else {
+                Log.d(TAG, "hookDockLayoutVisibility: class $className not found or no matching method")
+            }
+        }
+        Log.w(TAG, "hookDockLayoutVisibility: no matching class found")
     }
 }

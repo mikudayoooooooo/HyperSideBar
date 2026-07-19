@@ -49,6 +49,7 @@ fun FanMenuCompose(
     val config = FanConfig()
 
     var selectedIndex by remember { mutableIntStateOf(-1) }
+    var selectedQuickIndex by remember { mutableIntStateOf(-1) }
     var isVisible by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { isVisible = true }
@@ -59,8 +60,10 @@ fun FanMenuCompose(
         val dist = distance(anchor, pos)
         if (dist <= geometry.activeZonePx && state.touchAction != 2 && state.touchAction != 3) {
             selectedIndex = state.selectedIndex
+            selectedQuickIndex = state.selectedQuickIndex
         } else {
             selectedIndex = -1
+            selectedQuickIndex = -1
         }
     }
 
@@ -98,6 +101,7 @@ fun FanMenuCompose(
 
         QuickAppsBar(
             geometry = geometry,
+            selectedIndex = selectedQuickIndex,
             colors = colors,
             onQuickAppSelected = onQuickAppSelected
         )

@@ -72,8 +72,8 @@ fun computeFanGeometry(
         FanDirection.LEFT  -> (180f + centerOffset - span / 2f) to (180f + centerOffset + span / 2f)
     }
 
-    val iconPx = config.iconSizeDp * density
-    val maxRadius = computeMaxRadius(anchor, width, height, initStart, initEnd, iconPx)
+    val iconPx = (if (isLandscape) config.landscapeIconSizeDp else config.iconSizeDp) * density
+    val maxRadius = computeMaxRadius(anchor, width, height, initStart, initEnd, iconPx, density)
     val effectiveRadius = min(config.outerRadiusDp * density, maxRadius)
 
     val (startAngle, endAngle) = computeValidAngleRange(
@@ -81,8 +81,11 @@ fun computeFanGeometry(
     )
     val spanAngle = endAngle - startAngle
 
-    var outerRadius = effectiveRadius
-    var innerRadius = config.innerRadiusDp * density
+    val outerRadiusConfig = if (isLandscape) config.landscapeOuterRadiusDp else config.outerRadiusDp
+    val innerRadiusConfig = if (isLandscape) config.landscapeInnerRadiusDp else config.innerRadiusDp
+
+    var outerRadius = effectiveRadius.coerceAtMost(outerRadiusConfig * density)
+    var innerRadius = innerRadiusConfig * density
 
     if (innerRadius > outerRadius * 0.8f || innerRadius < 50f * density) {
         innerRadius = outerRadius * 0.75f
@@ -93,54 +96,48 @@ fun computeFanGeometry(
         innerRadius = outerRadius * 0.6f
     }
 
-    var iconSizeDp = config.iconSizeDp
-    if (apps.size > 1 && spanAngle > 0f) {
-        iconSizeDp = fitIconSize(apps.size, spanAngle, outerRadius, innerRadius, useDualRing, iconSizeDp, density)
+    val appCount = apps.size
+    val outerCount = minOf(if (isLandscape) config.landscapeMaxAppsOuter else config.maxAppsOuter, appCount)
+    val innerCount = (appCount - outerCount).coerceIn(0, if (isLandscape) config.landscapeMaxAppsInner else config.maxAppsInner)
+
+    var iconSizeDp = if (isLandscape) config.landscapeIconSizeDp else config.iconSizeDp
+    if (appCount > 1 && spanAngle > 0f) {
+        iconSizeDp = fitIconSize(outerCount, innerCount, spanAngle, outerRadius, innerRadius, iconSizeDp, density)
     }
     val finalIconPx = iconSizeDp * density
 
     val items = layoutFanItems(
-        apps = apps,
-        anchor = anchor,
-        startAngle = startAngle,
-        spanAngle = spanAngle,
-        innerRadius = innerRadius,
-        outerRadius = outerRadius,
-        useDualRing = useDualRing
+        apps = apps, outerCount = outerCount, innerCount = innerCount,
+        anchor = anchor, startAngle = startAngle, spanAngle = spanAngle,
+        innerRadius = innerRadius, outerRadius = outerRadius
     )
 
     val quickIconPx = config.quickIconSizeDp * density
     val quickAppsList = quickApps.take(6)
     val quickSpacing = quickIconPx * 0.35f
     val quickBarPadding = quickIconPx * 0.5f
-    val quickBarContentHeight = if (quickAppsList.isNotEmpty()) {
+    val quickBarContentWidth = if (quickAppsList.isNotEmpty()) {
         quickAppsList.size * quickIconPx + (quickAppsList.size - 1) * quickSpacing + quickBarPadding * 2
     } else 0f
+    val quickBarContentHeight = quickIconPx + quickBarPadding * 2
 
-    val quickBarVertical = true
-    val barGap = finalIconPx * 1.2f
+    val fanTopY = anchor.y + outerRadius * sin(Math.toRadians(startAngle.toDouble())).toFloat()
+    val fanBottomY = anchor.y + outerRadius * sin(Math.toRadians(endAngle.toDouble())).toFloat()
+    val fanLeftX = anchor.x + outerRadius * cos(Math.toRadians(startAngle.toDouble())).toFloat()
+    val fanRightX = anchor.x + outerRadius * cos(Math.toRadians(endAngle.toDouble())).toFloat()
 
-    val quickBarX: Float
-    val quickBarY: Float
+    val barGap = quickIconPx * 0.6f
+    val baseY = if (isLandscape) fanBottomY + barGap else fanTopY - quickBarContentHeight - barGap
+    val baseX = (fanLeftX + fanRightX) / 2f - quickBarContentWidth / 2f
 
-    when (direction) {
-        FanDirection.RIGHT -> {
-            quickBarX = anchor.x + outerRadius + barGap
-            quickBarY = (anchor.y - quickBarContentHeight / 2f).coerceIn(
-                quickBarPadding,
-                height - quickBarContentHeight - quickBarPadding
-            )
-        }
-        FanDirection.LEFT -> {
-            quickBarX = anchor.x - outerRadius - barGap - quickIconPx - quickBarPadding * 2
-            quickBarY = (anchor.y - quickBarContentHeight / 2f).coerceIn(
-                quickBarPadding,
-                height - quickBarContentHeight - quickBarPadding
-            )
-        }
-    }
+    val quickBarX = baseX.coerceIn(quickBarPadding, width - quickBarContentWidth - quickBarPadding)
+    val quickBarY = baseY.coerceIn(quickBarPadding, height - quickBarContentHeight - quickBarPadding)
+    val quickBarVertical = false
 
-    val activeZonePx = config.activeZoneDp * density
+    val quickBarCenterX = quickBarX + quickBarContentWidth / 2f
+    val quickBarCenterY = quickBarY + quickBarContentHeight / 2f
+    val quickBarDistance = distance(anchor, Offset(quickBarCenterX, quickBarCenterY))
+    val activeZonePx = maxOf(config.activeZoneDp * density, quickBarDistance + quickIconPx * 0.8f)
 
     return FanGeometry(
         anchor = anchor,
@@ -169,9 +166,10 @@ private fun computeMaxRadius(
     height: Float,
     startAngle: Float,
     endAngle: Float,
-    iconSize: Float
+    iconSize: Float,
+    density: Float
 ): Float {
-    val margin = iconSize * 1.5f
+    val margin = 48f * density * 1.5f
     var maxR = Float.MAX_VALUE
     val step = maxOf(1f, (endAngle - startAngle) / 20f)
     var angle = startAngle
@@ -222,23 +220,14 @@ private fun computeValidAngleRange(
 }
 
 private fun fitIconSize(
-    appCount: Int,
+    outerCount: Int,
+    innerCount: Int,
     spanAngle: Float,
     outerRadius: Float,
     innerRadius: Float,
-    useDualRing: Boolean,
     maxSizeDp: Float,
     density: Float
 ): Float {
-    val outerCount: Int
-    val innerCount: Int
-    if (useDualRing && appCount >= 4) {
-        outerCount = (appCount * 0.6f).toInt().coerceAtLeast(2)
-        innerCount = appCount - outerCount
-    } else {
-        outerCount = appCount
-        innerCount = 0
-    }
 
     val gapFraction = 0.2f
     var minChord = Float.MAX_VALUE
@@ -266,26 +255,15 @@ private fun fitIconSize(
 
 private fun layoutFanItems(
     apps: List<FanAppInfo>,
+    outerCount: Int,
+    innerCount: Int,
     anchor: Offset,
     startAngle: Float,
     spanAngle: Float,
     innerRadius: Float,
-    outerRadius: Float,
-    useDualRing: Boolean
+    outerRadius: Float
 ): List<FanItemLayout> {
     if (apps.isEmpty()) return emptyList()
-
-    val count = apps.size
-    val outerCount: Int
-    val innerCount: Int
-
-    if (useDualRing && count >= 4) {
-        outerCount = (count * 0.6f).toInt().coerceAtLeast(2)
-        innerCount = count - outerCount
-    } else {
-        outerCount = count
-        innerCount = 0
-    }
 
     val outerMid = (innerRadius + outerRadius) / 2f
     val innerMid = innerRadius * 0.85f

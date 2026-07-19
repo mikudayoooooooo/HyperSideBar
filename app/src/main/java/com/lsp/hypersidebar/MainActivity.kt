@@ -435,6 +435,11 @@ private fun SettingsPage(
     var outerRadiusMax by remember { mutableFloatStateOf(prefs?.getFloat("outerRadiusMax", 200f) ?: 200f) }
     var maxAppsOuter by remember { mutableFloatStateOf((prefs?.getInt("maxAppsOuter", 8) ?: 8).toFloat()) }
     var maxAppsInner by remember { mutableFloatStateOf((prefs?.getInt("maxAppsInner", 4) ?: 4).toFloat()) }
+    var landscapeIconSize by remember { mutableFloatStateOf(prefs?.getFloat("landscapeIconSize", 48f) ?: 48f) }
+    var landscapeMaxAppsOuter by remember { mutableFloatStateOf((prefs?.getInt("landscapeMaxAppsOuter", 5) ?: 5).toFloat()) }
+    var landscapeMaxAppsInner by remember { mutableFloatStateOf((prefs?.getInt("landscapeMaxAppsInner", 3) ?: 3).toFloat()) }
+    var landscapeInnerRadius by remember { mutableFloatStateOf(prefs?.getFloat("landscapeInnerRadius", 150f) ?: 150f) }
+    var landscapeOuterRadius by remember { mutableFloatStateOf(prefs?.getFloat("landscapeOuterRadius", 200f) ?: 200f) }
     var activeZone by remember { mutableFloatStateOf(prefs?.getFloat("activeZone", 60f) ?: 60f) }
     var currentThemeMode by remember {
         mutableStateOf(
@@ -472,65 +477,136 @@ private fun SettingsPage(
 
         item { SmallTitle(text = stringResource(R.string.fan_menu_settings)) }
         item {
-            SettingsSliderItem(
-                title = stringResource(R.string.icon_size),
-                summary = stringResource(R.string.icon_size_summary, iconSize.toInt()),
-                value = iconSize,
-                valueRange = 32f..80f,
-                onValueChange = { iconSize = it; savePref("iconSize", it) }
-            )
-        }
-        item {
-            SettingsSliderItem(
-                title = stringResource(R.string.inner_radius),
-                summary = stringResource(R.string.inner_radius_summary, innerRadius.toInt()),
-                value = innerRadius,
-                valueRange = 100f..200f,
-                steps = 9,
-                onValueChange = { innerRadius = it; savePref("innerRadius", it) }
-            )
-        }
-        item {
-            SettingsSliderItem(
-                title = stringResource(R.string.outer_radius_max),
-                summary = stringResource(R.string.outer_radius_summary, outerRadiusMax.toInt()),
-                value = outerRadiusMax,
-                valueRange = 150f..300f,
-                steps = 14,
-                onValueChange = { outerRadiusMax = it; savePref("outerRadiusMax", it) }
-            )
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Column {
+                    Text(
+                        text = "竖屏设置",
+                        style = MiuixTheme.textStyles.title3,
+                        color = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier.padding(16.dp, 12.dp, 16.dp, 4.dp)
+                    )
+                    SettingsSliderItem(
+                        title = stringResource(R.string.icon_size),
+                        summary = stringResource(R.string.icon_size_summary, iconSize.toInt()),
+                        value = iconSize,
+                        valueRange = 32f..80f,
+                        onValueChange = { iconSize = it; savePref("iconSize", it) }
+                    )
+                    SettingsSliderItem(
+                        title = stringResource(R.string.inner_radius),
+                        summary = stringResource(R.string.inner_radius_summary, innerRadius.toInt()),
+                        value = innerRadius,
+                        valueRange = 100f..200f,
+                        steps = 9,
+                        onValueChange = { innerRadius = it; savePref("innerRadius", it) }
+                    )
+                    SettingsSliderItem(
+                        title = stringResource(R.string.outer_radius_max),
+                        summary = stringResource(R.string.outer_radius_summary, outerRadiusMax.toInt()),
+                        value = outerRadiusMax,
+                        valueRange = 150f..300f,
+                        steps = 14,
+                        onValueChange = { outerRadiusMax = it; savePref("outerRadiusMax", it) }
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(MiuixTheme.colorScheme.outline.copy(alpha = 0.3f))
+                            .padding(horizontal = 16.dp)
+                    )
+                    Text(
+                        text = "数量限制",
+                        style = MiuixTheme.textStyles.title3,
+                        color = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier.padding(16.dp, 12.dp, 16.dp, 4.dp)
+                    )
+                    SettingsSliderItem(
+                        title = stringResource(R.string.outer_apps_count),
+                        summary = stringResource(R.string.outer_apps_summary, maxAppsOuter.toInt()),
+                        value = maxAppsOuter,
+                        valueRange = 4f..12f,
+                        steps = 7,
+                        onValueChange = { maxAppsOuter = it; savePref("maxAppsOuter", it.toInt()) }
+                    )
+                    SettingsSliderItem(
+                        title = stringResource(R.string.inner_apps_count),
+                        summary = stringResource(R.string.inner_apps_summary, maxAppsInner.toInt()),
+                        value = maxAppsInner,
+                        valueRange = 2f..8f,
+                        steps = 5,
+                        onValueChange = { maxAppsInner = it; savePref("maxAppsInner", it.toInt()) }
+                    )
+                    SettingsSliderItem(
+                        title = stringResource(R.string.stick_sensitivity),
+                        summary = stringResource(R.string.stick_sensitivity_summary, activeZone.toInt()),
+                        value = activeZone,
+                        valueRange = 30f..120f,
+                        steps = 8,
+                        onValueChange = { activeZone = it; savePref("activeZone", it) }
+                    )
+                }
+            }
         }
 
-        item { SmallTitle(text = stringResource(R.string.quantity_limit)) }
         item {
-            SettingsSliderItem(
-                title = stringResource(R.string.outer_apps_count),
-                summary = stringResource(R.string.outer_apps_summary, maxAppsOuter.toInt()),
-                value = maxAppsOuter,
-                valueRange = 4f..12f,
-                steps = 7,
-                onValueChange = { maxAppsOuter = it; savePref("maxAppsOuter", it.toInt()) }
-            )
-        }
-        item {
-            SettingsSliderItem(
-                title = stringResource(R.string.inner_apps_count),
-                summary = stringResource(R.string.inner_apps_summary, maxAppsInner.toInt()),
-                value = maxAppsInner,
-                valueRange = 2f..8f,
-                steps = 5,
-                onValueChange = { maxAppsInner = it; savePref("maxAppsInner", it.toInt()) }
-            )
-        }
-        item {
-            SettingsSliderItem(
-                title = stringResource(R.string.stick_sensitivity),
-                summary = stringResource(R.string.stick_sensitivity_summary, activeZone.toInt()),
-                value = activeZone,
-                valueRange = 30f..120f,
-                steps = 8,
-                onValueChange = { activeZone = it; savePref("activeZone", it) }
-            )
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Column {
+                    Text(
+                        text = "横屏设置",
+                        style = MiuixTheme.textStyles.title3,
+                        color = MiuixTheme.colorScheme.primary,
+                        modifier = Modifier.padding(16.dp, 12.dp, 16.dp, 4.dp)
+                    )
+                    SettingsSliderItem(
+                        title = stringResource(R.string.landscape_icon_size),
+                        summary = stringResource(R.string.landscape_icon_size_summary, landscapeIconSize.toInt()),
+                        value = landscapeIconSize,
+                        valueRange = 32f..80f,
+                        onValueChange = { landscapeIconSize = it; savePref("landscapeIconSize", it) }
+                    )
+                    SettingsSliderItem(
+                        title = stringResource(R.string.landscape_outer_apps_count),
+                        summary = stringResource(R.string.landscape_outer_apps_summary, landscapeMaxAppsOuter.toInt()),
+                        value = landscapeMaxAppsOuter,
+                        valueRange = 3f..8f,
+                        steps = 4,
+                        onValueChange = { landscapeMaxAppsOuter = it; savePref("landscapeMaxAppsOuter", it.toInt()) }
+                    )
+                    SettingsSliderItem(
+                        title = stringResource(R.string.landscape_inner_apps_count),
+                        summary = stringResource(R.string.landscape_inner_apps_summary, landscapeMaxAppsInner.toInt()),
+                        value = landscapeMaxAppsInner,
+                        valueRange = 0f..6f,
+                        steps = 5,
+                        onValueChange = { landscapeMaxAppsInner = it; savePref("landscapeMaxAppsInner", it.toInt()) }
+                    )
+                    SettingsSliderItem(
+                        title = stringResource(R.string.landscape_inner_radius),
+                        summary = stringResource(R.string.landscape_inner_radius_summary, landscapeInnerRadius.toInt()),
+                        value = landscapeInnerRadius,
+                        valueRange = 80f..200f,
+                        steps = 11,
+                        onValueChange = { landscapeInnerRadius = it; savePref("landscapeInnerRadius", it) }
+                    )
+                    SettingsSliderItem(
+                        title = stringResource(R.string.landscape_outer_radius),
+                        summary = stringResource(R.string.landscape_outer_radius_summary, landscapeOuterRadius.toInt()),
+                        value = landscapeOuterRadius,
+                        valueRange = 120f..300f,
+                        steps = 17,
+                        onValueChange = { landscapeOuterRadius = it; savePref("landscapeOuterRadius", it) }
+                    )
+                }
+            }
         }
 
         item { SmallTitle(text = stringResource(R.string.custom_apps)) }

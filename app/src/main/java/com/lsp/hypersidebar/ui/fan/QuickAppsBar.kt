@@ -2,12 +2,14 @@ package com.lsp.hypersidebar.ui.fan
 
 import android.content.Context
 import android.graphics.drawable.Drawable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -15,10 +17,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.platform.LocalContext
@@ -31,6 +36,7 @@ import top.yukonga.miuix.kmp.basic.Text
 @Composable
 fun QuickAppsBar(
     geometry: FanGeometry,
+    selectedIndex: Int,
     colors: FanThemeColors,
     onQuickAppSelected: (FanAppInfo) -> Unit
 ) {
@@ -47,7 +53,7 @@ fun QuickAppsBar(
     Box(
         modifier = Modifier.fillMaxSize()
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .offset {
                     IntOffset(
@@ -61,14 +67,15 @@ fun QuickAppsBar(
                     horizontal = (iconSizeDp * 0.25f).dp,
                     vertical = (iconSizeDp * 0.25f).dp
                 ),
-            verticalArrangement = Arrangement.spacedBy((iconSizeDp * 0.35f).dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            horizontalArrangement = Arrangement.spacedBy((iconSizeDp * 0.35f).dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            quickApps.forEach { app ->
+            quickApps.forEachIndexed { index, app ->
                 QuickAppIcon(
                     context = context,
                     app = app,
-                    size = iconSizeDp,
+                    iconSize = iconSizeDp,
+                    isSelected = index == selectedIndex,
                     colors = colors,
                     onClick = { onQuickAppSelected(app) }
                 )
@@ -81,17 +88,27 @@ fun QuickAppsBar(
 private fun QuickAppIcon(
     context: Context,
     app: FanAppInfo,
-    size: Float,
+    iconSize: Float,
+    isSelected: Boolean,
     colors: FanThemeColors,
     onClick: () -> Unit
 ) {
     val (drawable, fallbackColor) = rememberAppIcon(context, app)
+    val targetScale = if (isSelected) 1.2f else 1f
+    val targetAlpha = if (isSelected) 1f else 0.75f
+    val iconScale by animateFloatAsState(targetValue = targetScale, animationSpec = tween(100))
+    val iconAlpha by animateFloatAsState(targetValue = targetAlpha, animationSpec = tween(100))
 
     Box(
         modifier = Modifier
-            .size(size.dp)
+            .size(iconSize.dp)
+            .scale(iconScale)
+            .alpha(iconAlpha)
             .clip(CircleShape)
-            .background(colors.surfaceContainerHigh)
+            .background(
+                if (isSelected) colors.primaryContainer.copy(alpha = 0.9f)
+                else colors.surfaceContainerHigh
+            )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
@@ -99,9 +116,20 @@ private fun QuickAppIcon(
             drawable = drawable,
             fallbackColor = fallbackColor,
             appName = app.appName,
-            size = size,
+            size = iconSize,
             colors = colors
         )
+
+        if (isSelected) {
+            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                drawCircle(
+                    color = colors.primary,
+                    radius = size.minDimension / 2f,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
+                    alpha = iconAlpha
+                )
+            }
+        }
     }
 }
 

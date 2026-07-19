@@ -3,6 +3,7 @@ package com.lsp.hypersidebar.ui.fan
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.PixelFormat
+import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
@@ -36,7 +37,8 @@ data class FanTouchState(
     val x: Float,
     val y: Float,
     val touchAction: Int,
-    val selectedIndex: Int
+    val selectedIndex: Int,
+    val selectedQuickIndex: Int = -1
 )
 
 class ComposeFanHost(
@@ -47,7 +49,10 @@ class ComposeFanHost(
     private var composeView: ComposeView? = null
     private var windowManager: WindowManager? = null
     private var lifecycleOwner: FanLifecycleOwner? = null
-    private var lastSelectedIndex = -1
+    private var lastSelectedFanIndex = -1
+    private var lastSelectedQuickIndex = -1
+    private var selectedSince = 0L
+    private val DWELL_MS = 150L
 
     var onAppSelected: ((FanAppInfo) -> Unit)? = null
     var onQuickAppSelected: ((FanAppInfo) -> Unit)? = null
@@ -79,7 +84,9 @@ class ComposeFanHost(
 
         val touchState = mutableStateOf(FanTouchState(0f, 0f, 3, -1))
         val activeZonePx = geometry.activeZonePx
-        val deadZonePx = config.deadZoneDp * density
+        val deadZonePx = (geometry.innerRadius * 0.08f).coerceIn(24f, 60f)
+        val innerCancelPx = ((geometry.innerRadius * 0.85f - geometry.iconSize * density * 0.5f) * 0.75f)
+        val outerCancelPx = ((geometry.outerRadius + geometry.iconSize * density * 0.5f) * 1.25f)
         val ax = anchorX
         val ay = anchorY
 
@@ -114,37 +121,80 @@ class ComposeFanHost(
                 val dx = x - ax
                 val dy = y - ay
                 val dist = sqrt(dx * dx + dy * dy)
-                val iconPx = geometry.iconSize * context.resources.displayMetrics.density
-                val outerHitRadius = geometry.outerRadius + iconPx * 1.2f
-
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
-                        lastSelectedIndex = -1
-                        val selected = resolveSelection(x, y, dx, dy, dist, deadZonePx, activeZonePx, outerHitRadius, geometry)
-                        touchState.value = FanTouchState(x, y, 0, selected)
-                        Log.d(TAG, "touch DOWN sel=$selected dist=${dist.toInt()}")
+                        lastSelectedFanIndex = -1
+                        lastSelectedQuickIndex = -1
+                        selectedSince = 0L
+                        val (fanSel, quickSel) = resolveSelection(
+                            x, y, dx, dy, dist, deadZonePx, geometry
+                        )
+                        if (fanSel != -1 || quickSel != -1) selectedSince = SystemClock.uptimeMillis()
+                        touchState.value = FanTouchState(x, y, 0, fanSel, quickSel)
+                        Log.d(TAG, "touch DOWN fan=$fanSel quick=$quickSel dist=${dist.toInt()}")
                         return true
                     }
                     MotionEvent.ACTION_MOVE -> {
-                        val selected = resolveSelection(x, y, dx, dy, dist, deadZonePx, activeZonePx, outerHitRadius, geometry)
-                        touchState.value = FanTouchState(x, y, 0, selected)
-                        Log.d(TAG, "touch MOVE sel=$selected dist=${dist.toInt()}")
+                        val prevFan = lastSelectedFanIndex
+                        val prevQuick = lastSelectedQuickIndex
+
+                        val inCancelZone = dist < innerCancelPx || dist > outerCancelPx
+                        if (inCancelZone && (prevFan != -1 || prevQuick != -1)) {
+                            lastSelectedFanIndex = -1
+                            lastSelectedQuickIndex = -1
+                            touchState.value = FanTouchState(x, y, 0, -1, -1)
+                            Log.d(TAG, "touch CLEAR by cancel zone (inner=${innerCancelPx.toInt()}, outer=${outerCancelPx.toInt()})")
+                            return true
+                        }
+
+                        val (fanSel, quickSel) = resolveSelection(
+                            x, y, dx, dy, dist, deadZonePx, geometry
+                        )
+
+                        val anySelected = fanSel != -1 || quickSel != -1
+                        if (anySelected && (fanSel != prevFan || quickSel != prevQuick)) {
+                            selectedSince = SystemClock.uptimeMillis()
+                        }
+
+                        touchState.value = FanTouchState(x, y, 0, fanSel, quickSel)
+                        Log.d(TAG, "touch MOVE fan=$fanSel quick=$quickSel dist=${dist.toInt()}")
                         return true
                     }
                     MotionEvent.ACTION_UP -> {
-                        val selected = resolveSelection(x, y, dx, dy, dist, deadZonePx, activeZonePx, outerHitRadius, geometry)
-                        touchState.value = FanTouchState(x, y, 2, -1)
-                        Log.d(TAG, "ACTION_UP sel=$selected dist=${dist.toInt()}")
-                        if (selected in geometry.items.indices) {
-                            Log.i(TAG, "selected: ${geometry.items[selected].app.packageName}")
-                            onAppSelected?.invoke(geometry.items[selected].app)
-                        } else {
-                            handleQuickBarTap(x, y, geometry, config, density)
+                        val (fanSel, quickSel) = resolveSelection(
+                            x, y, dx, dy, dist, deadZonePx, geometry
+                        )
+                        touchState.value = FanTouchState(x, y, 2, -1, -1)
+                        Log.d(TAG, "ACTION_UP fan=$fanSel quick=$quickSel dist=${dist.toInt()}")
+
+                        val dwellTime = SystemClock.uptimeMillis() - selectedSince
+                        val anySelected = fanSel in geometry.items.indices
+                        val anyQuick = quickSel in geometry.quickApps.indices
+
+                        when {
+                            !anySelected && !anyQuick -> {
+                                handleQuickBarTap(x, y, geometry, config, density)
+                            }
+                            anySelected && dwellTime < DWELL_MS -> {
+                                Log.d(TAG, "dwell too short: ${dwellTime}ms, not launching")
+                            }
+                            anyQuick && dwellTime < DWELL_MS -> {
+                                Log.d(TAG, "dwell too short: ${dwellTime}ms, not launching")
+                            }
+                            anySelected -> {
+                                Log.i(TAG, "selected fan: ${geometry.items[fanSel].app.packageName}")
+                                onAppSelected?.invoke(geometry.items[fanSel].app)
+                            }
+                            anyQuick -> {
+                                Log.i(TAG, "selected quick: ${geometry.quickApps[quickSel].packageName}")
+                                onQuickAppSelected?.invoke(geometry.quickApps[quickSel])
+                            }
                         }
                     }
                     MotionEvent.ACTION_CANCEL -> {
-                        touchState.value = FanTouchState(x, y, 3, -1)
-                        lastSelectedIndex = -1
+                        touchState.value = FanTouchState(x, y, 3, -1, -1)
+                        lastSelectedFanIndex = -1
+                        lastSelectedQuickIndex = -1
                     }
                 }
                 return super.dispatchTouchEvent(event)
@@ -190,7 +240,8 @@ class ComposeFanHost(
         wrapperView = null
         val cv = composeView
         composeView = null
-        lastSelectedIndex = -1
+        lastSelectedFanIndex = -1
+        lastSelectedQuickIndex = -1
 
         try {
             windowManager?.removeViewImmediate(wv)
@@ -216,31 +267,59 @@ class ComposeFanHost(
         dx: Float, dy: Float,
         dist: Float,
         deadZonePx: Float,
-        activeZonePx: Float,
-        outerHitRadius: Float,
         geometry: FanGeometry
-    ): Int {
+    ): Pair<Int, Int> {
         if (dist < deadZonePx) {
-            lastSelectedIndex = -1
-            return -1
+            lastSelectedFanIndex = -1
+            lastSelectedQuickIndex = -1
+            return -1 to -1
         }
 
+        val fanCandidate = calcUnifiedFanSelection(dx, dy, dist, deadZonePx, geometry)
+        val quickCandidate = calcQuickAppCandidate(x, y, geometry)
+
+        lastSelectedFanIndex = applyFanHysteresis(fanCandidate, dx, dy, geometry)
+        lastSelectedQuickIndex = quickCandidate
+
+        return resolveDualSelection(x, y, geometry)
+    }
+
+    private fun resolveDualSelection(
+        x: Float, y: Float,
+        geometry: FanGeometry
+    ): Pair<Int, Int> {
+        val fanIdx = lastSelectedFanIndex
+        val quickIdx = lastSelectedQuickIndex
+
         return when {
-            dist <= activeZonePx -> {
-                val candidate = calcSelectedIndexHybrid(dx, dy, dist, deadZonePx, geometry)
-                applyHysteresis(candidate, dx, dy, geometry)
-            }
-            dist <= outerHitRadius -> {
-                calcSelectedIndexByPosition(x, y, geometry)
-            }
+            fanIdx == -1 && quickIdx == -1 -> -1 to -1
+            fanIdx == -1 -> -1 to quickIdx
+            quickIdx == -1 -> fanIdx to -1
             else -> {
-                lastSelectedIndex = -1
-                -1
+                val touchPos = Offset(x, y)
+                val fanItem = geometry.items[fanIdx]
+                val fanDist = distance(touchPos, Offset(fanItem.centerX, fanItem.centerY))
+                val quickCenter = computeQuickAppCenter(quickIdx, geometry)
+                val quickDist = distance(touchPos, quickCenter)
+                if (fanDist <= quickDist) fanIdx to -1 else -1 to quickIdx
             }
         }
     }
 
-    private fun calcSelectedIndexHybrid(
+    private fun computeQuickAppCenter(
+        index: Int,
+        geometry: FanGeometry
+    ): Offset {
+        val density = context.resources.displayMetrics.density
+        val quickIconPx = geometry.quickIconSize * density
+        val pxSpacing = quickIconPx * 0.35f
+        val barPadding = quickIconPx * 0.5f
+        val cx = geometry.quickBarX + barPadding + index * (quickIconPx + pxSpacing) + quickIconPx / 2f
+        val cy = geometry.quickBarY + barPadding + quickIconPx / 2f
+        return Offset(cx, cy)
+    }
+
+    private fun calcUnifiedFanSelection(
         dx: Float, dy: Float, dist: Float,
         deadZonePx: Float, geometry: FanGeometry
     ): Int {
@@ -248,45 +327,33 @@ class ComposeFanHost(
         if (geometry.items.isEmpty()) return -1
 
         val touchDeg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
-        val touchPos = Offset(geometry.anchor.x + dx, geometry.anchor.y + dy)
-        val density = context.resources.displayMetrics.density
-        val iconPx = geometry.iconSize * density
-        val hitRadius = iconPx * 1.2f
+        val sectorWidth = geometry.spanAngle / geometry.items.size
 
-        var bestIdx = -1
-        var bestScore = Float.MAX_VALUE
-
-        geometry.items.forEachIndexed { index, item ->
-            val itemPos = Offset(item.centerX, item.centerY)
-            val distancePx = distance(touchPos, itemPos)
-            val angleDiff = angleDiffDeg(touchDeg, item.angle)
-
-            val score = distancePx * 0.6f + angleDiff * 3f
-            if (score < bestScore && distancePx < hitRadius * 1.5f) {
-                bestScore = score
-                bestIdx = index
-            }
+        val candidates = geometry.items.filter { item ->
+            val isEdge = item.index < 2 || item.index >= geometry.items.size - 2
+            val angleTolerance = if (isEdge) sectorWidth * 1.3f else sectorWidth
+            angleDiffDeg(touchDeg, item.angle) < angleTolerance
         }
 
-        return bestIdx
+        return candidates.minByOrNull { abs(dist - it.radius) }?.index ?: -1
     }
 
-    private fun calcSelectedIndexByPosition(
+    private fun calcQuickAppCandidate(
         x: Float, y: Float,
         geometry: FanGeometry
     ): Int {
-        if (geometry.items.isEmpty()) return -1
+        if (geometry.quickApps.isEmpty()) return -1
 
         val touchPos = Offset(x, y)
         val density = context.resources.displayMetrics.density
-        val iconPx = geometry.iconSize * density
-        val hitRadius = iconPx * 0.8f
+        val quickIconPx = geometry.quickIconSize * density
+        val hitRadius = quickIconPx * 0.8f
 
         var bestIdx = -1
         var bestDist = Float.MAX_VALUE
-        geometry.items.forEachIndexed { index, item ->
-            val itemPos = Offset(item.centerX, item.centerY)
-            val dist = distance(touchPos, itemPos)
+        geometry.quickApps.take(6).forEachIndexed { index, _ ->
+            val center = computeQuickAppCenter(index, geometry)
+            val dist = distance(touchPos, center)
             if (dist < hitRadius && dist < bestDist) {
                 bestDist = dist
                 bestIdx = index
@@ -296,26 +363,30 @@ class ComposeFanHost(
         return bestIdx
     }
 
-    private fun applyHysteresis(
+    private fun applyFanHysteresis(
         candidate: Int,
         dx: Float, dy: Float,
         geometry: FanGeometry
     ): Int {
-        if (candidate == -1) return lastSelectedIndex
-        if (lastSelectedIndex == -1 || lastSelectedIndex !in geometry.items.indices) {
-            lastSelectedIndex = candidate
+        if (candidate == -1) return lastSelectedFanIndex
+        if (lastSelectedFanIndex == -1 || lastSelectedFanIndex !in geometry.items.indices) {
+            lastSelectedFanIndex = candidate
             return candidate
         }
 
         val touchDeg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
-        val currentDiff = angleDiffDeg(touchDeg, geometry.items[lastSelectedIndex].angle)
+        val currentDiff = angleDiffDeg(touchDeg, geometry.items[lastSelectedFanIndex].angle)
         val candidateDiff = angleDiffDeg(touchDeg, geometry.items[candidate].angle)
 
-        return if (candidateDiff < currentDiff - 8f) {
-            lastSelectedIndex = candidate
+        val hysteresisThreshold = if (geometry.items.size > 1) {
+            geometry.spanAngle / geometry.items.size * 0.5f
+        } else 8f
+
+        return if (candidateDiff < currentDiff - hysteresisThreshold) {
+            lastSelectedFanIndex = candidate
             candidate
         } else {
-            lastSelectedIndex
+            lastSelectedFanIndex
         }
     }
 
@@ -340,16 +411,14 @@ class ComposeFanHost(
 
         Log.d(TAG, "quickBarTap: touch=($x,$y) barX=${geometry.quickBarX.toInt()} barY=${geometry.quickBarY.toInt()}")
 
-        if (geometry.quickBarVertical) {
-            for (i in quickAppsList.indices) {
-                val cy = geometry.quickBarY + barPadding + i * (quickIconPx + pxSpacing) + quickIconPx / 2f
-                val cx = geometry.quickBarX + barPadding + quickIconPx / 2f
-                val d = sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy))
-                if (d <= quickIconPx * 0.7f) {
-                    Log.i(TAG, "quickSelected: ${quickAppsList[i].packageName}")
-                    onQuickAppSelected?.invoke(quickAppsList[i])
-                    return
-                }
+        for (i in quickAppsList.indices) {
+            val cx = geometry.quickBarX + barPadding + i * (quickIconPx + pxSpacing) + quickIconPx / 2f
+            val cy = geometry.quickBarY + barPadding + quickIconPx / 2f
+            val d = sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy))
+            if (d <= quickIconPx * 0.7f) {
+                Log.i(TAG, "quickSelected: ${quickAppsList[i].packageName}")
+                onQuickAppSelected?.invoke(quickAppsList[i])
+                return
             }
         }
     }
@@ -371,12 +440,23 @@ class ComposeFanHost(
             deadZoneDp = readFloat("deadZone", 12f),
             activeZoneDp = readFloat("activeZone", 60f),
             useDualRing = true,
-            minRadiusDp = 80f
+            minRadiusDp = 80f,
+            maxAppsOuter = readInt("maxAppsOuter", 7),
+            maxAppsInner = readInt("maxAppsInner", 4),
+            landscapeIconSizeDp = readFloat("landscapeIconSize", 48f),
+            landscapeMaxAppsOuter = readInt("landscapeMaxAppsOuter", 5),
+            landscapeMaxAppsInner = readInt("landscapeMaxAppsInner", 3),
+            landscapeInnerRadiusDp = readFloat("landscapeInnerRadius", 150f),
+            landscapeOuterRadiusDp = readFloat("landscapeOuterRadius", 200f)
         )
     }
 
     private fun readFloat(key: String, default: Float): Float {
         return try { prefs.getFloat(key, default) } catch (_: Exception) { default }
+    }
+
+    private fun readInt(key: String, default: Int): Int {
+        return try { prefs.getInt(key, default) } catch (_: Exception) { default }
     }
 
     @Composable

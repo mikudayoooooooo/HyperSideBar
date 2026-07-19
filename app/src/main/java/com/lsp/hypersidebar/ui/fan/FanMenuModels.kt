@@ -17,11 +17,18 @@ data class FanConfig(
     val innerRadiusDp: Float = 150f,
     val outerRadiusDp: Float = 200f,
     val defaultSpanAngle: Float = 150f,
-    val landscapeSpanAngle: Float = 90f,
+    val landscapeSpanAngle: Float = 75f,
     val deadZoneDp: Float = 12f,
     val activeZoneDp: Float = 60f,
     val useDualRing: Boolean = true,
-    val minRadiusDp: Float = 80f
+    val minRadiusDp: Float = 60f,
+    val maxAppsOuter: Int = 7,
+    val maxAppsInner: Int = 4,
+    val landscapeIconSizeDp: Float = 48f,
+    val landscapeMaxAppsOuter: Int = 5,
+    val landscapeMaxAppsInner: Int = 3,
+    val landscapeInnerRadiusDp: Float = 150f,
+    val landscapeOuterRadiusDp: Float = 200f
 )
 
 data class FanThemeColors(

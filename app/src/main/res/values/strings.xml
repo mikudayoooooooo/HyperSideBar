@@ -63,4 +63,15 @@
     <string name="outer_apps_summary">%1$d 个</string>
     <string name="inner_apps_summary">%1$d 个</string>
     <string name="stick_sensitivity_summary">%1$d dp（越小越灵敏）</string>
+    <string name="landscape_layout">横屏布局</string>
+    <string name="landscape_icon_size">横屏图标大小</string>
+    <string name="landscape_icon_size_summary">%1$d dp</string>
+    <string name="landscape_outer_apps_count">横屏外圈应用数</string>
+    <string name="landscape_outer_apps_summary">%1$d 个</string>
+    <string name="landscape_inner_apps_count">横屏内圈应用数</string>
+    <string name="landscape_inner_apps_summary">%1$d 个</string>
+    <string name="landscape_inner_radius">横屏内圈半径</string>
+    <string name="landscape_inner_radius_summary">%1$d dp</string>
+    <string name="landscape_outer_radius">横屏外圈半径</string>
+    <string name="landscape_outer_radius_summary">%1$d dp</string>
 </resources>

@@ -34,6 +34,32 @@ object ThemeModes {
 
     val ALL = listOf(SYSTEM, LIGHT, DARK, MONET_SYSTEM, MONET_LIGHT, MONET_DARK)
 
+    val BASE_MODES = listOf(SYSTEM, LIGHT, DARK)
+
+    fun baseMode(mode: ThemeMode): ThemeMode = when (mode) {
+        MONET_LIGHT -> LIGHT
+        MONET_DARK -> DARK
+        MONET_SYSTEM -> SYSTEM
+        LIGHT, DARK, SYSTEM -> mode
+        else -> SYSTEM
+    }
+
+    fun usesSystemColors(mode: ThemeMode): Boolean = mode in setOf(
+        MONET_SYSTEM,
+        MONET_LIGHT,
+        MONET_DARK
+    )
+
+    fun compose(baseMode: ThemeMode, useSystemColors: Boolean): ThemeMode {
+        val normalizedBase = baseMode(baseMode)
+        if (!useSystemColors) return normalizedBase
+        return when (normalizedBase) {
+            LIGHT -> MONET_LIGHT
+            DARK -> MONET_DARK
+            else -> MONET_SYSTEM
+        }
+    }
+
     fun toDisplayName(mode: ThemeMode): String = when (mode) {
         SYSTEM -> "跟随系统"
         LIGHT -> "浅色模式"

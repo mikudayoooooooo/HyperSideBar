@@ -3,12 +3,18 @@ package com.lsp.hypersidebar.ui.settings
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.graphics.drawable.Drawable
 import android.util.Log
+import androidx.core.graphics.drawable.toBitmap
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import java.util.Locale
+import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -31,6 +37,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -42,8 +52,6 @@ import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutLauncher
 import com.lsp.hypersidebar.util.ShortcutStore
-import com.lsp.hypersidebar.ui.fan.AppIconImage
-import com.lsp.hypersidebar.ui.fan.FanAppInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -197,15 +205,12 @@ private fun ShortcutListPage(
         if (shortcuts.isNotEmpty()) {
             items(shortcuts, key = { it.id }) { shortcut ->
                 val iconPkg = shortcut.iconPackageName ?: shortcut.packageName
-                val appInfo = remember(iconPkg, shortcut.label) {
-                    FanAppInfo(packageName = iconPkg ?: "", appName = shortcut.label)
-                }
                 val status = if (shortcut.enabled) "" else "（已禁用）"
                 ArrowPreference(
                     title = shortcut.label.ifEmpty { stringResource(R.string.shortcut_unnamed) },
                     summary = buildShortcutSummary(shortcut) + status,
                     startAction = if (iconPkg != null) {
-                        { AppIconImage(app = appInfo, size = 32f) }
+                        { SettingsAppIcon(packageName = iconPkg, appName = shortcut.label, size = 32f) }
                     } else null,
                     onClick = { onEdit(shortcut) }
                 )
@@ -714,13 +719,10 @@ private fun AppList(
         }
 
         items(apps, key = { it.packageName }) { app ->
-            val appInfo = remember(app.packageName, app.appLabel) {
-                FanAppInfo(packageName = app.packageName, appName = app.appLabel)
-            }
             ArrowPreference(
                 title = app.appLabel,
                 summary = "${app.packageName} · ${app.components.size} 个组件",
-                startAction = { AppIconImage(app = appInfo, size = 28f) },
+                startAction = { SettingsAppIcon(packageName = app.packageName, appName = app.appLabel, size = 28f) },
                 onClick = { onSelectApp(app.packageName) }
             )
         }
@@ -871,4 +873,56 @@ private fun splitTargetSpec(input: String, ctx: Context): SplitResult {
     }
     val act = if (bestPkg.isNotEmpty()) trimmed.substring(bestPkg.length) else trimmed
     return SplitResult(pkg = bestPkg, act = act)
+}
+
+/**
+ * 设置页专用的应用图标组件。
+ * 直接从 PackageManager 加载图标，不依赖扇形菜单的 FanThemeColors。
+ */
+@Composable
+private fun SettingsAppIcon(
+    packageName: String,
+    appName: String,
+    size: Float
+) {
+    val context = LocalContext.current
+    val drawable = remember(packageName) {
+        runCatching { context.packageManager.getApplicationIcon(packageName) }.getOrNull()
+    }
+    if (drawable != null) {
+        val bitmap = remember(drawable) {
+            runCatching { drawable.toBitmap(width = 128, height = 128) }.getOrNull()
+        }
+        if (bitmap != null) {
+            Image(
+                painter = BitmapPainter(bitmap.asImageBitmap()),
+                contentDescription = appName,
+                modifier = Modifier.size(size.dp)
+            )
+        } else {
+            FallbackSettingsIcon(appName, size)
+        }
+    } else {
+        FallbackSettingsIcon(appName, size)
+    }
+}
+
+@Composable
+private fun FallbackSettingsIcon(appName: String, size: Float) {
+    val text = appName.take(1).ifEmpty { "?" }
+    val colors = listOf(0xFF5C6BC0, 0xFF26A69A, 0xFFEF5350, 0xFFFF7043, 0xFFAB47BC)
+    val colorIndex = remember(appName) { (appName.hashCode() and 0x7FFFFFFF) % colors.size }
+    Box(
+        modifier = Modifier
+            .size(size.dp)
+            .clip(CircleShape)
+            .background(Color(colors[colorIndex])),
+        contentAlignment = androidx.compose.ui.Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = Color.White,
+            style = MiuixTheme.textStyles.body1
+        )
+    }
 }

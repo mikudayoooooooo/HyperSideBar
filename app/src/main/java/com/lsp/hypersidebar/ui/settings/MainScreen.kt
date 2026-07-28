@@ -69,9 +69,9 @@ internal fun MainScreen(
     }
 
     val selectAppsTitle = stringResource(R.string.select_apps)
-    val selectShortcutAppsTitle = stringResource(R.string.select_shortcut_apps)
     val currentTitle = when (val detail = detailScreen) {
         is DetailScreen.AppSelection -> detail.title
+        DetailScreen.ShortcutSettings -> stringResource(R.string.shortcuts_add_section)
         DetailScreen.LayoutSettings -> stringResource(R.string.layout_settings)
         DetailScreen.InteractionSettings -> stringResource(R.string.interaction_settings)
         null -> when (selectedTab) {
@@ -160,7 +160,7 @@ internal fun MainScreen(
                                 detailScreen = DetailScreen.AppSelection(PrefKeys.CUSTOM_APPS, selectAppsTitle)
                             },
                             onNavigateToShortcutSelection = {
-                                detailScreen = DetailScreen.AppSelection(PrefKeys.SHORTCUT_APPS, selectShortcutAppsTitle)
+                                detailScreen = DetailScreen.ShortcutSettings
                             },
                             onNavigateToLayout = { detailScreen = DetailScreen.LayoutSettings },
                             onNavigateToInteraction = { detailScreen = DetailScreen.InteractionSettings }
@@ -238,6 +238,9 @@ internal fun MainScreen(
                             is DetailScreen.AppSelection -> AppSelectionPage(
                                 prefs = prefs,
                                 prefsKey = detail.prefsKey
+                            )
+                            DetailScreen.ShortcutSettings -> ShortcutSettingsPage(
+                                prefs = prefs
                             )
                             DetailScreen.LayoutSettings -> LayoutSettingsPage(
                                 prefs = prefs,

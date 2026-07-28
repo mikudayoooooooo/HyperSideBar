@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.theme.ThemeMode
 import com.lsp.hypersidebar.theme.ThemeModes
+import com.lsp.hypersidebar.util.ShortcutStore
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Slider
@@ -42,8 +43,8 @@ internal fun SettingsPage(
     val selectedApps = remember(prefs, prefsRevision) {
         prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty().size
     }
-    val shortcutApps = remember(prefs, prefsRevision) {
-        prefs.getStringSet(PrefKeys.SHORTCUT_APPS, emptySet()).orEmpty().size
+    val shortcutCount = remember(prefs, prefsRevision) {
+        ShortcutStore.loadUserShortcuts(prefs).size
     }
     val themeOptions = listOf(
         stringResource(R.string.theme_follow_system),
@@ -70,7 +71,7 @@ internal fun SettingsPage(
                     )
                     ArrowPreference(
                         title = stringResource(R.string.select_shortcut_apps),
-                        summary = stringResource(R.string.selected_apps_summary, shortcutApps),
+                        summary = stringResource(R.string.selected_apps_summary, shortcutCount),
                         onClick = onNavigateToShortcutSelection
                     )
                 }

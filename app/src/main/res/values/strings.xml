@@ -96,4 +96,46 @@
     <string name="about_module_scope">模块作用域</string>
     <string name="scope_configured">已包含 com.miui.securitycenter</string>
     <string name="unknown">未知</string>
+
+    <!-- Shortcut -->
+    <string name="shortcut_count_format">%1$d / %2$d</string>
+    <string name="shortcut_unnamed">未命名</string>
+    <string name="shortcut_new">新建快捷方式</string>
+    <string name="shortcut_edit">编辑快捷方式</string>
+    <string name="shortcut_save">保存</string>
+    <string name="shortcut_delete">删除</string>
+    <string name="shortcut_basic_info">基本信息</string>
+    <string name="shortcut_label">名称</string>
+    <string name="shortcut_label_hint">输入快捷方式名称</string>
+    <string name="shortcut_target_config">目标配置</string>
+    <string name="shortcut_package_activity">包名 / Activity</string>
+    <string name="shortcut_package_activity_hint">如 com.example/.MainActivity</string>
+    <string name="shortcut_pick_activity">从已安装应用选择</string>
+    <string name="shortcut_intent_uri_hint">输入 Intent URI</string>
+    <string name="shortcut_intent_uri_desc">使用 Intent URI 启动目标</string>
+    <string name="shortcut_package_optional">包名（可选）</string>
+    <string name="shortcut_package_optional_hint">目标应用包名</string>
+    <string name="shortcut_service_name">服务名称</string>
+    <string name="shortcut_service_name_hint">输入服务类名</string>
+    <string name="shortcut_toolbox_desc">内置面板</string>
+    <string name="shortcut_test_section">测试</string>
+    <string name="shortcut_test">测试启动</string>
+    <string name="shortcut_testing">正在测试…</string>
+    <string name="shortcut_test_success">成功: %s</string>
+    <string name="shortcut_test_failure">失败: %1$s - %2$s</string>
+    <string name="shortcut_test_error">异常: %s</string>
+    <string name="shortcut_test_note">测试结果仅供参考，实际行为可能因系统权限而异</string>
+
+    <!-- Shortcuts list -->
+    <string name="shortcuts_add_section">添加快捷方式</string>
+    <string name="shortcuts_add_intent_uri">Intent URI</string>
+    <string name="shortcuts_add_intent_uri_summary">通过 Intent URI 启动目标</string>
+    <string name="shortcuts_empty_hint">暂无快捷方式，点击下方添加</string>
+    <string name="shortcuts_at_limit">已达上限（%d 个）</string>
+
+    <!-- Activity picker -->
+    <string name="activity_picker_title">选择活动</string>
+    <string name="activity_picker_search">搜索活动…</string>
+    <string name="activity_picker_loading">正在加载…</string>
+    <string name="activity_picker_count">%d 个活动</string>
 </resources>

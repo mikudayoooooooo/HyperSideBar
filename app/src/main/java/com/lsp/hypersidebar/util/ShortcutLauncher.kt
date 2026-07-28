@@ -390,10 +390,20 @@ object ShortcutLauncher {
         // 验证
         val validation = validateService(context, action)
         if (validation is LaunchResult.Failure) {
-            // 非 exported → ROOT 可绕过
+            // 包可见性限制或非 exported 服务可能无法被 resolveService/getServiceInfo 解析，
+            // 但 startService 仍可能成功（系统服务、UID 1000 等场景），先盲启动再回退到 ROOT
+            if (validation.reason == FailureReason.ACTIVITY_NOT_FOUND &&
+                !action.packageName.isNullOrEmpty()
+            ) {
+                Log.w(TAG, "launchService: validateService refused (${validation.detail}), trying direct launch")
+                return tryLaunchServiceDirect(context, intent, action, allowRootFallback)
+            }
+            // 非 exported 或不可见（包可见性限制）→ ROOT 可绕过
             if (allowRootFallback && isRootAvailable() &&
-                validation.reason == FailureReason.NOT_EXPORTED) {
-                Log.i(TAG, "launchService: not exported, trying ROOT")
+                (validation.reason == FailureReason.NOT_EXPORTED ||
+                 validation.reason == FailureReason.ACTIVITY_NOT_FOUND)
+            ) {
+                Log.i(TAG, "launchService: validation failed (${validation.reason}), trying ROOT")
                 return launchViaRoot(action)
             }
             return validation
@@ -511,10 +521,13 @@ object ShortcutLauncher {
      */
     private fun findServiceInfo(pm: PackageManager, component: ComponentName): android.content.pm.ServiceInfo? {
         val pkgName = component.packageName ?: return null
+        // component.className 可能是相对名（如 ".service.X"），展开为绝对名再匹配
+        val fullClassName = if (component.className.startsWith("."))
+            "$pkgName${component.className}" else component.className
         return try {
             @Suppress("DEPRECATION")
             val pkgInfo = pm.getPackageInfo(pkgName, PackageManager.GET_SERVICES)
-            pkgInfo?.services?.find { it.name == component.className }
+            pkgInfo?.services?.find { it.name == fullClassName }
         } catch (e: Exception) {
             Log.w(TAG, "findServiceInfo: cannot query $pkgName services: ${e.message}")
             null
@@ -554,10 +567,13 @@ object ShortcutLauncher {
      */
     private fun findActivityInfo(pm: PackageManager, component: ComponentName): ActivityInfo? {
         val pkgName = component.packageName ?: return null
+        // component.className 可能是相对名，展开为绝对名再匹配
+        val fullClassName = if (component.className.startsWith("."))
+            "$pkgName${component.className}" else component.className
         return try {
             @Suppress("DEPRECATION")
             val pkgInfo = pm.getPackageInfo(pkgName, PackageManager.GET_ACTIVITIES)
-            pkgInfo?.activities?.find { it.name == component.className }
+            pkgInfo?.activities?.find { it.name == fullClassName }
         } catch (e: Exception) {
             Log.w(TAG, "findActivityInfo: cannot query $pkgName activities: ${e.message}")
             null
@@ -818,6 +834,45 @@ object ShortcutLauncher {
             LaunchResult.Failure(FailureReason.ACTIVITY_NOT_FOUND, e.message ?: "Activity not found")
         } catch (e: Exception) {
             Log.e(TAG, "tryLaunchDirect: exception via ${strategy.name}", e)
+            if (allowRootFallback && isRootAvailable()) {
+                launchViaRoot(action)
+            } else {
+                LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, e.message ?: "Unknown error")
+            }
+        }
+    }
+
+    /**
+      * 兜底启动：跳过 validateService 的解析检查，直接 try-catch 启动 startService。
+      * 用于 validateService 因包可见性限制误判 ACTIVITY_NOT_FOUND（实际服务存在且可启动）的场景。
+      */
+    private fun tryLaunchServiceDirect(
+        context: Context,
+        intent: Intent,
+        action: ShortcutAction,
+        allowRootFallback: Boolean
+    ): LaunchResult {
+        return try {
+            context.startService(intent)
+            Log.i(TAG, "tryLaunchServiceDirect: SUCCESS via startService, component=${intent.component}")
+            LaunchResult.Success(intent.component)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "tryLaunchServiceDirect: SecurityException, trying ROOT", e)
+            if (allowRootFallback && isRootAvailable()) {
+                launchViaRoot(action)
+            } else {
+                LaunchResult.Failure(FailureReason.SECURITY_EXCEPTION, e.message ?: "Permission denied")
+            }
+        } catch (e: IllegalStateException) {
+            // Android 8+ 后台启动限制（从设置页触发时可能出现）
+            Log.w(TAG, "tryLaunchServiceDirect: IllegalStateException (background restriction), trying ROOT", e)
+            if (allowRootFallback && isRootAvailable()) {
+                launchViaRoot(action)
+            } else {
+                LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, e.message ?: "Background service restriction")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "tryLaunchServiceDirect: exception", e)
             if (allowRootFallback && isRootAvailable()) {
                 launchViaRoot(action)
             } else {

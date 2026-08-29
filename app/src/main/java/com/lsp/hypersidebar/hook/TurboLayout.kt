@@ -29,9 +29,11 @@ private const val TAG = "TurboLayout"
  * - 视觉隐藏（三层封口）：① `c.draw(Canvas)` before-skip（可见像素唯一出口，C7680c.java:253）；
  *   ② `ImageView.onDraw` 身份过滤置空；③ `View.draw` 身份过滤置空——覆盖熄屏重建/主题切换
  *   换 drawable 类等一切绘制路径。M1/N1 提示一并清理。
- * - 触摸穿透：SidebarCoverView（com.miui.dock.sidebar.b，extends View，唯一触摸入口的窗口根）
- *   EDGE 模式对其窗口加 FLAG_NOT_TOUCHABLE——原小白条区域事件穿透到下层手势桩；
- *   f.onTouch 吞事件分支保留作纵深防御。系统侧边栏开关保持开启 → :ui 常驻 → 活动面板与 B 链路正常。
+ * - 触摸穿透（机制升级，迭代一 v2 §4）：flag 施加挪到窗口生命周期边界——addView 添加期
+ *   注入（窗口生而 NOT_TOUCHABLE）+ updateViewLayout 更新期重涂（宿主任何重置即时失效）；
+ *   事后 applyCoverFlag + 2s 看门狗降级为兜底。所有创建/修改 cover 窗口 lp 的路径必经
+ *   hook，竞态窗从"最多 2s"收敛为不存在。f.onTouch 吞事件分支保留作纵深防御 + 失效计数
+ *   （S1 数据源）。系统侧边栏开关保持开启 → :ui 常驻 → 活动面板与 B 链路正常。
  */
 class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
@@ -69,6 +71,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
                 // EDGE 模式：吞掉漏到小白条的事件（穿透失效信号），防唤起原生侧边栏/幽灵入口
                 if (remotePrefs.readChannelMode() == ChannelModes.EDGE) {
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN) onCoverTouchLeak()
                     it.result = true
                     return@createBeforeHook
                 }
@@ -176,6 +179,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             { hookOnTouch() },
             { hookM26633Q() },
             { hookCoverPassThrough() },
+            { hookCoverLifecycleFlags() },
             { hookHideWhiteBar() },
             { hookHideHints() },
             { hookHandleBarPixelKill() },
@@ -246,6 +250,60 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 ?: Log.w(TAG, "hookCoverPassThrough: $coverView ctor NOT FOUND")
         }.onFailure { Log.w(TAG, "hookCoverPassThrough failed: ${it.message}") }
         startCoverWatchdog()
+    }
+
+    /**
+     * 穿透机制升级（迭代一 v2 §4）：flag 施加挪到窗口生命周期边界。
+     * - addView 添加期注入：cover 窗口生而 NOT_TOUCHABLE（宿主从未见过无 flag 状态）；
+     * - updateViewLayout 更新期重涂：宿主任何带新 lp 的重置即时失效（仅在 flag 被清掉时
+     *   重涂并记日志——该日志即"宿主重置频率"的取证数据）。
+     * hook android.view.WindowManagerImpl（框架类，:ui 内全局身份过滤，每次仅一次类名比较）。
+     */
+    private fun hookCoverLifecycleFlags() {
+        runCatching {
+            MethodFinder.fromClass("android.view.WindowManagerImpl")
+                .filterByName("addView")
+                .firstOrNull()
+                ?.createBeforeHook {
+                    val view = it.args.getOrNull(0) as? View ?: return@createBeforeHook
+                    if (!inEdgeMode() || view.javaClass.name != coverView) return@createBeforeHook
+                    val lp = it.args.getOrNull(1) as? WindowManager.LayoutParams
+                        ?: return@createBeforeHook
+                    lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    Log.i(TAG, "cover addView: FLAG_NOT_TOUCHABLE injected at add time")
+                }
+                ?: Log.w(TAG, "hookCoverLifecycleFlags: WindowManagerImpl.addView NOT FOUND")
+        }.onFailure { Log.w(TAG, "hookCoverLifecycleFlags[addView] failed: ${it.message}") }
+        runCatching {
+            MethodFinder.fromClass("android.view.WindowManagerImpl")
+                .filterByName("updateViewLayout")
+                .firstOrNull()
+                ?.createBeforeHook {
+                    val view = it.args.getOrNull(0) as? View ?: return@createBeforeHook
+                    if (!inEdgeMode() || view.javaClass.name != coverView) return@createBeforeHook
+                    val lp = it.args.getOrNull(1) as? WindowManager.LayoutParams
+                        ?: return@createBeforeHook
+                    if (lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE == 0) {
+                        lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                        Log.i(TAG, "cover updateViewLayout: FLAG_NOT_TOUCHABLE re-asserted (host had cleared it)")
+                    }
+                }
+                ?: Log.w(TAG, "hookCoverLifecycleFlags: updateViewLayout NOT FOUND")
+        }.onFailure { Log.w(TAG, "hookCoverLifecycleFlags[updateViewLayout] failed: ${it.message}") }
+    }
+
+    // 穿透失效计数（S1 数据源）：EDGE 下事件本应穿透 cover 窗口，漏到 f.onTouch 即 flag 失效。
+    // 每次手势计一次（仅 DOWN），按分钟窗口滚动；≥3 次/分钟的自动降级接线在 1B
+    private var leakWindowStartMs = 0L
+    private var leakCountInWindow = 0
+    private fun onCoverTouchLeak() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - leakWindowStartMs >= 60_000L) {
+            leakWindowStartMs = now
+            leakCountInWindow = 0
+        }
+        leakCountInWindow++
+        Log.w(TAG, "EDGE touch leak: DOWN reached f.onTouch (穿透失效) count=$leakCountInWindow/min")
     }
 
     private fun purgeCoverRefs() {

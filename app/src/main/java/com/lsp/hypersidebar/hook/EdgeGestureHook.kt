@@ -3,6 +3,7 @@ package com.lsp.hypersidebar.hook
 import android.content.SharedPreferences
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.util.DisplayMetrics
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
@@ -27,7 +28,8 @@ private const val TAG = "EdgeGesture"
  * 设计（PRD §7.1/§7.2，全部实测背书）：
  * - 与全面屏返回手势共享同一次触摸：快速滑动松手 = 原生返回（零干扰透传）；
  *   内滑确认后位移停滞 triggerDwellMs（默认 250ms，锚点圆法 v2）= 呼出 fan 并消费后续事件
- * - 触发区：竖屏 [H/4, 3H/4]、横屏 [0, H/2]，DOWN 时过滤，区外完全透传
+ * - 触发区：竖屏 [H/3, 2H/3]、横屏=原小白条位置带（约上 1/4，PRD §7.3.1/§9.5 规则 3；
+ *   spike 默认带待 A8 实测定稿），DOWN 时过滤，区外完全透传
  * - 滑回边缘（inward 回落至确认阈值下）→ 整体重置手势状态（PRD"滑回边缘→待触发"）
  * - fan 选中项经 BroadcastLaunchStrategy 广播到 :ui 执行（B 链路实测 2-3ms）
  * - 拦截层：GestureStubView$3.onSwipeStop 翻转首参为 false（消费路径漏事件时的兜底）
@@ -42,8 +44,14 @@ class EdgeGestureHook(
         const val STUB_CLASS = "com.miui.home.recents.GestureStubView"
         const val CALLBACK_CLASS = "com.miui.home.recents.GestureStubView\$3"
 
-        const val SWIPE_CONFIRM_PX = 20f    // 与原生状态机一致的滑动确认阈值（dx≥20px 且水平占优）
+        const val SWIPE_CONFIRM_PX = 40f    // PRD §9.5 最小触发距离（内滑超此值进入"触发确认中"）
+        const val MAX_SWIPE_ANGLE_DEG = 60f // PRD §9.5 触发最大夹角（滑动方向与水平方向）
         const val STALL_RADIUS_PX = 15f     // 锚点圆半径：dwell 期间位移不超此值视为停顿
+
+        // 横屏触发带：PRD §7.3.1 横屏=原小白条位置（约上 1/4）。spike 先取默认带，
+        // A8 实测（HANDLE 下量白条 bounds）后定稿，届时考虑移入 pref
+        const val LANDSCAPE_ZONE_CENTER = 0.25f
+        const val LANDSCAPE_ZONE_HALF = 0.08f
     }
 
     private val fanController: FanMenuController by lazy {
@@ -58,6 +66,7 @@ class EdgeGestureHook(
     private var anchorY = 0f
     private var anchorT = -1L
     private var stallFired = false
+    private var gestureSeq = 0   // 手势取证 id：贯穿 DOWN/确认/停顿/拦截/UP 日志（S 门数据源）
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingShow: Runnable? = null
@@ -104,7 +113,7 @@ class EdgeGestureHook(
                     val shouldBack = it.args[0] as? Boolean ?: return@createBeforeHook
                     if (shouldBack) {
                         it.args[0] = false
-                        Log.i(TAG, "onSwipeStop INTERCEPTED: shouldBack=true -> false")
+                        Log.i(TAG, "g#$gestureSeq onSwipeStop INTERCEPTED: shouldBack=true -> false")
                     }
                 }
             }
@@ -170,11 +179,14 @@ class EdgeGestureHook(
             MotionEvent.ACTION_DOWN -> {
                 downX = ev.rawX
                 downY = ev.rawY
+                gestureSeq++
                 swipeConfirmed = false
                 stallFired = false
                 anchorT = -1L
-                // 触发区外：完全透传（原生返回正常走）
-                if (!isInTriggerZone(ev.rawX, ev.rawY, stub)) return false
+                // 触发区外：完全透传（原生返回正常走）；DOWN 全量记录（A2/A7/A8 数据源）
+                val inZone = isInTriggerZone(ev.rawX, ev.rawY, stub)
+                Log.i(TAG, "g#$gestureSeq DOWN raw=(${ev.rawX.toInt()},${ev.rawY.toInt()}) inZone=$inZone")
+                if (!inZone) return false
             }
 
             MotionEvent.ACTION_MOVE -> {
@@ -186,17 +198,23 @@ class EdgeGestureHook(
 
                 // 滑回边缘：整体重置（PRD 状态机"滑回边缘→待触发"；修 spike 锁存 bug）
                 if (swipeConfirmed && inward < SWIPE_CONFIRM_PX) {
+                    Log.i(TAG, "g#$gestureSeq RESET slide-back (inward=${inward.toInt()}px < ${SWIPE_CONFIRM_PX.toInt()})")
                     resetGesture()
                     return false
                 }
 
                 if (!swipeConfirmed) {
                     val dy = abs(ev.rawY - downY)
-                    if (inward >= SWIPE_CONFIRM_PX && inward > dy / 2f) {
+                    // PRD §9.5：距离 ≥40px 且与水平方向夹角 ≤60°（atan2，弃用 0.x 的 dx>dy/2 近似）
+                    val angle = Math.toDegrees(
+                        Math.atan2(dy.toDouble(), inward.toDouble())
+                    ).toFloat()
+                    if (inward >= SWIPE_CONFIRM_PX && angle <= MAX_SWIPE_ANGLE_DEG) {
                         swipeConfirmed = true
                         anchorX = ev.rawX
                         anchorY = ev.rawY
                         anchorT = ev.eventTime
+                        Log.i(TAG, "g#$gestureSeq swipe confirmed: inward=${inward.toInt()}px (>= ${SWIPE_CONFIRM_PX.toInt()}) angle=${angle.toInt()}")
                     }
                 }
 
@@ -208,6 +226,7 @@ class EdgeGestureHook(
                         anchorT = ev.eventTime
                     } else if (ev.eventTime - anchorT >= dwellMs()) {
                         stallFired = true
+                        Log.i(TAG, "g#$gestureSeq STALL ${dwellMs()}ms 达标 anchor=(${anchorX.toInt()},${anchorY.toInt()})")
                         vibrate()
                         cancelNativeGesture(stub, ev)
                         postShowFan(ev, stub)
@@ -217,6 +236,7 @@ class EdgeGestureHook(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                Log.i(TAG, "g#$gestureSeq UP stallFired=$stallFired shown=${fanController.isShowing}")
                 if (stallFired) {
                     cancelPendingShow()
                     // 实测轮七：fan 已落地而手指未预选即松手 → 立即收起。
@@ -242,15 +262,7 @@ class EdgeGestureHook(
         // DOWN 已被触发区过滤保证在带内；实测轮六定稿——停顿过程中的滑动漂移不再
         // 影响呼出位置）。展开方向由 computeFanGeometry 按锚点半边自动确定。
         // 圆心 Y 若超出几何层可行带会被 computeFanGeometry 二次钳制（保形恒在屏内）。
-        val zoneTop: Float
-        val zoneBottom: Float
-        if (dm.widthPixels > dm.heightPixels) {
-            zoneTop = 0f
-            zoneBottom = dm.heightPixels / 2f
-        } else {
-            zoneTop = dm.heightPixels / 4f
-            zoneBottom = dm.heightPixels * 3f / 4f
-        }
+        val (zoneTop, zoneBottom) = zoneBounds(dm)
         val anchorX = if (downX < dm.widthPixels / 2f) 0f else dm.widthPixels.toFloat()
         val anchorY = downY.coerceIn(zoneTop, zoneBottom)
         Log.i(TAG, "showFan: anchor=($anchorX, $anchorY) downY=$downY dwell=${dwellMs()}ms")
@@ -292,15 +304,22 @@ class EdgeGestureHook(
         pendingShow = null
     }
 
-    /** PRD 触发区：竖屏四等分第二、三块 [H/4, 3H/4]；横屏靠上 [0, H/2]。 */
+    /** PRD 触发区（§9.5 行为规则 3 / §7.3.1）：竖屏 [H/3, 2H/3]；横屏=原小白条位置带。 */
     private fun isInTriggerZone(x: Float, y: Float, stub: View?): Boolean {
         val dm = (stub?.context ?: EzXposed.appContext)?.resources?.displayMetrics ?: return false
-        return if (dm.widthPixels > dm.heightPixels) {
-            y in 0f..(dm.heightPixels / 2f)
-        } else {
-            y in (dm.heightPixels / 4f)..(dm.heightPixels * 3f / 4f)
-        }
+        val (top, bottom) = zoneBounds(dm)
+        return y in top..bottom
     }
+
+    /** 触发区唯一定义源（DOWN 过滤与 postShowFan 钳制共用，避免两处各写一份漂移）。 */
+    private fun zoneBounds(dm: DisplayMetrics): Pair<Float, Float> =
+        if (dm.widthPixels > dm.heightPixels) {
+            val center = dm.heightPixels * LANDSCAPE_ZONE_CENTER
+            val half = dm.heightPixels * LANDSCAPE_ZONE_HALF
+            (center - half) to (center + half)
+        } else {
+            (dm.heightPixels / 3f) to (dm.heightPixels * 2f / 3f)
+        }
 
     private fun inwardDx(x: Float): Float =
         if (downX < screenHalfWidth()) x - downX else downX - x

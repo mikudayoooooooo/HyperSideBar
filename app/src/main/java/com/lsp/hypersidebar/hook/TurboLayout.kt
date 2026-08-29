@@ -276,11 +276,16 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         ?: return@createBeforeHook
                     lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                     // lp 位置/尺寸随日志输出：cover=白条触摸条，pos 即白条当前实际位置
-                    // （横屏 B 路线的定位数据源，替代任何 HANDLE 切换测量）
+                    // （横屏 B 路线的定位数据源）。带 rotation/orientation 标签自描述——
+                    // 实测竖屏 y=用户自定义位置（[871,1179] 中心 1025），另有 y=0 的裸重加
+                    // 条目（无 ctor/drawable）身份待定向（横屏重排 or 面板开合状态）
+                    val rot = runCatching { view.display?.rotation ?: -1 }.getOrDefault(-1)
+                    val orient = view.resources.configuration.orientation
                     Log.i(
                         TAG,
                         "cover addView: FLAG_NOT_TOUCHABLE injected at add time " +
-                            "pos=(${lp.x},${lp.y}) size=(${lp.width}x${lp.height}) gravity=${lp.gravity}"
+                            "pos=(${lp.x},${lp.y}) size=(${lp.width}x${lp.height}) gravity=${lp.gravity} " +
+                            "rot=$rot orient=$orient"
                     )
                 }
                 ?: Log.w(TAG, "hookCoverLifecycleFlags: WindowManagerImpl.addView NOT FOUND")

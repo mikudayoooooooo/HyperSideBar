@@ -56,9 +56,11 @@ fun FanMenuCompose(
 
     LaunchedEffect(touchState.value) {
         val state = touchState.value
-        val pos = Offset(state.x, state.y)
-        val dist = distance(anchor, pos)
-        if (dist <= geometry.activeZonePx && state.touchAction != 2 && state.touchAction != 3) {
+        // 预选反馈直接跟随命中结果（PRD §7.3.2 框选放大+应用名）。原 activeZone 距离门控
+        // 会被设备上残留的旧参数（60dp=180px < 图标距圆心 280-390px）整体关闭——高亮
+        // 永不出现，实测"完全没有选中反馈"。activeZone 参数语义（PRD 30~120dp 与
+        // "至少覆盖扇形"自相矛盾）留待 1B 与 PRD 对齐
+        if (state.touchAction != 2 && state.touchAction != 3) {
             selectedIndex = state.selectedIndex
             selectedQuickIndex = state.selectedQuickIndex
         } else {

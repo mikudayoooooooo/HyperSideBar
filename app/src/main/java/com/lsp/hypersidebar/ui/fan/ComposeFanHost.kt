@@ -129,9 +129,21 @@ class ComposeFanHost(
         this.composeView = composeView
 
         val wrapper = object : FrameLayout(context) {
+            // 窗口在屏上的原点（每手势 DOWN 刷新）：命中测试必须与渲染同处窗口本地坐标系。
+            // 若 overlay 窗口被系统 inset（让出状态栏等），raw 屏幕坐标与本地坐标会差出
+            // 一个状态栏高度（实测≈110px），"指到的图标"与"命中的扇区"系统性错一位——
+            // 表现为"碰到哪个开隔壁的、扇区两端打不开"
+            private val viewOrigin = IntArray(2)
+
             override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-                val x = event.rawX
-                val y = event.rawY
+                val rawX = event.rawX
+                val rawY = event.rawY
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    runCatching { getLocationOnScreen(viewOrigin) }
+                    Log.i(TAG, "fan DOWN raw=(${rawX.toInt()},${rawY.toInt()}) origin=(${viewOrigin[0]},${viewOrigin[1]})")
+                }
+                val x = rawX - viewOrigin[0]
+                val y = rawY - viewOrigin[1]
                 val dx = x - ax
                 val dy = y - ay
                 val dist = sqrt(dx * dx + dy * dy)
@@ -165,6 +177,10 @@ class ComposeFanHost(
                             x, y, dx, dy, dist, deadZonePx, geometry
                         )
 
+                        if (fanSel != prevFan || quickSel != prevQuick) {
+                            Log.d(TAG, "sel change: fan $prevFan->$fanSel quick $prevQuick->$quickSel dist=${dist.toInt()}")
+                        }
+
                         val anySelected = fanSel != -1 || quickSel != -1
                         if (anySelected && (fanSel != prevFan || quickSel != prevQuick)) {
                             selectedSince = SystemClock.uptimeMillis()
@@ -179,7 +195,18 @@ class ComposeFanHost(
                             x, y, dx, dy, dist, deadZonePx, geometry
                         )
                         touchState.value = FanTouchState(x, y, 2, -1, -1)
-                        Log.d(TAG, "ACTION_UP fan=$fanSel quick=$quickSel dist=${dist.toInt()}")
+                        // 取证 dump：本地/原始坐标 + 极坐标 + 命中项全量，选中错位一轮日志定位
+                        val deg = Math.toDegrees(Math.atan2(dy.toDouble(), dx.toDouble()))
+                        val hitItem = geometry.items.getOrNull(fanSel)
+                        Log.i(
+                            TAG,
+                            "UP resolve: local=(${x.toInt()},${y.toInt()}) raw=(${rawX.toInt()},${rawY.toInt()}) " +
+                                "dist=${dist.toInt()} deg=${"%.1f".format(deg)} fan=$fanSel" +
+                                (hitItem?.let {
+                                    " [${it.app.packageName} ang=${"%.1f".format(it.angle)} rad=${it.radius.toInt()} ctr=(${it.centerX.toInt()},${it.centerY.toInt()})]"
+                                } ?: "") +
+                                " quick=$quickSel dwell=${SystemClock.uptimeMillis() - selectedSince}"
+                        )
 
                         val dwellTime = SystemClock.uptimeMillis() - selectedSince
                         val anySelected = fanSel in geometry.items.indices
@@ -238,6 +265,11 @@ class ComposeFanHost(
 
         try {
             wm.addView(wrapper, params)
+            wrapper.post {
+                val loc = IntArray(2)
+                runCatching { wrapper.getLocationOnScreen(loc) }
+                Log.i(TAG, "fan window: origin=(${loc[0]},${loc[1]}) size=(${wrapper.width},${wrapper.height}) anchor=(${ax.toInt()},${ay.toInt()})")
+            }
             Log.i(TAG, "Compose fan host added, ${apps.size} apps, ${quickApps.size} quick")
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to add compose fan host", e)

@@ -26,8 +26,8 @@ private const val TAG = "EdgeGesture"
  * 设计（PRD §7.1/§7.2，全部实测背书）：
  * - 与全面屏返回手势共享同一次触摸：快速滑动松手 = 原生返回（零干扰透传）；
  *   内滑确认后位移停滞 triggerDwellMs（默认 250ms，锚点圆法 v2）= 呼出 fan 并消费后续事件
- * - 触发区：竖屏 [H/3, 2H/3]、横屏=原小白条位置带（约上 1/4，PRD §7.3.1/§9.5 规则 3；
- *   spike 默认带待 A8 实测定稿），DOWN 时过滤，区外完全透传
+ * - 触发区：竖屏 [H/3, 2H/3]、横屏=白条触摸条 [0, 112dp]（cover lp 实测：系统横屏固定
+ *   条位于短轴顶部，竖屏才跟随用户自定义），DOWN 时过滤，区外完全透传
  * - 滑回边缘（inward 回落至确认阈值下）→ 整体重置手势状态（PRD"滑回边缘→待触发"）
  * - fan 选中项经 BroadcastLaunchStrategy 广播到 :ui 执行（B 链路实测 2-3ms）
  * - 拦截层：GestureStubView$3.onSwipeStop 翻转首参为 false（消费路径漏事件时的兜底）
@@ -46,10 +46,15 @@ class EdgeGestureHook(
         const val MAX_SWIPE_ANGLE_DEG = 60f // PRD §9.5 触发最大夹角（滑动方向与水平方向）
         const val STALL_RADIUS_PX = 15f     // 锚点圆半径：dwell 期间位移不超此值视为停顿
 
-        // 横屏触发带：PRD §7.3.1 横屏=原小白条位置（约上 1/4）。spike 先取默认带，
-        // A8 实测（HANDLE 下量白条 bounds）后定稿，届时考虑移入 pref
-        const val LANDSCAPE_ZONE_CENTER = 0.25f
-        const val LANDSCAPE_ZONE_HALF = 0.08f
+        // 横屏触发带=白条触摸条实测位置（cover lp 取证 2026-08-29）：竖屏条位跟随用户
+        // 自定义（本机 [871,1179]），横屏系统固定于短轴顶部 [0, 112dp]（条高
+        // R.dimen.sidebar_height_vertical=112dp，securitycenter 私有资源 launcher 读不到，
+        // 取常量）。B 路线落地后整条经 cover 直接收事件，此带仅为 A 路线过渡
+        const val LANDSCAPE_STRIP_HEIGHT_DP = 112f
+
+        // GestureStubView 横屏带放宽系数（hookLandscapeBand 覆写原生 0.6→此值），带=居中
+        // [(1-系数)/2, 1-(1-系数)/2]——横屏触发带上界受带顶约束（带外收不到事件）
+        const val LANDSCAPE_BAND_FRACTION = 0.8f
     }
 
     private val fanController: FanMenuController by lazy {
@@ -150,7 +155,7 @@ class EdgeGestureHook(
                         val screenW = cls.getDeclaredField("mScreenWidth")
                             .apply { isAccessible = true }.getInt(v)
                         cls.getDeclaredField("mGestureTouchHeight")
-                            .apply { isAccessible = true }.setInt(v, (screenW * 0.8f).toInt())
+                            .apply { isAccessible = true }.setInt(v, (screenW * LANDSCAPE_BAND_FRACTION).toInt())
                     }
                 }.onFailure { Log.w(TAG, "landscapeBand: ${it.message}") }
             } ?: Log.w(TAG, "updateGestureTouchHeight NOT FOUND（横屏带维持原生 60%）")
@@ -325,9 +330,12 @@ class EdgeGestureHook(
     /** 触发区唯一定义源（DOWN 过滤与 postShowFan 钳制共用，避免两处各写一份漂移）。 */
     private fun zoneBounds(dm: DisplayMetrics): Pair<Float, Float> =
         if (dm.widthPixels > dm.heightPixels) {
-            val center = dm.heightPixels * LANDSCAPE_ZONE_CENTER
-            val half = dm.heightPixels * LANDSCAPE_ZONE_HALF
-            (center - half) to (center + half)
+            // 横屏：白条触摸条 [0, 112dp]，上界受 GestureStubView 放宽带顶
+            // （(1-0.8)/2 短轴）约束——带外收不到事件，条顶约 108px 在 A 路线下不可达，
+            // B 路线（cover 直接收事件）落地后整条可达
+            val bandInset = dm.heightPixels * (1f - LANDSCAPE_BAND_FRACTION) / 2f
+            val stripBottom = LANDSCAPE_STRIP_HEIGHT_DP * dm.density
+            bandInset to stripBottom.coerceAtMost(dm.heightPixels.toFloat())
         } else {
             (dm.heightPixels / 3f) to (dm.heightPixels * 2f / 3f)
         }

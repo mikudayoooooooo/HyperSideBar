@@ -68,6 +68,7 @@ import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.overScrollVertical
 import java.util.UUID
 
 private const val TAG = "ShortcutSettings"
@@ -182,7 +183,9 @@ private fun ShortcutListPage(
     val isFull = shortcuts.size >= ShortcutStore.MAX_USER_SHORTCUTS
 
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .overScrollVertical(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -205,10 +208,14 @@ private fun ShortcutListPage(
         if (shortcuts.isNotEmpty()) {
             items(shortcuts, key = { it.id }) { shortcut ->
                 val iconPkg = shortcut.iconPackageName ?: shortcut.packageName
-                val status = if (shortcut.enabled) "" else "（已禁用）"
+                val status = if (shortcut.enabled) "" else stringResource(R.string.shortcut_disabled_tag)
                 ArrowPreference(
                     title = shortcut.label.ifEmpty { stringResource(R.string.shortcut_unnamed) },
-                    summary = buildShortcutSummary(shortcut) + status,
+                    summary = buildShortcutSummary(
+                        shortcut,
+                        stringResource(R.string.shortcut_uri_unset),
+                        stringResource(R.string.shortcut_toolbox_desc)
+                    ) + status,
                     startAction = if (iconPkg != null) {
                         { SettingsAppIcon(packageName = iconPkg, appName = shortcut.label, size = 32f) }
                     } else null,
@@ -224,8 +231,8 @@ private fun ShortcutListPage(
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
                     ArrowPreference(
-                        title = "添加组件",
-                        summary = "Activity / Service，自动识别类型",
+                        title = stringResource(R.string.shortcuts_add_component),
+                        summary = stringResource(R.string.shortcuts_add_component_summary),
                         onClick = { onAdd(ShortcutKind.COMPONENT) },
                         enabled = !isFull
                     )
@@ -251,14 +258,14 @@ private fun ShortcutListPage(
     }
 }
 
-private fun buildShortcutSummary(shortcut: ShortcutAction) = when (shortcut.kind) {
+private fun buildShortcutSummary(shortcut: ShortcutAction, unsetUri: String, toolboxLabel: String) = when (shortcut.kind) {
     ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> {
         val pkg = shortcut.packageName ?: "?"
         val act = shortcut.activityName ?: "?"
         "$pkg/$act"
     }
-    ShortcutKind.INTENT_URI -> shortcut.intentUri ?: "(未设置 URI)"
-    ShortcutKind.TOOLBOX -> "内置面板"
+    ShortcutKind.INTENT_URI -> shortcut.intentUri ?: unsetUri
+    ShortcutKind.TOOLBOX -> toolboxLabel
     ShortcutKind.SERVICE -> {
         val pkg = shortcut.packageName ?: "?"
         val svc = shortcut.serviceName ?: "?"
@@ -289,9 +296,19 @@ private fun ShortcutEditPage(
     var testResult by remember { mutableStateOf<String?>(null) }
     var testing by remember { mutableStateOf(false) }
 
-    // 从 targetSpec 实时推导 pkg/act（Compose 上下文内调用，避免 LocalContext 泄漏到普通函数）
-    val resolved by derivedStateOf {
-        splitTargetSpec(targetSpec, context)
+    // 已安装包名列表：IO 线程一次性预取（原实现把 getInstalledPackages 放在组合期派生状态里）
+    val installedPkgs by produceState<List<String>>(emptyList(), shortcut.id) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                context.packageManager.getInstalledPackages(0)
+                    .mapNotNull { it.packageName }
+            }.getOrDefault(emptyList())
+        }
+    }
+
+    // 从 targetSpec 推导 pkg/act（纯函数，随输入与包列表变化重算）
+    val resolved = remember(targetSpec, installedPkgs) {
+        splitTargetSpec(targetSpec, installedPkgs)
     }
 
     LaunchedEffect(testResult) {
@@ -302,7 +319,9 @@ private fun ShortcutEditPage(
     }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .overScrollVertical(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -324,7 +343,7 @@ private fun ShortcutEditPage(
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 SwitchPreference(
-                    title = "启用",
+                    title = stringResource(R.string.shortcut_enabled),
                     checked = enabled,
                     onCheckedChange = { enabled = it }
                 )
@@ -352,16 +371,16 @@ private fun ShortcutEditPage(
                 Column(modifier = Modifier.padding(16.dp)) {
                     when (shortcut.kind) {
                         ShortcutKind.COMPONENT -> {
-                            Text(text = "目标组件", style = MiuixTheme.textStyles.body1)
+                            Text(text = stringResource(R.string.shortcut_target_component), style = MiuixTheme.textStyles.body1)
                             Spacer(Modifier.height(8.dp))
                             TextField(
                                 value = targetSpec,
                                 onValueChange = { targetSpec = it },
-                                label = "com.tencent.mm.plugin.xxx.Activity"
+                                label = stringResource(R.string.shortcut_component_hint)
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                text = "粘贴完整类名，自动推导包名并识别 Activity/Service",
+                                text = stringResource(R.string.shortcut_component_desc),
                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                 style = MiuixTheme.textStyles.footnote1
                             )
@@ -370,7 +389,7 @@ private fun ShortcutEditPage(
                                 onClick = onPickActivity,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("从已安装应用选择")
+                                Text(stringResource(R.string.shortcut_pick_activity))
                             }
                         }
                         ShortcutKind.ACTIVITY -> {
@@ -379,7 +398,7 @@ private fun ShortcutEditPage(
                             TextField(
                                 value = targetSpec,
                                 onValueChange = { targetSpec = it },
-                                label = "com.tencent.mm.plugin.xxx.Activity"
+                                label = stringResource(R.string.shortcut_component_hint)
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
@@ -439,7 +458,7 @@ private fun ShortcutEditPage(
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                text = "非导出 Service 需通过 ROOT 启动",
+                                text = stringResource(R.string.shortcut_service_root_note),
                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                 style = MiuixTheme.textStyles.footnote1
                             )
@@ -526,7 +545,7 @@ private fun ShortcutEditPage(
             Button(
                 onClick = {
                     val updated = shortcut.copy(
-                        label = label.ifEmpty { "未命名" },
+                        label = label.ifEmpty { context.getString(R.string.shortcut_unnamed) },
                         packageName = when (shortcut.kind) {
                             ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.pkg.ifEmpty { null }
                             else -> packageName.ifEmpty { null }
@@ -667,7 +686,9 @@ private fun AppList(
     onBack: () -> Unit
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .overScrollVertical(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
@@ -721,7 +742,7 @@ private fun AppList(
         items(apps, key = { it.packageName }) { app ->
             ArrowPreference(
                 title = app.appLabel,
-                summary = "${app.packageName} · ${app.components.size} 个组件",
+                summary = stringResource(R.string.shortcut_component_count, app.packageName, app.components.size),
                 startAction = { SettingsAppIcon(packageName = app.packageName, appName = app.appLabel, size = 28f) },
                 onClick = { onSelectApp(app.packageName) }
             )
@@ -736,7 +757,9 @@ private fun ActivityList(
     onBack: () -> Unit
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .overScrollVertical(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
@@ -757,7 +780,11 @@ private fun ActivityList(
 
         item {
             Text(
-                text = "${app.components.size} 个组件（${app.components.count { !it.exported }} 个非导出）",
+                text = stringResource(
+                    R.string.shortcut_components_info,
+                    app.components.size,
+                    app.components.count { !it.exported }
+                ),
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 style = MiuixTheme.textStyles.footnote1,
                 modifier = Modifier.padding(vertical = 4.dp)
@@ -850,9 +877,9 @@ data class SplitResult(
  * 将用户输入（完整类名或 pkg/act 混合格式）拆分为 pkg + act。
  * 通过已安装包列表匹配最长前缀，确保即使输入不精确也能正确拆分。
  *
- * @param ctx 应用上下文，用于获取已安装包列表
+ * @param installedPkgs 已预取的包名列表（IO 线程加载），本函数保持纯函数
  */
-private fun splitTargetSpec(input: String, ctx: Context): SplitResult {
+private fun splitTargetSpec(input: String, installedPkgs: List<String>): SplitResult {
     if (input.isBlank()) return SplitResult("", "")
     val cleaned = input.replace(Regex("[\n\r\t\u0000-\u001f\u007f-\u009f]"), "")
     val trimmed = cleaned.trim()
@@ -862,11 +889,8 @@ private fun splitTargetSpec(input: String, ctx: Context): SplitResult {
         return SplitResult(pkg = parts[0].trim(), act = parts[1].trim())
     }
     // 单段完整类名：匹配已安装包列表中最长的包名前缀
-    val pm = ctx.packageManager
-    val installed = runCatching { pm.getInstalledPackages(0) }.getOrNull() ?: return SplitResult("", trimmed)
     var bestPkg = ""
-    for (pkgInfo in installed) {
-        val pkgName = pkgInfo.packageName ?: continue
+    for (pkgName in installedPkgs) {
         if (trimmed.startsWith("$pkgName.") && pkgName.length > bestPkg.length) {
             bestPkg = pkgName
         }
@@ -877,7 +901,7 @@ private fun splitTargetSpec(input: String, ctx: Context): SplitResult {
 
 /**
  * 设置页专用的应用图标组件。
- * 直接从 PackageManager 加载图标，不依赖扇形菜单的 FanThemeColors。
+ * 经 IconLoader 异步加载（LruCache + IO 线程），不在组合期做 PackageManager IPC。
  */
 @Composable
 private fun SettingsAppIcon(
@@ -886,22 +910,22 @@ private fun SettingsAppIcon(
     size: Float
 ) {
     val context = LocalContext.current
-    val drawable = remember(packageName) {
-        runCatching { context.packageManager.getApplicationIcon(packageName) }.getOrNull()
+    var bitmap by remember(packageName) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(packageName) {
+        bitmap = withContext(Dispatchers.IO) {
+            runCatching {
+                context.packageManager.getApplicationIcon(packageName)
+                    .toBitmap(width = 128, height = 128)
+            }.getOrNull()
+        }
     }
-    if (drawable != null) {
-        val bitmap = remember(drawable) {
-            runCatching { drawable.toBitmap(width = 128, height = 128) }.getOrNull()
-        }
-        if (bitmap != null) {
-            Image(
-                painter = BitmapPainter(bitmap.asImageBitmap()),
-                contentDescription = appName,
-                modifier = Modifier.size(size.dp)
-            )
-        } else {
-            FallbackSettingsIcon(appName, size)
-        }
+    val bmp = bitmap
+    if (bmp != null) {
+        Image(
+            painter = BitmapPainter(bmp.asImageBitmap()),
+            contentDescription = appName,
+            modifier = Modifier.size(size.dp)
+        )
     } else {
         FallbackSettingsIcon(appName, size)
     }

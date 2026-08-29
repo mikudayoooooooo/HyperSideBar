@@ -45,6 +45,8 @@
     <string name="system_colors_summary">使用 HyperOS 系统动态颜色</string>
     <string name="layout_settings">布局设置</string>
     <string name="layout_settings_summary">竖屏与横屏的图标、半径和内外圈数量</string>
+    <string name="restore_defaults">恢复默认设置</string>
+    <string name="restore_defaults_summary">将布局参数恢复为初始值</string>
 
     <string name="interaction">交互</string>
     <string name="interaction_settings">手势与反馈</string>
@@ -58,6 +60,8 @@
     <string name="outer_apps_count">外圈应用数</string>
     <string name="inner_apps_count">内圈应用数</string>
     <string name="icon_size_summary">%1$d dp</string>
+    <string name="icon_size_effective">当前 %1$d dp · 实际生效 %2$d dp</string>
+    <string name="icon_size_limited">当前 %1$d dp · 实际生效 %2$d dp（图标过大或数量过多）</string>
     <string name="inner_radius_summary">%1$d dp</string>
     <string name="outer_radius_summary">%1$d dp</string>
     <string name="outer_apps_summary">%1$d 个</string>
@@ -72,6 +76,8 @@
 
     <string name="landscape_icon_size">图标大小</string>
     <string name="landscape_icon_size_summary">%1$d dp</string>
+    <string name="landscape_icon_size_effective">当前 %1$d dp · 实际生效 %2$d dp</string>
+    <string name="landscape_icon_size_limited">当前 %1$d dp · 实际生效 %2$d dp（图标过大或数量过多）</string>
     <string name="landscape_outer_apps_count">外圈应用数</string>
     <string name="landscape_outer_apps_summary">%1$d 个</string>
     <string name="landscape_inner_apps_count">内圈应用数</string>
@@ -89,6 +95,7 @@
     <string name="about_based_on">基于</string>
     <string name="about_based_on_value">LSPosed API %1$s · EzXHelper %2$s</string>
     <string name="about_sdk">编译 SDK</string>
+    <string name="about_sdk_value">37</string>
     <string name="framework_info">框架信息</string>
     <string name="framework_name">框架名称</string>
     <string name="framework_version">框架版本</string>
@@ -100,6 +107,8 @@
     <!-- Shortcut -->
     <string name="shortcut_count_format">%1$d / %2$d</string>
     <string name="shortcut_unnamed">未命名</string>
+    <string name="shortcut_enabled">启用</string>
+    <string name="shortcut_disabled_tag">（已禁用）</string>
     <string name="shortcut_new">新建快捷方式</string>
     <string name="shortcut_edit">编辑快捷方式</string>
     <string name="shortcut_save">保存</string>
@@ -108,6 +117,9 @@
     <string name="shortcut_label">名称</string>
     <string name="shortcut_label_hint">输入快捷方式名称</string>
     <string name="shortcut_target_config">目标配置</string>
+    <string name="shortcut_target_component">目标组件</string>
+    <string name="shortcut_component_hint">com.tencent.mm.plugin.xxx.Activity</string>
+    <string name="shortcut_component_desc">粘贴完整类名，自动推导包名并识别 Activity/Service</string>
     <string name="shortcut_package_activity">包名 / Activity</string>
     <string name="shortcut_package_activity_hint">如 com.example/.MainActivity</string>
     <string name="shortcut_pick_activity">从已安装应用选择</string>
@@ -117,6 +129,7 @@
     <string name="shortcut_package_optional_hint">目标应用包名</string>
     <string name="shortcut_service_name">服务名称</string>
     <string name="shortcut_service_name_hint">输入服务类名</string>
+    <string name="shortcut_service_root_note">非导出 Service 需通过 ROOT 启动</string>
     <string name="shortcut_toolbox_desc">内置面板</string>
     <string name="shortcut_test_section">测试</string>
     <string name="shortcut_test">测试启动</string>
@@ -128,10 +141,15 @@
 
     <!-- Shortcuts list -->
     <string name="shortcuts_add_section">添加快捷方式</string>
+    <string name="shortcuts_add_component">添加组件</string>
+    <string name="shortcuts_add_component_summary">Activity / Service，自动识别类型</string>
     <string name="shortcuts_add_intent_uri">Intent URI</string>
     <string name="shortcuts_add_intent_uri_summary">通过 Intent URI 启动目标</string>
     <string name="shortcuts_empty_hint">暂无快捷方式，点击下方添加</string>
     <string name="shortcuts_at_limit">已达上限（%d 个）</string>
+    <string name="shortcut_uri_unset">（未设置 URI）</string>
+    <string name="shortcut_component_count">%1$s · %2$d 个组件</string>
+    <string name="shortcut_components_info">%1$d 个组件（%2$d 个非导出）</string>
 
     <!-- Activity picker -->
     <string name="activity_picker_title">选择活动</string>

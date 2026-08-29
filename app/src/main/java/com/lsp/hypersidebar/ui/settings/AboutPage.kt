@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,14 +30,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.BuildConfig
 import com.lsp.hypersidebar.R
+import io.github.libxposed.service.XposedService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 @Composable
 internal fun AboutPage(
+    service: XposedService?,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -44,9 +51,36 @@ internal fun AboutPage(
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
         }.getOrNull() ?: context.getString(R.string.unknown)
     }
+    val frameworkName by produceState(
+        initialValue = context.getString(R.string.unknown),
+        key1 = service
+    ) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { service?.frameworkName?.toString() }.getOrNull()
+                ?: context.getString(R.string.unknown)
+        }
+    }
+    val frameworkVersion by produceState(
+        initialValue = "--",
+        key1 = service
+    ) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { service?.frameworkVersion?.toString() }.getOrNull() ?: "--"
+        }
+    }
+    val apiVersion by produceState(
+        initialValue = "--",
+        key1 = service
+    ) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { service?.apiVersion?.toString() }.getOrNull() ?: "--"
+        }
+    }
 
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .overScrollVertical(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -114,7 +148,27 @@ internal fun AboutPage(
                     )
                     BasicComponent(
                         title = stringResource(R.string.about_sdk),
-                        summary = "37"
+                        summary = stringResource(R.string.about_sdk_value)
+                    )
+                }
+            }
+        }
+
+        item { SmallTitle(text = stringResource(R.string.framework_info)) }
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    BasicComponent(
+                        title = stringResource(R.string.framework_name),
+                        summary = frameworkName
+                    )
+                    BasicComponent(
+                        title = stringResource(R.string.framework_version),
+                        summary = frameworkVersion
+                    )
+                    BasicComponent(
+                        title = stringResource(R.string.api_version),
+                        summary = apiVersion
                     )
                 }
             }

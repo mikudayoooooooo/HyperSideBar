@@ -1,5 +1,7 @@
 package com.lsp.hypersidebar.ui.settings
 
+import com.lsp.hypersidebar.prefs.LayoutDefaults
+import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -17,27 +19,28 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
-import com.lsp.hypersidebar.ui.fan.AppIconImage
 import com.lsp.hypersidebar.ui.fan.FanAppInfo
 import com.lsp.hypersidebar.ui.fan.FanConfig
 import com.lsp.hypersidebar.ui.fan.FanGeometry
+import com.lsp.hypersidebar.ui.fan.FanThemeColors
 import com.lsp.hypersidebar.ui.fan.computeFanGeometry
-import com.lsp.hypersidebar.ui.fan.rememberAppIcon
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -95,19 +98,19 @@ internal fun FanPreviewCard(
 ) {
     val config = remember(prefs, prefsRevision) {
         FanConfig(
-            iconSizeDp = prefs.getFloat(PrefKeys.ICON_SIZE, 48f),
-            quickIconSizeDp = 36f,
-            innerRadiusDp = prefs.getFloat(PrefKeys.INNER_RADIUS, 150f),
-            outerRadiusDp = prefs.getFloat(PrefKeys.OUTER_RADIUS_MAX, 200f),
-            deadZoneDp = prefs.getFloat(PrefKeys.DEAD_ZONE, 12f),
-            activeZoneDp = prefs.getFloat(PrefKeys.ACTIVE_ZONE, 60f),
-            maxAppsOuter = prefs.getInt(PrefKeys.MAX_APPS_OUTER, 7),
-            maxAppsInner = prefs.getInt(PrefKeys.MAX_APPS_INNER, 4),
-            landscapeIconSizeDp = prefs.getFloat(PrefKeys.LANDSCAPE_ICON_SIZE, 48f),
-            landscapeMaxAppsOuter = prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, 5),
-            landscapeMaxAppsInner = prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, 3),
-            landscapeInnerRadiusDp = prefs.getFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, 150f),
-            landscapeOuterRadiusDp = prefs.getFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, 200f)
+            iconSizeDp = prefs.getFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE),
+            quickIconSizeDp = LayoutDefaults.QUICK_ICON_SIZE,
+            innerRadiusDp = prefs.getFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS),
+            outerRadiusDp = prefs.getFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX),
+            deadZoneDp = prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE),
+            activeZoneDp = prefs.getFloat(PrefKeys.ACTIVE_ZONE, LayoutDefaults.ACTIVE_ZONE),
+            maxAppsOuter = prefs.getInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER),
+            maxAppsInner = prefs.getInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER),
+            landscapeIconSizeDp = prefs.getFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE),
+            landscapeMaxAppsOuter = prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER),
+            landscapeMaxAppsInner = prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER),
+            landscapeInnerRadiusDp = prefs.getFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS),
+            landscapeOuterRadiusDp = prefs.getFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
         )
     }
 
@@ -281,12 +284,13 @@ private fun StaticFanPreview(
             )
         }
 
-        geometry.items.forEach { item ->
-            val center = map(previewItemCenter(geometry, item.angle, item.isOuter))
+        geometry.items.forEachIndexed { index, item ->
+            // 直接使用实机 layoutFanItems 的真实坐标（消除预览自算半径的漂移）
+            val center = map(Offset(item.centerX, item.centerY))
             val iconSizePx = geometry.iconSize * PREVIEW_DENSITY * scale
             val iconSizeDp = with(density) { iconSizePx.toDp() }
             PreviewIcon(
-                app = item.app,
+                index = index,
                 size = iconSizeDp.value,
                 modifier = Modifier.offset {
                     IntOffset(
@@ -316,7 +320,7 @@ private fun previewViewport(geometry: FanGeometry): PreviewViewport {
         quickCount * quickIconSize + (quickCount - 1) * quickSpacing + quickPadding * 2f
     }
     val quickHeight = quickIconSize + quickPadding * 2f
-    val centers = geometry.items.map { previewItemCenter(geometry, it.angle, it.isOuter) }
+    val centers = geometry.items.map { Offset(it.centerX, it.centerY) }
     val contentLeft = minOf(
         geometry.anchor.x,
         centers.minOfOrNull { it.x - iconSize / 2f } ?: geometry.anchor.x,
@@ -343,56 +347,45 @@ private fun previewViewport(geometry: FanGeometry): PreviewViewport {
     )
 }
 
+/** 轨道装饰弧半径：取实机布局中该圈图标的真实半径（无该圈图标时按实机公式兜底）。 */
 private fun previewRingRadius(geometry: FanGeometry, isOuter: Boolean): Float {
-    val outerRadius = (geometry.innerRadius + geometry.outerRadius) / 2f
-    if (isOuter) return outerRadius
-    val iconSize = geometry.iconSize * PREVIEW_DENSITY
-    return minOf(
-        geometry.innerRadius * 0.72f,
-        outerRadius - iconSize * 1.4f
-    ).coerceAtLeast(iconSize * 1.1f)
-}
-
-private fun previewItemCenter(
-    geometry: FanGeometry,
-    angle: Float,
-    isOuter: Boolean
-): Offset {
-    val radius = previewRingRadius(geometry, isOuter)
-    val radians = Math.toRadians(angle.toDouble())
-    return Offset(
-        x = geometry.anchor.x + radius * cos(radians).toFloat(),
-        y = geometry.anchor.y + radius * sin(radians).toFloat()
-    )
+    geometry.items.firstOrNull { it.isOuter == isOuter }?.let { return it.radius }
+    return if (isOuter) {
+        (geometry.innerRadius + geometry.outerRadius) / 2f
+    } else {
+        geometry.innerRadius * 0.85f
+    }
 }
 
 @Composable
 private fun PreviewIcon(
-    app: FanAppInfo,
+    index: Int,
     size: Float,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
     val colors = currentFanThemeColors()
-    val (drawable, fallbackColor) = rememberAppIcon(context, app)
 
     Box(
         modifier = modifier
             .size(size.dp)
             .background(
-                color = colors.surfaceContainerHigh.copy(alpha = 0.9f),
+                color = placeholderColor(colors, index),
                 shape = RoundedCornerShape((size * 0.24f).dp)
             ),
         contentAlignment = Alignment.Center
     ) {
-        AppIconImage(
-            drawable = drawable,
-            fallbackColor = fallbackColor,
-            appName = app.appName,
-            size = size * 0.8f,
-            colors = colors
+        Box(
+            modifier = Modifier
+                .size((size * 0.52f).dp)
+                .clip(CircleShape)
+                .background(colors.surfaceContainerHigh.copy(alpha = 0.72f))
         )
     }
+}
+
+private fun placeholderColor(colors: FanThemeColors, index: Int): Color {
+    val base = if (index % 2 == 0) colors.primaryContainer else colors.surfaceContainerHigh
+    return base.copy(alpha = 0.5f + (index % 3) * 0.16f)
 }
 
 @Composable
@@ -419,21 +412,18 @@ private fun PreviewQuickBar(
             .border(1.dp, colors.outline.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
             .padding(horizontal = 5.dp, vertical = 4.dp)
     ) {
-        geometry.quickApps.take(4).forEach { app ->
+        geometry.quickApps.take(4).forEachIndexed { index, _ ->
             Box(
                 modifier = Modifier
                     .widthIn(min = (iconSizeDp.value + 4f).dp)
                     .padding(horizontal = 2.dp),
                 contentAlignment = Alignment.Center
             ) {
-                val context = LocalContext.current
-                val (drawable, fallbackColor) = rememberAppIcon(context, app)
-                AppIconImage(
-                    drawable = drawable,
-                    fallbackColor = fallbackColor,
-                    appName = app.appName,
-                    size = iconSizeDp.value,
-                    colors = colors
+                Box(
+                    modifier = Modifier
+                        .size(iconSizeDp.value.dp)
+                        .clip(CircleShape)
+                        .background(placeholderColor(colors, index + geometry.items.size))
                 )
             }
         }

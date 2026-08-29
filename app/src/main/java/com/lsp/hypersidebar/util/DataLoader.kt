@@ -1,31 +1,22 @@
 package com.lsp.hypersidebar.util
 
 import android.content.Context
-import android.net.Uri
-import android.os.Bundle
 import android.util.Log
-import org.json.JSONArray
-import org.json.JSONObject
 
+/**
+ * 扇形菜单数据源（2026-08-25 决策：provider 整条路径退役）。
+ *
+ * 可打开应用统一取自系统准入列表 `MiuiMultiWindowUtils.getFreeformSuggestionList`
+ * （即 PRD §3.2 准入规则的产物——无小窗资格的应用天然不在其中，无需二次过滤）。
+ * 30s TTL 缓存兜底反射调用开销；快捷栏数据（用户 shortcut_actions）不经此类（Phase 3 接入）。
+ */
 object DataLoader {
 
     private const val TAG = "DataLoader"
-    private const val PROVIDER_URI = "content://com.miui.securitycenter.remoteprovider"
-    private const val KEY = "global_dock_apps"
     private const val CACHE_TTL_MS = 30_000L
 
     private var cachedResult: List<String>? = null
-    private var cachedQuickActions: List<QuickAction>? = null
     private var lastFetchTime = 0L
-
-    data class QuickAction(
-        val id: String,
-        val name: String,
-        val action: String,
-        val uri: String,
-        val packageName: String,
-        val className: String
-    )
 
     fun loadApps(context: Context): List<String> {
         return try {
@@ -35,74 +26,16 @@ object DataLoader {
         }
     }
 
-    fun loadQuickActions(context: Context): List<QuickAction> {
-        return try {
-            loadDockData(context)
-            cachedQuickActions ?: emptyList()
-        } catch (e: Throwable) {
-            cachedQuickActions ?: emptyList()
-        }
-    }
-
     private fun loadAppsInternal(context: Context): List<String> {
         val now = System.currentTimeMillis()
         if (cachedResult != null && (now - lastFetchTime) < CACHE_TTL_MS) {
             return cachedResult!!
         }
 
-        loadDockData(context)
         val suggestion = loadSuggestionApps(context)
-        val merged = linkedSetOf<String>()
-        merged.addAll(cachedResult ?: emptyList())
-        merged.addAll(suggestion)
-
-        cachedResult = merged.toList()
+        cachedResult = suggestion
         lastFetchTime = now
-        return cachedResult!!
-    }
-
-    private fun loadDockData(context: Context) {
-        try {
-            val bundle = Bundle().apply {
-                putString("key", KEY)
-                putString("default", "")
-            }
-            val result = context.contentResolver.call(
-                Uri.parse(PROVIDER_URI),
-                "callPreference",
-                "GET",
-                bundle
-            ) ?: return
-            val jsonStr = result.getString(KEY, "") ?: return
-            if (jsonStr.isEmpty()) return
-
-            val jsonArray = JSONArray(jsonStr)
-            val apps = mutableListOf<String>()
-            val actions = mutableListOf<QuickAction>()
-
-            for (i in 0 until jsonArray.length()) {
-                when (val entry = jsonArray.get(i)) {
-                    is String -> apps.add(entry.split(",,").first())
-                    is JSONObject -> {
-                        val action = entry.optString("action", "none")
-                        if (action == "none") continue
-                        actions.add(QuickAction(
-                            id = entry.optString("id", ""),
-                            name = entry.optString("name", entry.optString("title", "")),
-                            action = action,
-                            uri = entry.optString("uri", ""),
-                            packageName = entry.optString("packageName", ""),
-                            className = entry.optString("className", "")
-                        ))
-                    }
-                }
-            }
-
-            cachedResult = apps
-            cachedQuickActions = actions
-        } catch (e: Throwable) {
-            Log.w(TAG, "loadDockData: ${e.message}")
-        }
+        return suggestion
     }
 
     private fun loadSuggestionApps(context: Context): List<String> {

@@ -24,6 +24,8 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.lsp.hypersidebar.prefs.LayoutDefaults
+import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.theme.HyperSidebarTheme
 import com.lsp.hypersidebar.theme.ThemeModes
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -32,6 +34,9 @@ import kotlin.math.atan2
 import kotlin.math.sqrt
 
 private const val TAG = "ComposeFanHost"
+
+/** 分数迟滞余量：仅当最优项显著优于当前项才切换，杜绝预选抖动翻转。 */
+private const val HYSTERESIS_MARGIN = 0.15f
 
 data class FanTouchState(
     val x: Float,
@@ -81,14 +86,23 @@ class ComposeFanHost(
         val geometry = computeFanGeometry(
             anchorOffset, screenSize, apps, quickApps, config, density, isLandscape
         )
+        Log.i(
+            TAG,
+            "geometry: anchor=(${geometry.anchor.x.toInt()},${geometry.anchor.y.toInt()}) " +
+                "outer=${geometry.outerRadius.toInt()} inner=${geometry.innerRadius.toInt()} " +
+                "span=[${geometry.startAngle.toInt()},${geometry.endAngle.toInt()}] " +
+                "icon=${geometry.iconSize} quickBar=(${geometry.quickBarX.toInt()},${geometry.quickBarY.toInt()})"
+        )
 
         val touchState = mutableStateOf(FanTouchState(0f, 0f, 3, -1))
         val activeZonePx = geometry.activeZonePx
-        val deadZonePx = (geometry.innerRadius * 0.08f).coerceIn(24f, 60f)
+        // 行为规则 4：实际死区 = max(deadZone×density, innerRadius×0.08)，上限 60px
+        val deadZonePx = maxOf(config.deadZoneDp * density, geometry.innerRadius * 0.08f).coerceAtMost(60f)
         val innerCancelPx = ((geometry.innerRadius * 0.85f - geometry.iconSize * density * 0.5f) * 0.75f)
         val outerCancelPx = ((geometry.outerRadius + geometry.iconSize * density * 0.5f) * 1.25f)
-        val ax = anchorX
-        val ay = anchorY
+        // 选区计算必须用钳制后的圆心（几何层可能平移 anchorY 保屏内），否则触摸映射错位
+        val ax = geometry.anchor.x
+        val ay = geometry.anchor.y
 
         val lcOwner = FanLifecycleOwner()
         this.lifecycleOwner = lcOwner
@@ -275,10 +289,8 @@ class ComposeFanHost(
             return -1 to -1
         }
 
-        val fanCandidate = calcUnifiedFanSelection(dx, dy, dist, deadZonePx, geometry)
         val quickCandidate = calcQuickAppCandidate(x, y, geometry)
-
-        lastSelectedFanIndex = applyFanHysteresis(fanCandidate, dx, dy, geometry)
+        lastSelectedFanIndex = resolveFanSelection(dx, dy, dist, deadZonePx, geometry)
         lastSelectedQuickIndex = quickCandidate
 
         return resolveDualSelection(x, y, geometry)
@@ -319,23 +331,52 @@ class ComposeFanHost(
         return Offset(cx, cy)
     }
 
-    private fun calcUnifiedFanSelection(
+    /**
+     * 极坐标评分选中（实测轮六重做）：
+     * - score = (Δangle/sectorWidth)² + (Δdist/ringGap)²，角度与半径双维度归一化，
+     *   治"同角位内外圈项径向竞争翻转"的预选跳变
+     * - 可选带门控：|dist − item.radius| ≤ max(ringGap×0.55, iconPx×0.7)——
+     *   图标周围有限可选带，环间空隙与锚点近区不再误点亮远处图标；单圈退化为纯角度
+     * - 分数迟滞：仅当最优项 score < 当前项 − 0.15 才切换；当前项出带立即切换。
+     *   选择稳定后 DWELL 计时自然累积，修"难命中"
+     */
+    private fun resolveFanSelection(
         dx: Float, dy: Float, dist: Float,
         deadZonePx: Float, geometry: FanGeometry
     ): Int {
-        if (dist < deadZonePx) return -1
-        if (geometry.items.isEmpty()) return -1
+        if (dist < deadZonePx || geometry.items.isEmpty()) return -1
 
         val touchDeg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
         val sectorWidth = geometry.spanAngle / geometry.items.size
+        val density = context.resources.displayMetrics.density
+        val iconPx = geometry.iconSize * density
 
-        val candidates = geometry.items.filter { item ->
-            val isEdge = item.index < 2 || item.index >= geometry.items.size - 2
-            val angleTolerance = if (isEdge) sectorWidth * 1.3f else sectorWidth
-            angleDiffDeg(touchDeg, item.angle) < angleTolerance
+        val radii = geometry.items.map { it.radius }.distinct()
+        val dualRing = radii.size >= 2
+        val ringGap = if (dualRing) abs(radii[0] - radii[1]) else 0f
+        val band = if (dualRing) maxOf(ringGap * 0.55f, iconPx * 0.7f) else iconPx * 1.6f
+
+        var bestIdx = -1
+        var bestScore = Float.MAX_VALUE
+        var curScore = Float.MAX_VALUE
+        geometry.items.forEach { item ->
+            val dRad = abs(dist - item.radius)
+            if (dRad > band) return@forEach
+            val aNorm = angleDiffDeg(touchDeg, item.angle) / sectorWidth
+            val rNorm = if (dualRing && ringGap > 0f) dRad / ringGap else 0f
+            val score = aNorm * aNorm + rNorm * rNorm
+            if (item.index == lastSelectedFanIndex) curScore = score
+            if (score < bestScore) {
+                bestScore = score
+                bestIdx = item.index
+            }
         }
 
-        return candidates.minByOrNull { abs(dist - it.radius) }?.index ?: -1
+        if (bestIdx == -1) return -1
+        if (lastSelectedFanIndex !in geometry.items.indices || curScore == Float.MAX_VALUE) {
+            return bestIdx
+        }
+        return if (bestScore < curScore - HYSTERESIS_MARGIN) bestIdx else lastSelectedFanIndex
     }
 
     private fun calcQuickAppCandidate(
@@ -361,33 +402,6 @@ class ComposeFanHost(
         }
 
         return bestIdx
-    }
-
-    private fun applyFanHysteresis(
-        candidate: Int,
-        dx: Float, dy: Float,
-        geometry: FanGeometry
-    ): Int {
-        if (candidate == -1) return lastSelectedFanIndex
-        if (lastSelectedFanIndex == -1 || lastSelectedFanIndex !in geometry.items.indices) {
-            lastSelectedFanIndex = candidate
-            return candidate
-        }
-
-        val touchDeg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
-        val currentDiff = angleDiffDeg(touchDeg, geometry.items[lastSelectedFanIndex].angle)
-        val candidateDiff = angleDiffDeg(touchDeg, geometry.items[candidate].angle)
-
-        val hysteresisThreshold = if (geometry.items.size > 1) {
-            geometry.spanAngle / geometry.items.size * 0.5f
-        } else 8f
-
-        return if (candidateDiff < currentDiff - hysteresisThreshold) {
-            lastSelectedFanIndex = candidate
-            candidate
-        } else {
-            lastSelectedFanIndex
-        }
     }
 
     private fun angleDiffDeg(a: Float, b: Float): Float {
@@ -425,7 +439,7 @@ class ComposeFanHost(
 
     @Composable
     private fun FanMenuWithTheme(content: @Composable () -> Unit) {
-        val mode = prefs.getString("themeMode", ThemeModes.MONET_SYSTEM) ?: ThemeModes.MONET_SYSTEM
+        val mode = prefs.getString(PrefKeys.THEME_MODE, ThemeModes.MONET_SYSTEM) ?: ThemeModes.MONET_SYSTEM
         HyperSidebarTheme(colorMode = mode) {
             content()
         }
@@ -433,21 +447,21 @@ class ComposeFanHost(
 
     private fun buildFanConfig(): FanConfig {
         return FanConfig(
-            iconSizeDp = readFloat("iconSize", 48f),
-            quickIconSizeDp = 36f,
-            innerRadiusDp = readFloat("innerRadius", 150f),
-            outerRadiusDp = readFloat("outerRadiusMax", 200f),
-            deadZoneDp = readFloat("deadZone", 12f),
-            activeZoneDp = readFloat("activeZone", 60f),
+            iconSizeDp = readFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE),
+            quickIconSizeDp = LayoutDefaults.QUICK_ICON_SIZE,
+            innerRadiusDp = readFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS),
+            outerRadiusDp = readFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX),
+            deadZoneDp = readFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE),
+            activeZoneDp = readFloat(PrefKeys.ACTIVE_ZONE, LayoutDefaults.ACTIVE_ZONE),
             useDualRing = true,
-            minRadiusDp = 80f,
-            maxAppsOuter = readInt("maxAppsOuter", 7),
-            maxAppsInner = readInt("maxAppsInner", 4),
-            landscapeIconSizeDp = readFloat("landscapeIconSize", 48f),
-            landscapeMaxAppsOuter = readInt("landscapeMaxAppsOuter", 5),
-            landscapeMaxAppsInner = readInt("landscapeMaxAppsInner", 3),
-            landscapeInnerRadiusDp = readFloat("landscapeInnerRadius", 150f),
-            landscapeOuterRadiusDp = readFloat("landscapeOuterRadius", 200f)
+            minRadiusDp = 60f,
+            maxAppsOuter = readInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER),
+            maxAppsInner = readInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER),
+            landscapeIconSizeDp = readFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE),
+            landscapeMaxAppsOuter = readInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER),
+            landscapeMaxAppsInner = readInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER),
+            landscapeInnerRadiusDp = readFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS),
+            landscapeOuterRadiusDp = readFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
         )
     }
 
@@ -462,7 +476,7 @@ class ComposeFanHost(
     @Composable
     private fun extractFanThemeColors(): FanThemeColors {
         val scheme = MiuixTheme.colorScheme
-        val mode = prefs.getString("themeMode", ThemeModes.MONET_SYSTEM) ?: ThemeModes.MONET_SYSTEM
+        val mode = prefs.getString(PrefKeys.THEME_MODE, ThemeModes.MONET_SYSTEM) ?: ThemeModes.MONET_SYSTEM
         val isDark = mode == ThemeModes.DARK || mode == ThemeModes.MONET_DARK ||
             (mode == ThemeModes.SYSTEM || mode == ThemeModes.MONET_SYSTEM) &&
             context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK ==

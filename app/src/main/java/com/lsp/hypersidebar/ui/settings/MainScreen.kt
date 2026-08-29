@@ -1,5 +1,7 @@
 package com.lsp.hypersidebar.ui.settings
 
+import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.prefs.SettingsRepository
 import android.content.SharedPreferences
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -22,7 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -60,9 +61,10 @@ internal fun MainScreen(
 ) {
     var selectedTab by remember { mutableStateOf(RootTab.HOME) }
     var detailScreen by remember { mutableStateOf<DetailScreen?>(null) }
-    var prefsRevision by remember(prefs) { mutableIntStateOf(0) }
+    val settingsRepo = remember(prefs) { SettingsRepository(prefs) }
+    val prefsRevision = settingsRepo.revision
     val moduleStatus by produceState<ModuleStatus>(
-        initialValue = ModuleStatus.UNKNOWN,
+        initialValue = ModuleStatus.INACTIVE,
         key1 = service
     ) {
         value = withContext(Dispatchers.IO) { moduleStatusOf(service) }
@@ -81,12 +83,8 @@ internal fun MainScreen(
         }
     }
 
-    DisposableEffect(prefs) {
-        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-            prefsRevision++
-        }
-        prefs.registerOnSharedPreferenceChangeListener(listener)
-        onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    DisposableEffect(settingsRepo) {
+        onDispose { settingsRepo.dispose() }
     }
 
     DisposableEffect(activity, detailScreen) {
@@ -148,12 +146,12 @@ internal fun MainScreen(
                         RootTab.HOME -> HomePage(
                             prefs = prefs,
                             prefsRevision = prefsRevision,
-                            status = moduleStatus,
-                            service = service
+                            status = moduleStatus
                         )
                         RootTab.SETTINGS -> SettingsPage(
                             prefs = prefs,
                             prefsRevision = prefsRevision,
+                            status = moduleStatus,
                             currentThemeMode = themeMode,
                             onThemeModeChange = onThemeModeChange,
                             onNavigateToAppSelection = {
@@ -165,7 +163,7 @@ internal fun MainScreen(
                             onNavigateToLayout = { detailScreen = DetailScreen.LayoutSettings },
                             onNavigateToInteraction = { detailScreen = DetailScreen.InteractionSettings }
                         )
-                        RootTab.ABOUT -> AboutPage()
+                        RootTab.ABOUT -> AboutPage(service = service)
                     }
                 }
 
@@ -259,7 +257,8 @@ internal fun MainScreen(
 }
 
 private fun moduleStatusOf(service: XposedService?): ModuleStatus {
-    if (service == null) return ModuleStatus.UNKNOWN
+    // 仅在 service 首次绑定（启动时）验证一次，结果固定不再实时刷新。
+    if (service == null) return ModuleStatus.INACTIVE
     val scope = runCatching { service.scope }.getOrDefault(emptyList())
     return if (scope.contains("com.miui.securitycenter")) {
         ModuleStatus.ACTIVE

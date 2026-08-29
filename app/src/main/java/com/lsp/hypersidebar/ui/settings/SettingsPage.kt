@@ -1,6 +1,11 @@
 package com.lsp.hypersidebar.ui.settings
 
+import com.lsp.hypersidebar.prefs.savePref
+import com.lsp.hypersidebar.ui.fan.effectiveIconSizeDp
+import com.lsp.hypersidebar.prefs.LayoutDefaults
+import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,8 +19,10 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.theme.ThemeMode
@@ -25,13 +32,17 @@ import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 @Composable
 internal fun SettingsPage(
     prefs: SharedPreferences,
     prefsRevision: Int,
+    status: ModuleStatus,
     currentThemeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit,
     onNavigateToAppSelection: () -> Unit,
@@ -40,6 +51,9 @@ internal fun SettingsPage(
     onNavigateToInteraction: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var enabled by remember(prefs, prefsRevision) {
+        mutableStateOf(prefs.getBoolean(PrefKeys.ENABLED, true))
+    }
     val selectedApps = remember(prefs, prefsRevision) {
         prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty().size
     }
@@ -55,11 +69,25 @@ internal fun SettingsPage(
     val selectedThemeIndex = ThemeModes.BASE_MODES.indexOf(baseMode).coerceAtLeast(0)
     val useSystemColors = ThemeModes.usesSystemColors(currentThemeMode)
 
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
+    SettingsList(modifier = modifier) {
+        item { SmallTitle(text = stringResource(R.string.module_section)) }
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    ModuleStatusComponent(status = status)
+                    SwitchPreference(
+                        title = stringResource(R.string.module_enabled),
+                        summary = stringResource(R.string.module_enabled_summary),
+                        checked = enabled,
+                        onCheckedChange = {
+                            enabled = it
+                            prefs.savePref(PrefKeys.ENABLED, it)
+                        }
+                    )
+                }
+            }
+        }
+
         item { SmallTitle(text = stringResource(R.string.apps_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -129,30 +157,47 @@ internal fun LayoutSettingsPage(
     prefsRevision: Int,
     modifier: Modifier = Modifier
 ) {
-    var iconSize by remember(prefs, prefsRevision) { mutableFloatStateOf(prefs.getFloat(PrefKeys.ICON_SIZE, 48f)) }
-    var innerRadius by remember(prefs, prefsRevision) { mutableFloatStateOf(prefs.getFloat(PrefKeys.INNER_RADIUS, 150f)) }
-    var outerRadius by remember(prefs, prefsRevision) { mutableFloatStateOf(prefs.getFloat(PrefKeys.OUTER_RADIUS_MAX, 200f)) }
+    var iconSize by remember(prefs, prefsRevision) {
+        mutableFloatStateOf(prefs.getFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE))
+    }
+    var innerRadius by remember(prefs, prefsRevision) {
+        mutableFloatStateOf(prefs.getFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS))
+    }
+    var outerRadius by remember(prefs, prefsRevision) {
+        mutableFloatStateOf(prefs.getFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX))
+    }
     var outerCount by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getInt(PrefKeys.MAX_APPS_OUTER, 7).toFloat())
+        mutableFloatStateOf(prefs.getInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER).toFloat())
     }
     var innerCount by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getInt(PrefKeys.MAX_APPS_INNER, 4).toFloat())
+        mutableFloatStateOf(prefs.getInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER).toFloat())
     }
     var landscapeIconSize by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.LANDSCAPE_ICON_SIZE, 48f))
+        mutableFloatStateOf(prefs.getFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE))
     }
     var landscapeOuterCount by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, 5).toFloat())
+        mutableFloatStateOf(prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER).toFloat())
     }
     var landscapeInnerCount by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, 3).toFloat())
+        mutableFloatStateOf(prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER).toFloat())
     }
     var landscapeInnerRadius by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, 150f))
+        mutableFloatStateOf(prefs.getFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS))
     }
     var landscapeOuterRadius by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, 200f))
+        mutableFloatStateOf(prefs.getFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS))
     }
+
+    // 行为规则 1：设置页显示弦长收缩后的实际生效图标尺寸，超限时提示
+    val density = LocalDensity.current.density
+    val effectiveIcon = effectiveIconSizeDp(
+        outerCount.toInt(), innerCount.toInt(), 150f,
+        outerRadius, innerRadius, iconSize, density
+    )
+    val effectiveLandscapeIcon = effectiveIconSizeDp(
+        landscapeOuterCount.toInt(), landscapeInnerCount.toInt(), 75f,
+        landscapeOuterRadius, landscapeInnerRadius, landscapeIconSize, density
+    )
 
     SettingsList(modifier = modifier) {
         item { SmallTitle(text = stringResource(R.string.portrait_layout)) }
@@ -161,7 +206,11 @@ internal fun LayoutSettingsPage(
                 Column {
                     SettingsSliderItem(
                         title = stringResource(R.string.icon_size),
-                        summary = stringResource(R.string.icon_size_summary, iconSize.toInt()),
+                        summary = if (effectiveIcon < iconSize) {
+                            stringResource(R.string.icon_size_limited, iconSize.toInt(), effectiveIcon.toInt())
+                        } else {
+                            stringResource(R.string.icon_size_effective, iconSize.toInt(), effectiveIcon.toInt())
+                        },
                         value = iconSize,
                         valueRange = 32f..80f,
                         onValueChange = { iconSize = it },
@@ -171,8 +220,8 @@ internal fun LayoutSettingsPage(
                         title = stringResource(R.string.inner_radius),
                         summary = stringResource(R.string.inner_radius_summary, innerRadius.toInt()),
                         value = innerRadius,
-                        valueRange = 100f..200f,
-                        steps = 9,
+                        valueRange = 80f..160f,
+                        steps = 7,
                         onValueChange = { innerRadius = it },
                         onValueChangeFinished = { prefs.savePref(PrefKeys.INNER_RADIUS, innerRadius) }
                     )
@@ -180,8 +229,8 @@ internal fun LayoutSettingsPage(
                         title = stringResource(R.string.outer_radius_max),
                         summary = stringResource(R.string.outer_radius_summary, outerRadius.toInt()),
                         value = outerRadius,
-                        valueRange = 150f..300f,
-                        steps = 14,
+                        valueRange = 110f..220f,
+                        steps = 10,
                         onValueChange = { outerRadius = it },
                         onValueChangeFinished = { prefs.savePref(PrefKeys.OUTER_RADIUS_MAX, outerRadius) }
                     )
@@ -217,7 +266,11 @@ internal fun LayoutSettingsPage(
                 Column {
                     SettingsSliderItem(
                         title = stringResource(R.string.landscape_icon_size),
-                        summary = stringResource(R.string.landscape_icon_size_summary, landscapeIconSize.toInt()),
+                        summary = if (effectiveLandscapeIcon < landscapeIconSize) {
+                            stringResource(R.string.landscape_icon_size_limited, landscapeIconSize.toInt(), effectiveLandscapeIcon.toInt())
+                        } else {
+                            stringResource(R.string.landscape_icon_size_effective, landscapeIconSize.toInt(), effectiveLandscapeIcon.toInt())
+                        },
                         value = landscapeIconSize,
                         valueRange = 32f..80f,
                         onValueChange = { landscapeIconSize = it },
@@ -251,8 +304,8 @@ internal fun LayoutSettingsPage(
                         title = stringResource(R.string.landscape_inner_radius),
                         summary = stringResource(R.string.landscape_inner_radius_summary, landscapeInnerRadius.toInt()),
                         value = landscapeInnerRadius,
-                        valueRange = 80f..200f,
-                        steps = 11,
+                        valueRange = 80f..160f,
+                        steps = 7,
                         onValueChange = { landscapeInnerRadius = it },
                         onValueChangeFinished = {
                             prefs.savePref(PrefKeys.LANDSCAPE_INNER_RADIUS, landscapeInnerRadius)
@@ -262,14 +315,29 @@ internal fun LayoutSettingsPage(
                         title = stringResource(R.string.landscape_outer_radius),
                         summary = stringResource(R.string.landscape_outer_radius_summary, landscapeOuterRadius.toInt()),
                         value = landscapeOuterRadius,
-                        valueRange = 120f..300f,
-                        steps = 17,
+                        valueRange = 110f..220f,
+                        steps = 10,
                         onValueChange = { landscapeOuterRadius = it },
                         onValueChangeFinished = {
                             prefs.savePref(PrefKeys.LANDSCAPE_OUTER_RADIUS, landscapeOuterRadius)
                         }
                     )
                 }
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = stringResource(R.string.restore_defaults),
+                    color = MiuixTheme.colorScheme.error,
+                    style = MiuixTheme.textStyles.body1,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = { restoreLayoutDefaults(prefs) })
+                        .padding(vertical = 12.dp),
+                    textAlign = TextAlign.Center
+                )
             }
         }
     }
@@ -281,9 +349,9 @@ internal fun InteractionSettingsPage(
     prefsRevision: Int,
     modifier: Modifier = Modifier
 ) {
-    var activeZone by remember(prefs, prefsRevision) { mutableFloatStateOf(prefs.getFloat(PrefKeys.ACTIVE_ZONE, 60f)) }
-    var deadZone by remember(prefs, prefsRevision) { mutableFloatStateOf(prefs.getFloat(PrefKeys.DEAD_ZONE, 12f)) }
-    var vibrate by remember(prefs, prefsRevision) { mutableStateOf(prefs.getBoolean(PrefKeys.VIBRATE, true)) }
+    var activeZone by remember(prefs, prefsRevision) { mutableFloatStateOf(prefs.getFloat(PrefKeys.ACTIVE_ZONE, LayoutDefaults.ACTIVE_ZONE)) }
+    var deadZone by remember(prefs, prefsRevision) { mutableFloatStateOf(prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)) }
+    var vibrate by remember(prefs, prefsRevision) { mutableStateOf(prefs.getBoolean(PrefKeys.VIBRATE, LayoutDefaults.VIBRATE)) }
 
     SettingsList(modifier = modifier) {
         item { SmallTitle(text = stringResource(R.string.interaction_settings)) }
@@ -294,7 +362,7 @@ internal fun InteractionSettingsPage(
                         title = stringResource(R.string.stick_sensitivity),
                         summary = stringResource(R.string.stick_sensitivity_description, activeZone.toInt()),
                         value = activeZone,
-                        valueRange = 30f..120f,
+                        valueRange = 120f..300f,
                         steps = 8,
                         onValueChange = { activeZone = it },
                         onValueChangeFinished = { prefs.savePref(PrefKeys.ACTIVE_ZONE, activeZone) }
@@ -329,7 +397,9 @@ private fun SettingsList(
     content: androidx.compose.foundation.lazy.LazyListScope.() -> Unit
 ) {
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .overScrollVertical(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         content = content
@@ -362,4 +432,20 @@ private fun SettingsSliderItem(
             )
         }
     )
+}
+
+private fun restoreLayoutDefaults(prefs: SharedPreferences) {
+    // 单 editor 批量落盘：1 次 binder 写 + 1 次监听器回调 + 1 轮重组（原逐 key 写 = 10 轮）
+    prefs.edit().apply {
+        putFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE)
+        putFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS)
+        putFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX)
+        putInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER)
+        putInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER)
+        putFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE)
+        putInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER)
+        putInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
+        putFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS)
+        putFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
+    }.apply()
 }

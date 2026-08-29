@@ -200,6 +200,10 @@ class ComposeFanHost(
                         touchState.value = FanTouchState(x, y, 2, -1, -1)
                         // 取证 dump：本地/原始坐标 + 极坐标 + 命中项全量，选中错位一轮日志定位
                         val deg = Math.toDegrees(Math.atan2(dy.toDouble(), dx.toDouble()))
+                        // selectedSince==0 = 手势期间从未预选过（快速扫过即松手），dwell 按 0 计——
+                        // 顺带修真 bug：此前 uptime−0 为巨大垃圾值，会让 <150ms 快速松手也通过
+                        // 预选时长检查（违反 PRD"预选不足 150ms 松手不启动"）
+                        val dwellMs = if (selectedSince == 0L) 0L else SystemClock.uptimeMillis() - selectedSince
                         val hitItem = geometry.items.getOrNull(fanSel)
                         Log.i(
                             TAG,
@@ -208,10 +212,10 @@ class ComposeFanHost(
                                 (hitItem?.let {
                                     " [${it.app.packageName} ang=${"%.1f".format(it.angle)} rad=${it.radius.toInt()} ctr=(${it.centerX.toInt()},${it.centerY.toInt()})]"
                                 } ?: "") +
-                                " quick=$quickSel dwell=${SystemClock.uptimeMillis() - selectedSince}"
+                                " quick=$quickSel dwell=$dwellMs"
                         )
 
-                        val dwellTime = SystemClock.uptimeMillis() - selectedSince
+                        val dwellTime = if (selectedSince == 0L) 0L else SystemClock.uptimeMillis() - selectedSince
                         val anySelected = fanSel in geometry.items.indices
                         val anyQuick = quickSel in geometry.quickApps.indices
 

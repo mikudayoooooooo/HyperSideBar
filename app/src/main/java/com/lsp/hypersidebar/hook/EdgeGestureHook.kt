@@ -83,8 +83,12 @@ class EdgeGestureHook(
         runCatching { hookLandscapeBand(); okBand = true }
             .onFailure { Log.e(TAG, "D FAILED hookLandscapeBand: ${it.message}", it) }
         Log.i(TAG, "hooks installed: onTouchEvent=$okTouch onSwipeStop=$okStop landscapeBand=$okBand")
-        // 预热推荐列表缓存：getFreeformSuggestionList 反射实测 ~1s，移出呼出关键路径（S6）
-        EzXposed.appContext?.let { com.lsp.hypersidebar.util.DataLoader.prewarm(it) }
+        // 预热推荐列表缓存（尽力而为）：launcher 进程 init 时 EzXposed.appContext 可能尚未就绪
+        // ——实测 getAppContext 在上下文未建好时直接抛 NPE 而非返回 null。预热失败无碍：
+        // DataLoader 已是后台异步刷新，首呼出会自行触发且不阻塞主线程
+        runCatching {
+            EzXposed.appContext?.let { com.lsp.hypersidebar.util.DataLoader.prewarm(it) }
+        }.onFailure { Log.w(TAG, "prewarm skipped: ${it.message}") }
     }
 
     /** 记录层：触摸流入口，BeforeHook。返回 true = 消费（拦截原生处理）。 */

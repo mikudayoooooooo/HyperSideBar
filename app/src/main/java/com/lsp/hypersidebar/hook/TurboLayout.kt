@@ -275,7 +275,13 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                     val lp = it.args.getOrNull(1) as? WindowManager.LayoutParams
                         ?: return@createBeforeHook
                     lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                    Log.i(TAG, "cover addView: FLAG_NOT_TOUCHABLE injected at add time")
+                    // lp 位置/尺寸随日志输出：cover=白条触摸条，pos 即白条当前实际位置
+                    // （横屏 B 路线的定位数据源，替代任何 HANDLE 切换测量）
+                    Log.i(
+                        TAG,
+                        "cover addView: FLAG_NOT_TOUCHABLE injected at add time " +
+                            "pos=(${lp.x},${lp.y}) size=(${lp.width}x${lp.height}) gravity=${lp.gravity}"
+                    )
                 }
                 ?: Log.w(TAG, "hookCoverLifecycleFlags: WindowManagerImpl.addView NOT FOUND")
         }.onFailure { Log.w(TAG, "hookCoverLifecycleFlags[addView] failed: ${it.message}") }

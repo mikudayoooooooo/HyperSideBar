@@ -1,8 +1,6 @@
 package com.lsp.hypersidebar.hook
 
 import android.content.SharedPreferences
-import android.os.VibrationEffect
-import android.os.Vibrator
 import android.util.DisplayMetrics
 import android.util.Log
 import android.view.MotionEvent
@@ -67,6 +65,7 @@ class EdgeGestureHook(
     private var anchorT = -1L
     private var stallFired = false
     private var gestureSeq = 0   // 手势取证 id：贯穿 DOWN/确认/停顿/拦截/UP 日志（S 门数据源）
+    private var gestureInZone = false  // DOWN 判定的触发区归属；区外手势整条透传
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingShow: Runnable? = null
@@ -175,6 +174,10 @@ class EdgeGestureHook(
             return true
         }
 
+        // 区外手势整条透传（修 1A 缺陷：此前仅 DOWN 过滤，其后 MOVE 仍会进状态机确认/停顿，
+        // 触发区外也能呼出——实测 y 超 2/3 界多处 inZone=false 仍 STALL）
+        if (!gestureInZone && ev.actionMasked != MotionEvent.ACTION_DOWN) return false
+
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = ev.rawX
@@ -185,6 +188,7 @@ class EdgeGestureHook(
                 anchorT = -1L
                 // 触发区外：完全透传（原生返回正常走）；DOWN 全量记录（A2/A7/A8 数据源）
                 val inZone = isInTriggerZone(ev.rawX, ev.rawY, stub)
+                gestureInZone = inZone
                 Log.i(TAG, "g#$gestureSeq DOWN raw=(${ev.rawX.toInt()},${ev.rawY.toInt()}) inZone=$inZone")
                 if (!inZone) return false
             }
@@ -227,7 +231,6 @@ class EdgeGestureHook(
                     } else if (ev.eventTime - anchorT >= dwellMs()) {
                         stallFired = true
                         Log.i(TAG, "g#$gestureSeq STALL ${dwellMs()}ms 达标 anchor=(${anchorX.toInt()},${anchorY.toInt()})")
-                        vibrate()
                         cancelNativeGesture(stub, ev)
                         postShowFan(ev, stub)
                         return true
@@ -339,16 +342,5 @@ class EdgeGestureHook(
         remotePrefs.getInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS).toLong()
     } catch (_: Exception) {
         LayoutDefaults.TRIGGER_DWELL_MS.toLong()
-    }
-
-    private fun vibrate() {
-        val enabled = try {
-            remotePrefs.getBoolean(PrefKeys.VIBRATE, LayoutDefaults.VIBRATE)
-        } catch (_: Exception) { LayoutDefaults.VIBRATE }
-        if (!enabled) return
-        runCatching {
-            EzXposed.appContext?.getSystemService(Vibrator::class.java)
-                ?.vibrate(VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE))
-        }
     }
 }

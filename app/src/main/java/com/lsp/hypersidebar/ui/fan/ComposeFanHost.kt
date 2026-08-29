@@ -347,7 +347,10 @@ class ComposeFanHost(
         if (dist < deadZonePx || geometry.items.isEmpty()) return -1
 
         val touchDeg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
-        val sectorWidth = geometry.spanAngle / geometry.items.size
+        // 扇区宽度按各自环计算（外圈 span/外圈数、内圈 span/内圈数）：此前用全 items 数平摊，
+        // 内圈实际扇区更宽却被同一尺度归一化 → 分数系统性偏大，选中偏向外圈、内圈难命中
+        val outerCnt = geometry.items.count { it.isOuter }
+        val innerCnt = geometry.items.size - outerCnt
         val density = context.resources.displayMetrics.density
         val iconPx = geometry.iconSize * density
 
@@ -362,7 +365,12 @@ class ComposeFanHost(
         geometry.items.forEach { item ->
             val dRad = abs(dist - item.radius)
             if (dRad > band) return@forEach
-            val aNorm = angleDiffDeg(touchDeg, item.angle) / sectorWidth
+            val ringSector = if (item.isOuter) {
+                if (outerCnt > 1) geometry.spanAngle / outerCnt else geometry.spanAngle
+            } else {
+                if (innerCnt > 1) geometry.spanAngle / innerCnt else geometry.spanAngle
+            }
+            val aNorm = angleDiffDeg(touchDeg, item.angle) / ringSector
             val rNorm = if (dualRing && ringGap > 0f) dRad / ringGap else 0f
             val score = aNorm * aNorm + rNorm * rNorm
             if (item.index == lastSelectedFanIndex) curScore = score
@@ -419,7 +427,9 @@ class ComposeFanHost(
             Log.d(TAG, "quickBarTap: no quick apps")
             return
         }
-        val quickIconPx = config.quickIconSizeDp * density
+        // 命中半径用几何层生效的快捷图标尺寸（跟随扇形图标收缩），与 computeQuickAppCenter
+        // 及渲染保持同一尺寸源；此前用 config 原始值，图标收缩后命中圈偏大错位
+        val quickIconPx = geometry.quickIconSize * density
         val pxSpacing = quickIconPx * 0.35f
         val barPadding = quickIconPx * 0.5f
 

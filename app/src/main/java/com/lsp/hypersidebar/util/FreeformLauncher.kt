@@ -5,7 +5,6 @@ import android.content.Intent
 import android.os.Process
 import android.os.UserHandle
 import android.util.Log
-import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 
 private const val TAG = "FreeformLauncher"
 
@@ -18,40 +17,14 @@ object FreeformLauncher {
             return
         }
 
-        // 优先使用 MIUI 内部 FreeformUtil.U()
-        if (tryFreeformUtilU(context, packageName, clsName)) return
-
-        // 回退：MiuiMultiWindowUtils + startActivityAsUser
+        // 唯一路径：MiuiMultiWindowUtils.getActivityOptions + startActivityAsUser（实测验证）。
+        // com.miui.freeform.FreeformUtil 在任何进程都 ClassNotFound——旧"优先路径"从未生效，
+        // 只贡献每次启动一条异常栈噪音，已移除
         tryMiuiMultiWindow(context, packageName, clsName)
     }
 
-    private fun tryFreeformUtilU(context: Context, packageName: String, clsName: String): Boolean {
-        return try {
-            val cls = Class.forName("com.miui.freeform.FreeformUtil")
-            val method = MethodFinder.fromClass(cls)
-                .filterByName("U")
-                .filterByParamTypes(
-                    Context::class.java,
-                    String::class.java,
-                    String::class.java,
-                    Int::class.javaPrimitiveType
-                )
-                .firstOrNull()
-            if (method == null) {
-                Log.w(TAG, "FreeformUtil.U method not found")
-                return false
-            }
-            method.invoke(null, context, packageName, clsName, 0)
-            Log.i(TAG, "FreeformUtil.U success: $packageName/$clsName")
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "FreeformUtil.U failed for $packageName", e)
-            false
-        }
-    }
-
     /**
-     * 回退方案：MiuiMultiWindowUtils.getActivityOptions + startActivityAsUser
+     * MiuiMultiWindowUtils.getActivityOptions + startActivityAsUser（实测可用路径）
      */
     private fun tryMiuiMultiWindow(context: Context, packageName: String, clsName: String) {
         try {

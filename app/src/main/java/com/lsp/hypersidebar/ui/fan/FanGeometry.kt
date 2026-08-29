@@ -46,15 +46,19 @@ data class FanGeometry(
 /** 屏幕安全边距（原 computeMaxRadius 的 48dp×1.5）。 */
 private const val SCREEN_MARGIN_DP = 72f
 
+/** 横屏边距：短轴空间紧张（1080px 内 72dp 边距+扇形投影+快捷栏超出全高），派生值按方向缩至 24dp。 */
+private const val LANDSCAPE_SCREEN_MARGIN_DP = 24f
+
 /**
- * 扇形几何（实测轮五定稿）：形状恒定 + 圆心钳制。
+ * 扇形几何（1A 实测修订）：圆心 = 呼出位置（PRD §9.5 行为规则 3"以最初触摸点为圆心"），
+ * 半径自适应收窄保形不越屏。
  *
- * - 展开角固定（竖 150°/横 75°），以锚点水平轴上下对称——不再向空旷侧偏移（centerOffset 已删），
- *   不再按位置压缩角度/收缩半径（computeValidAngleRange/computeMaxRadius 已删）：
- *   同一配置在任何停顿高度下扇形完全一致（PRD"展开角度相对固定"）
- * - 保证不超屏的手段是平移圆心而非变形扇形：anchorY 钳入
- *   [margin+半高, H−margin−半高−快捷栏高]；仅当可行带不存在（极小屏/横屏大半径）时对半径做
- *   一次性确定性收缩（结果只依赖屏幕与配置，不依赖呼出位置），再重新钳制
+ * - 展开角固定（竖 150°/横 75°），以锚点水平轴上下对称
+ * - 0.x 轮五"平移圆心保形"在横屏必然退化：短轴内可行带收缩后收敛为单点（y≈H/3），
+ *   实测表现为"横屏呼出永远停在屏幕中间同一处、与触摸位置无关"。改按 PRD 字面：
+ *   半径取 min(用户设置, 锚点上下可容纳)，圆心不再移动；竖屏高位呼出半径不变，
+ *   低位呼出半径收窄但圆心贴手
+ * - 快捷栏图标跟随扇形图标实际生效尺寸（PRD §9.5"与扇形应用图标大小一致，跟随"）
  */
 fun computeFanGeometry(
     anchor: Offset,
@@ -77,49 +81,39 @@ fun computeFanGeometry(
 
     val outerRadiusConfig = if (isLandscape) config.landscapeOuterRadiusDp else config.outerRadiusDp
     val innerRadiusConfig = if (isLandscape) config.landscapeInnerRadiusDp else config.innerRadiusDp
-    val marginPx = SCREEN_MARGIN_DP * density
-
-    // 快捷栏度量（与锚点无关，先算，供圆心钳制预留下方空间）
-    val quickList = quickApps.take(6)
-    val quickIconPx = config.quickIconSizeDp * density
-    val quickSpacing = quickIconPx * 0.35f
-    val barPadding = quickIconPx * 0.5f
-    val barContentWidth = if (quickList.isNotEmpty()) {
-        quickList.size * quickIconPx + (quickList.size - 1) * quickSpacing + barPadding * 2
-    } else 0f
-    val barContentHeight = quickIconPx + barPadding * 2
-    val barBlockPx = quickIconPx * 0.6f + barContentHeight   // barGap + 栏高
-
-    val maxAbsSin = abs(sin(Math.toRadians((span / 2f).toDouble())).toFloat()).coerceAtLeast(0.01f)
-    var outerRadius = outerRadiusConfig * density
-    var halfV = outerRadius * maxAbsSin
-    var bandMin = marginPx + halfV
-    var bandMax = height - marginPx - halfV - barBlockPx
-    if (bandMin > bandMax) {
-        val availableHalf = ((height - marginPx * 2f - barBlockPx) / 2f).coerceAtLeast(60f)
-        outerRadius = minOf(outerRadius, availableHalf / maxAbsSin)
-        halfV = outerRadius * maxAbsSin
-        bandMin = marginPx + halfV
-        bandMax = height - marginPx - halfV - barBlockPx
-    }
-    val settledAnchor = Offset(anchor.x, anchor.y.coerceIn(bandMin, bandMax))
-
-    var innerRadius = innerRadiusConfig * density
-    if (innerRadius > outerRadius * 0.8f || innerRadius < 50f * density) {
-        innerRadius = outerRadius * 0.75f
-    }
-    if (outerRadius < config.minRadiusDp * density) {
-        innerRadius = outerRadius * 0.6f
-    }
+    // 横屏短轴空间紧张：边距按方向独立取值（72dp 为竖屏派生值，横屏缩至 24dp）
+    val marginPx = (if (isLandscape) LANDSCAPE_SCREEN_MARGIN_DP else SCREEN_MARGIN_DP) * density
 
     val appCount = apps.size
     val outerCount = minOf(if (isLandscape) config.landscapeMaxAppsOuter else config.maxAppsOuter, appCount)
     val innerCount = (appCount - outerCount).coerceIn(0, if (isLandscape) config.landscapeMaxAppsInner else config.maxAppsInner)
 
+    // 快捷栏占位估算（供半径收缩预留下方空间；渲染用生效图标重算，估算偏大属保守）
+    val quickList = quickApps.take(6)
+    val estBarBlockPx = config.quickIconSizeDp * density * 2.6f   // barGap(0.6) + 栏高(icon+上下各 0.5 padding)
+
+    val maxAbsSin = abs(sin(Math.toRadians((span / 2f).toDouble())).toFloat()).coerceAtLeast(0.01f)
+
+    // PRD §9.5 半径自适应 + 行为规则 3：圆心 = 请求位置（不再平移），实际外圈半径 =
+    // min(用户设置, 锚点上下可容纳)
+    val roomAbove = anchor.y - marginPx
+    val roomBelow = height - marginPx - estBarBlockPx - anchor.y
+    val maxRByScreen = (minOf(roomAbove, roomBelow) / maxAbsSin).coerceAtLeast(0f)
+    val outerRadius = minOf(outerRadiusConfig * density, maxRByScreen)
+        .coerceAtLeast(config.minRadiusDp * density)
+    var innerRadius = innerRadiusConfig * density
+    if (innerRadius > outerRadius * 0.8f || innerRadius < 50f * density) {
+        innerRadius = outerRadius * 0.75f
+    }
+
+    val settledAnchor = Offset(anchor.x, anchor.y)
+
     var iconSizeDp = if (isLandscape) config.landscapeIconSizeDp else config.iconSizeDp
     if (appCount > 1 && spanAngle > 0f) {
         iconSizeDp = fitIconSize(outerCount, innerCount, spanAngle, outerRadius, innerRadius, iconSizeDp, density)
     }
+    // 快捷栏图标跟随扇形实际生效图标（PRD §9.5"与扇形应用图标大小一致，跟随"）
+    val quickIconSizeDpEff = iconSizeDp
 
     val items = layoutFanItems(
         apps = apps, outerCount = outerCount, innerCount = innerCount,
@@ -127,17 +121,24 @@ fun computeFanGeometry(
         innerRadius = innerRadius, outerRadius = outerRadius
     )
 
-    // 快捷栏固定在扇形下方（PRD"快捷方式入口在半圆的下面"）；圆心已钳制 ⇒ fanBottom
-    // 天然在屏内，此处 coerce 仅作防御。扫描极值不能用端点：左向扇形 startAngle 的 sin
-    // 为正，端点命名易反（见 sweepExtremes 注释历史）
+    // 快捷栏固定在扇形下方（PRD"快捷方式入口在半圆的下面"）；半径已按上下空间收缩 ⇒
+    // fanBottom 天然在屏内，此处 coerce 仅作防御。扫描极值不能用端点：左向扇形 startAngle
+    // 的 sin 为正，端点命名易反（见 sweepExtremes 注释历史）
     val (_, maxSin, minCos, maxCos) = sweepExtremes(startAngle, endAngle)
+    val effQuickIconPx = quickIconSizeDpEff * density
+    val effSpacing = effQuickIconPx * 0.35f
+    val effPadding = effQuickIconPx * 0.5f
+    val effBarWidth = if (quickList.isNotEmpty()) {
+        quickList.size * effQuickIconPx + (quickList.size - 1) * effSpacing + effPadding * 2f
+    } else 0f
+    val effBarHeight = effQuickIconPx + effPadding * 2f
     val fanLeftX = settledAnchor.x + outerRadius * minCos
     val fanRightX = settledAnchor.x + outerRadius * maxCos
-    val baseY = settledAnchor.y + outerRadius * maxSin + quickIconPx * 0.6f
-    val baseX = (fanLeftX + fanRightX) / 2f - barContentWidth / 2f
+    val baseY = settledAnchor.y + outerRadius * maxSin + effQuickIconPx * 0.6f
+    val baseX = (fanLeftX + fanRightX) / 2f - effBarWidth / 2f
 
-    val quickBarX = baseX.coerceIn(barPadding, (width - barContentWidth - barPadding).coerceAtLeast(barPadding))
-    val quickBarY = baseY.coerceIn(barPadding, (height - barContentHeight - barPadding).coerceAtLeast(barPadding))
+    val quickBarX = baseX.coerceIn(effPadding, (width - effBarWidth - effPadding).coerceAtLeast(effPadding))
+    val quickBarY = baseY.coerceIn(effPadding, (height - effBarHeight - effPadding).coerceAtLeast(effPadding))
 
     // activeZone 真实控制扇形选中半径（Phase 2 语义修正）
     val activeZonePx = config.activeZoneDp * density
@@ -151,7 +152,7 @@ fun computeFanGeometry(
         innerRadius = innerRadius,
         outerRadius = outerRadius,
         iconSize = iconSizeDp,
-        quickIconSize = config.quickIconSizeDp,
+        quickIconSize = quickIconSizeDpEff,
         quickBarX = quickBarX,
         quickBarY = quickBarY,
         quickBarVertical = false,

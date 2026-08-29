@@ -12,6 +12,7 @@ import com.lsp.hypersidebar.prefs.readChannelMode
 import com.lsp.hypersidebar.ui.fan.FanMenuController
 import io.github.kyuubiran.ezxhelper.core.finder.ConstructorFinder
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
+import io.github.kyuubiran.ezxhelper.xposed.EzXposed
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHook
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createBeforeHook
 import java.lang.ref.WeakReference
@@ -188,6 +189,10 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             runCatching { step() }.onFailure { Log.e(TAG, "init step failed: ${it.message}", it) }
         }
         Log.i(TAG, "init done: ${getStats()}")
+        // 预热推荐列表缓存（:ui 侧 HANDLE 通道共用 DataLoader；反射 ~1s 不进呼出关键路径）
+        runCatching {
+            EzXposed.appContext?.let { com.lsp.hypersidebar.util.DataLoader.prewarm(it) }
+        }
     }
 
     // ===== 小白条视觉隐藏（EDGE 模式） =====

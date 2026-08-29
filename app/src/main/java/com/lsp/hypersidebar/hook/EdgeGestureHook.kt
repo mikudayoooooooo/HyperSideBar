@@ -83,6 +83,8 @@ class EdgeGestureHook(
         runCatching { hookLandscapeBand(); okBand = true }
             .onFailure { Log.e(TAG, "D FAILED hookLandscapeBand: ${it.message}", it) }
         Log.i(TAG, "hooks installed: onTouchEvent=$okTouch onSwipeStop=$okStop landscapeBand=$okBand")
+        // 预热推荐列表缓存：getFreeformSuggestionList 反射实测 ~1s，移出呼出关键路径（S6）
+        EzXposed.appContext?.let { com.lsp.hypersidebar.util.DataLoader.prewarm(it) }
     }
 
     /** 记录层：触摸流入口，BeforeHook。返回 true = 消费（拦截原生处理）。 */

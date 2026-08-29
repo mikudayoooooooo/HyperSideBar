@@ -159,12 +159,14 @@ class EdgeGestureHook(
         // fan 展示中：事件转发给 fan 并消费；UP/CANCEL 收起（未预选立即收起，PRD §7.1）
         if (fanController.isShowing) {
             if (!fanSeenThisGesture) {
-                // fan 在手势中途异步落地：先合成 DOWN 起始选择状态（同小白条通道）
-                fanSeenThisGesture = true
+                // fan 在手势中途异步落地：先合成 DOWN 起始选择状态（同小白条通道）。
+                // 仅在真正送达时才置位——showInternal 主线程阻塞期间 host==null 会静默丢事件，
+                // 实测合成 DOWN 被丢后整条手势再无 DOWN：窗口原点捕获、选中起点全部失效，
+                // 整条手势退回 94px 窗口 inset 偏差（g#6 实锤）
                 val down = MotionEvent.obtain(
                     ev.downTime, ev.eventTime, MotionEvent.ACTION_DOWN, ev.rawX, ev.rawY, 0
                 )
-                try { fanController.dispatchTouchEvent(down) } finally { down.recycle() }
+                try { fanSeenThisGesture = fanController.dispatchTouchEvent(down) } finally { down.recycle() }
             }
             fanController.dispatchTouchEvent(ev)
             if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {

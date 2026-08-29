@@ -134,13 +134,17 @@ class ComposeFanHost(
             // 一个状态栏高度（实测≈110px），"指到的图标"与"命中的扇区"系统性错一位——
             // 表现为"碰到哪个开隔壁的、扇区两端打不开"
             private val viewOrigin = IntArray(2)
+            private var originValid = false
 
             override fun dispatchTouchEvent(event: MotionEvent): Boolean {
                 val rawX = event.rawX
                 val rawY = event.rawY
-                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                // 窗口原点带有效性持续重试：DOWN 可能早于布局完成（getLocationOnScreen
+                // 返回 0），每个事件都重试直到捕获有效原点（attach 且有宽度）
+                if (!originValid && isAttachedToWindow && width > 0) {
                     runCatching { getLocationOnScreen(viewOrigin) }
-                    Log.i(TAG, "fan DOWN raw=(${rawX.toInt()},${rawY.toInt()}) origin=(${viewOrigin[0]},${viewOrigin[1]})")
+                    originValid = true
+                    Log.i(TAG, "fan origin=(${viewOrigin[0]},${viewOrigin[1]}) size=(${width},${height})")
                 }
                 val x = rawX - viewOrigin[0]
                 val y = rawY - viewOrigin[1]
@@ -187,7 +191,6 @@ class ComposeFanHost(
                         }
 
                         touchState.value = FanTouchState(x, y, 0, fanSel, quickSel)
-                        Log.d(TAG, "touch MOVE fan=$fanSel quick=$quickSel dist=${dist.toInt()}")
                         return true
                     }
                     MotionEvent.ACTION_UP -> {

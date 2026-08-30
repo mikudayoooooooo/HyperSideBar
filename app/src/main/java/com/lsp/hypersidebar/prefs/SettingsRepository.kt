@@ -59,6 +59,54 @@ class SettingsRepository(val prefs: SharedPreferences) {
 
     fun customApps(): Set<String> = prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty()
 
+    // ===== 草稿/提交层（迭代二 §4 地基，供迭代三 OverlayBottomSheet 消费） =====
+    //
+    // 语义（refactor-plan §四.4）：编辑中只改草稿不落盘（实时预览跟随草稿态），
+    // commit = 单 editor 批量落盘（一次 revision 跳变、hook 侧一次 prefs 同步），
+    // discard = 整体丢弃。草稿值优先于落盘值（[getDraft] 系列先查草稿）。
+
+    private val draft = LinkedHashMap<String, Any>()
+
+    val hasDraft: Boolean get() = draft.isNotEmpty()
+
+    fun putDraft(key: String, value: Any) {
+        draft[key] = value
+        revision++ // 草稿变化也走 revision 通道驱动预览重组
+    }
+
+    fun <T> getDraft(key: String, fallback: () -> T): T {
+        @Suppress("UNCHECKED_CAST")
+        return (draft[key] as? T) ?: fallback()
+    }
+
+    /** 批量落盘草稿并清空（保存）。 */
+    fun commitDraft() {
+        if (draft.isEmpty()) return
+        prefs.edit().apply {
+            draft.forEach { (k, v) ->
+                when (v) {
+                    is Boolean -> putBoolean(k, v)
+                    is Float -> putFloat(k, v)
+                    is Int -> putInt(k, v)
+                    is String -> putString(k, v)
+                    is Set<*> -> {
+                        @Suppress("UNCHECKED_CAST")
+                        putStringSet(k, v as Set<String>)
+                    }
+                }
+            }
+        }.apply()
+        draft.clear()
+    }
+
+    /** 丢弃草稿（取消）。 */
+    fun discardDraft() {
+        if (draft.isNotEmpty()) {
+            draft.clear()
+            revision++
+        }
+    }
+
     // ===== 写 =====
 
     fun save(key: String, value: Any) = prefs.savePref(key, value)

@@ -38,6 +38,11 @@ class FanMenuController(
         private set
     private var host: ComposeFanHost? = null
 
+    // 池=1（1C P2）：dismiss 后 host 不销毁，idleHost 持有供下次呼出复用；
+    // activeContext = 最近一次 showInternal 的 context（回调经它取，见 obtainHost）
+    private var idleHost: ComposeFanHost? = null
+    private var activeContext: Context? = null
+
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     // ===== 驱动源看门狗（1C §3） =====
@@ -134,9 +139,41 @@ class FanMenuController(
                 )
             }
 
-            val fanHost = ComposeFanHost(context, prefs).apply {
-                onAppSelected = { appInfo ->
-                    Log.i(TAG, "onAppSelected: ${appInfo.packageName}")
+            // 池=1 复用（1C P2）：host 不逐呼出重建，context 经 activeContext 提供
+            activeContext = context
+            val fanHost = obtainHost()
+            host = fanHost
+            fanHost.show(anchorX, anchorY, apps, allQuick, isLandscape)
+            touchHeartbeat()
+            onMechanismResult?.invoke(true, "show ok")
+            Log.i(TAG, "show: fan overlay added (pooled), ${allQuick.size} quick actions, landscape=$isLandscape")
+
+        } catch (e: Throwable) {
+            Log.e(TAG, "show FAILED: ${e.message}", e)
+            isShowing = false
+            host = null
+            evictIdleHost()
+            onMechanismResult?.invoke(false, "show failed: ${e.message}")
+        }
+    }
+
+    fun hideAll() {
+        dismiss()
+    }
+
+    /**
+     * 池=1 复用（1C P2）：host 的 composition/lifecycle/视图树跨呼出存活，dismiss 只摘窗口。
+     * 回调经 [activeContext] 取上下文——池化后 host 不逐呼出重建，不能闭包捕获单次
+     * showInternal 的 context 参数。
+     */
+    private fun obtainHost(): ComposeFanHost {
+        idleHost?.let { return it }
+        val ctx = activeContext ?: throw IllegalStateException("activeContext missing")
+        return ComposeFanHost(ctx, prefs).apply {
+            onAppSelected = { appInfo ->
+                Log.i(TAG, "onAppSelected: ${appInfo.packageName}")
+                val context = activeContext
+                if (context != null) {
                     if (appInfo.packageName == ALL_APPS_PKG) {
                         launchStrategy.launchAllApps(context)
                     } else {
@@ -144,9 +181,12 @@ class FanMenuController(
                     }
                     hideAll()
                 }
+            }
 
-                onQuickAppSelected = { appInfo ->
-                    Log.i(TAG, "onQuickAppSelected: ${appInfo.packageName}")
+            onQuickAppSelected = { appInfo ->
+                Log.i(TAG, "onQuickAppSelected: ${appInfo.packageName}")
+                val context = activeContext
+                if (context != null) {
                     if (appInfo.actionHandle != null) {
                         appInfo.actionHandle.invoke(context)
                         dismiss()
@@ -155,30 +195,24 @@ class FanMenuController(
                         launchStrategy.launchFreeform(context, appInfo.packageName)
                     }
                 }
-
-                onDismiss = {
-                    Log.d(TAG, "fanMenu onDismiss callback")
-                    isShowing = false
-                    host = null
-                }
             }
 
-            host = fanHost
-            fanHost.show(anchorX, anchorY, apps, allQuick, isLandscape)
-            touchHeartbeat()
-            onMechanismResult?.invoke(true, "show ok")
-            Log.i(TAG, "show: compose fan overlay added, ${allQuick.size} quick actions, landscape=$isLandscape")
-
-        } catch (e: Throwable) {
-            Log.e(TAG, "show FAILED: ${e.message}", e)
-            isShowing = false
-            host = null
-            onMechanismResult?.invoke(false, "show failed: ${e.message}")
+            onDismiss = {
+                Log.d(TAG, "fanMenu onDismiss callback")
+                isShowing = false
+                host = null
+            }
+            idleHost = this
         }
     }
 
-    fun hideAll() {
-        dismiss()
+    /** show 失败弃池：host 可能半坏，全量销毁，下次呼出重建。 */
+    private fun evictIdleHost() {
+        idleHost?.let { h ->
+            idleHost = null
+            runCatching { h.destroy() }
+                .onFailure { Log.w(TAG, "idle host destroy failed: ${it.message}") }
+        }
     }
 
     /** 触摸事件转发给扇形菜单；返回 false 表示当前无菜单。跨线程安全（自动跳主线程）。 */

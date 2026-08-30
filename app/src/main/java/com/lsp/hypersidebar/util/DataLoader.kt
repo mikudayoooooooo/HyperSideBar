@@ -113,6 +113,9 @@ object DataLoader {
                 cachedResult = suggestion
                 lastFetchTime = System.currentTimeMillis()
                 consecutiveFailures = 0
+                // label 预热（1C P3）：扇形呼出主线程逐 pkg 调 AppMetaCache.label，miss 即
+                // PM binder（首呼出最多 14 次）——后台刷新顺带灌缓存，呼出路径恒命中
+                suggestion.forEach { AppMetaCache.label(context, it) }
                 Log.i(TAG, "refreshed ${suggestion.size} suggestion apps in ${android.os.SystemClock.elapsedRealtime() - t0}ms (background)")
             } catch (e: Throwable) {
                 Log.w(TAG, "refresh failed: ${e.message}")

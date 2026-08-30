@@ -33,9 +33,16 @@ internal fun HomePage(
     status: ModuleStatus,
     modifier: Modifier = Modifier
 ) {
-    // 降级状态（1C：:ui 穿透失效自动降级时写入 remotePrefs）；revision 变化驱动实时刷新
+    // 降级/熔断状态（1C：hook 侧写入 remotePrefs）；revision 变化驱动实时刷新。
+    // 熔断按进程分键（home/ui），任一端熔断即显示；显示优先级：熔断 > 降级
     val passthroughDegraded = remember(prefs, prefsRevision) {
         runCatching { prefs.getBoolean(PrefKeys.PASSTHROUGH_DEGRADED, false) }.getOrDefault(false)
+    }
+    val circuitOpen = remember(prefs, prefsRevision) {
+        runCatching {
+            prefs.getBoolean(PrefKeys.CIRCUIT_OPEN_HOME, false) ||
+                prefs.getBoolean(PrefKeys.CIRCUIT_OPEN_UI, false)
+        }.getOrDefault(false)
     }
     LazyColumn(
         modifier = modifier
@@ -53,7 +60,22 @@ internal fun HomePage(
             }
         }
 
-        if (passthroughDegraded) {
+        if (circuitOpen) {
+            item { SmallTitle(text = stringResource(R.string.module_section)) }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    CircuitStatusComponent(
+                        onRetry = {
+                            // 手动重试：写时间戳，hook 侧比较 resetAt > 本端熔断时刻即解除
+                            //（launcher=下次边缘呼出，:ui=2s 看门狗内）
+                            prefs.edit()
+                                .putLong(PrefKeys.CIRCUIT_RESET_AT, System.currentTimeMillis())
+                                .commit()
+                        }
+                    )
+                }
+            }
+        } else if (passthroughDegraded) {
             item { SmallTitle(text = stringResource(R.string.module_section)) }
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
@@ -86,6 +108,24 @@ private fun DegradedStatusComponent() {
                     .background(MiuixTheme.colorScheme.error)
             )
         }
+    )
+}
+
+@Composable
+private fun CircuitStatusComponent(onRetry: () -> Unit) {
+    BasicComponent(
+        title = stringResource(R.string.circuit_open),
+        summary = stringResource(R.string.circuit_open_summary),
+        startAction = {
+            Box(
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(MiuixTheme.colorScheme.error)
+            )
+        },
+        onClick = onRetry
     )
 }
 

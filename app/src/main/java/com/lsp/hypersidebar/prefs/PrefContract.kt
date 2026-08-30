@@ -33,6 +33,13 @@ object PrefKeys {
 
     /** 穿透失效自动降级状态（1C：:ui 写入，设置页读出标注；非用户设置） */
     const val PASSTHROUGH_DEGRADED = "passthroughDegraded"
+
+    /** 熔断状态（1C 轮二）：按进程分键——一端重启只清自己的键，另一端状态不被误清 */
+    const val CIRCUIT_OPEN_HOME = "circuitOpen.home"
+    const val CIRCUIT_OPEN_UI = "circuitOpen.ui"
+
+    /** 设置页"手动重试"时间戳：hook 侧比较 resetAt > 本端熔断时刻即解除 */
+    const val CIRCUIT_RESET_AT = "circuitResetAt"
 }
 
 // channelMode（EDGE/HANDLE）已废弃（1B：EDGE 为唯一产品形态，HANDLE 遗留调试通道代码

@@ -18,11 +18,13 @@ private const val TAG = "FanLaunch"
  *
  * :ui 存活探测（1C，PRD §9.4 ":ui 进程不存活 → toast"）：全部转发走有序广播，
  * 初始 code=0，:ui 中继接收器收到即置 1；最终回调读 0 = :ui 已死或接收器未注册
- * （典型场景：用户关掉系统侧边栏开关）→ toast 提示。"尝试拉起"未实现——
+ * （典型场景：用户关掉系统侧边栏开关）→ toast 提示 + [onRelayResult] 上报
+ * （熔断器数据源，连续 5 次失联 = 机制性失败）。"尝试拉起"未实现——
  * :ui 内无可验证的启动入口 service，凭空发明违反纪律，PRD 场景由提示替代。
  */
 class BroadcastLaunchStrategy(
-    private val launchAction: String
+    private val launchAction: String,
+    private val onRelayResult: ((alive: Boolean, what: String) -> Unit)? = null
 ) : FanLaunchStrategy {
 
     override fun launchFreeform(context: Context, pkg: String) {
@@ -60,9 +62,11 @@ class BroadcastLaunchStrategy(
                 override fun onReceive(c: Context, result: Intent?) {
                     if (resultCode != 0) {
                         Log.i(TAG, "relay alive: $what delivered")
+                        onRelayResult?.invoke(true, what)
                         return
                     }
                     Log.e(TAG, "relay DEAD: $what not delivered (result code untouched)")
+                    onRelayResult?.invoke(false, what)
                     runCatching {
                         Toast.makeText(
                             c,

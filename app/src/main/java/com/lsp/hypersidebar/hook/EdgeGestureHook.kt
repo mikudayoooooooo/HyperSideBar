@@ -41,8 +41,19 @@ class EdgeGestureHook(
         const val CALLBACK_CLASS = "com.miui.home.recents.GestureStubView\$3"
     }
 
+    private val breaker = CircuitBreaker(PrefKeys.CIRCUIT_OPEN_HOME, remotePrefs)
+
     private val fanController: FanMenuController by lazy {
-        FanMenuController(remotePrefs, BroadcastLaunchStrategy(ACTION_FAN_LAUNCH))
+        FanMenuController(
+            remotePrefs,
+            BroadcastLaunchStrategy(ACTION_FAN_LAUNCH) { alive, what ->
+                // :ui 执行端失联 = 机制性失败（熔断数据源）；送达 = 连续失败清零
+                if (alive) breaker.recordSuccess() else breaker.recordFailure("relay dead: $what")
+            },
+            onMechanismResult = { ok, reason ->
+                if (ok) breaker.recordSuccess() else breaker.recordFailure(reason)
+            }
+        )
     }
 
     // ===== 单指手势状态（DOWN 重置） =====
@@ -62,6 +73,14 @@ class EdgeGestureHook(
 
     override fun init() {
         Log.i(TAG, "=== EdgeGestureHook init, pid=${android.os.Process.myPid()} ===")
+        // 熔断器：发布本进程新鲜状态（清掉上进程生命周期遗留的熔断键）+ 熔断动作
+        breaker.forceReset()
+        breaker.onTripped = { reason ->
+            toastOnMain(
+                safeAppContext(), "扇形连续失败，已熔断保护：返回手势不受影响，重启手机或在设置页重试"
+            )
+            Log.e(TAG, "breaker tripped: $reason — 后续边缘触摸全透传")
+        }
         val okTouch = runCatching { hookOnTouchEvent() }
             .onFailure { Log.e(TAG, "A FAILED hookOnTouchEvent: ${it.message}", it) }
             .getOrDefault(false)
@@ -174,6 +193,13 @@ class EdgeGestureHook(
         // 区外手势整条透传（修 1A 缺陷：此前仅 DOWN 过滤，其后 MOVE 仍会进状态机确认/停顿，
         // 触发区外也能呼出——实测 y 超 2/3 界多处 inZone=false 仍 STALL）
         if (!gestureInZone && ev.actionMasked != MotionEvent.ACTION_DOWN) return false
+
+        // 熔断门（1C 轮二）：放在 fan 转发之后——进行中的手势优雅收尾，新手势不再拦截。
+        // 手动重试检查只在熔断态执行（remotePrefs 读走 binder 缓存，DOWN 高频路径不碰）
+        if (breaker.open) {
+            if (ev.actionMasked == MotionEvent.ACTION_DOWN) breaker.maybeManualReset()
+            if (breaker.open) return false
+        }
 
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {

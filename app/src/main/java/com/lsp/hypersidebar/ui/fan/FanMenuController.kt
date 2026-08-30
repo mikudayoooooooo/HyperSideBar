@@ -24,10 +24,13 @@ private const val FAN_IDLE_TIMEOUT_MS = 10_000L
 /**
  * 扇形菜单编排器：数据组装 + ComposeFanHost 装配 + 选中回调接线。
  * 进程无关（securitycenter:ui 与 com.miui.home 共用），执行动作经 [FanLaunchStrategy] 差异化。
+ * [onMechanismResult] = 机制性结果上报（熔断器数据源，1C 轮二）：show 成功/失败各报一次，
+ * 仅此两类——单应用启动失败属数据面，不在此报。
  */
 class FanMenuController(
     private val prefs: SharedPreferences,
-    private val launchStrategy: FanLaunchStrategy
+    private val launchStrategy: FanLaunchStrategy,
+    private val onMechanismResult: ((success: Boolean, reason: String) -> Unit)? = null
 ) {
 
     @Volatile
@@ -163,12 +166,14 @@ class FanMenuController(
             host = fanHost
             fanHost.show(anchorX, anchorY, apps, allQuick, isLandscape)
             touchHeartbeat()
+            onMechanismResult?.invoke(true, "show ok")
             Log.i(TAG, "show: compose fan overlay added, ${allQuick.size} quick actions, landscape=$isLandscape")
 
         } catch (e: Throwable) {
             Log.e(TAG, "show FAILED: ${e.message}", e)
             isShowing = false
             host = null
+            onMechanismResult?.invoke(false, "show failed: ${e.message}")
         }
     }
 

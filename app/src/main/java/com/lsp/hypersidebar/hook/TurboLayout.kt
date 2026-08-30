@@ -30,6 +30,8 @@ private const val LANDSCAPE_ANCHOR_Y_DP = 56f
 /** S1 自动降级门（1C，PRD §9.4）：60s 窗口内穿透失效 ≥3 次 → 恢复原生侧边栏。 */
 private const val LEAK_DEGRADE_THRESHOLD = 3
 
+private const val DEFAULT_DEGRADE_TOAST = "扇形侧边栏：边缘穿透持续失效，已恢复原生小白条（重启后恢复扇形）"
+
 /**
  * :ui 进程宿主（securitycenter:ui）。产品形态（PRD §7.1，唯一；channelMode 已废弃删除）：
  *
@@ -65,8 +67,18 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     @Volatile private var lastDrawableLogTime = 0L
 
     private val fanController: FanMenuController by lazy {
-        FanMenuController(remotePrefs, DirectLaunchStrategy())
+        FanMenuController(
+            remotePrefs,
+            DirectLaunchStrategy(),
+            onMechanismResult = { ok, reason ->
+                // fan 窗口装配失败 = 机制性失败（熔断数据源）；成功 = 连续失败清零
+                if (ok) breaker.recordSuccess() else breaker.recordFailure(reason)
+            }
+        )
     }
+
+    /** 熔断器（1C 轮二）：本进程机制性失败连续 5 次 → 恢复原生侧边栏（走降级动作） */
+    private val breaker = CircuitBreaker(PrefKeys.CIRCUIT_OPEN_UI, remotePrefs)
 
     fun hookOnTouch() {
         val hooked = MethodFinder.fromClass(sideBar)
@@ -80,13 +92,15 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
                 // 竖屏=吞掉漏到小白条的事件（穿透失效信号，防唤起原生侧边栏/
                 // 幽灵入口）；横屏=B 路线状态机接管（隐藏条即触发器）。
-                // 已降级（1C）：条已恢复原生，事件放行原生流（不吞不计数）
+                // 已降级（1C）：竖屏事件放行原生流（不吞不计数）；
+                // 已熔断（1C 轮二）：两侧全放行，本进程停止一切侵入
                 if (!isLandscape(view)) {
-                    if (passthroughDegraded) return@createBeforeHook
+                    if (passthroughDegraded || breaker.open) return@createBeforeHook
                     if (event.actionMasked == MotionEvent.ACTION_DOWN) onCoverTouchLeak()
                     it.result = true
                     return@createBeforeHook
                 }
+                if (breaker.open) return@createBeforeHook
                 handleStripGesture(view, event)
                 it.result = true
             }
@@ -266,6 +280,14 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
     override fun init() {
         Log.i(TAG, "=== TurboLayout init ===")
+        // 熔断器：发布本进程新鲜状态（清掉上进程生命周期遗留的熔断键）+ 熔断动作
+        breaker.forceReset()
+        breaker.onTripped = { reason ->
+            enterDegradedMode(
+                "熔断：$reason",
+                "扇形连续失败，已熔断保护：恢复原生小白条，重启手机或在设置页重试"
+            )
+        }
         // 各 hook 独立容错：任一失败不中断其余（实测 hookDockLayoutVisibility 的
         // ClassNotFoundException 曾中断 init，导致排在其后的 hook 从未安装）
         listOf(
@@ -444,7 +466,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         }
     }
 
-    private fun enterDegradedMode(reason: String) {
+    private fun enterDegradedMode(reason: String, toast: String = DEFAULT_DEGRADE_TOAST) {
         if (passthroughDegraded) return
         passthroughDegraded = true
         Log.e(TAG, "PASSTHROUGH DEGRADED ($reason)：恢复原生侧边栏；恢复扇形=重启手机或重启模块")
@@ -455,17 +477,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         runCatching {
             remotePrefs.edit().putBoolean(PrefKeys.PASSTHROUGH_DEGRADED, true).commit()
         }.onFailure { Log.w(TAG, "degrade status write failed: ${it.message}") }
-        toastOnMain("扇形侧边栏：边缘穿透持续失效，已恢复原生小白条（重启后恢复扇形）")
-    }
-
-    private fun toastOnMain(msg: String) {
-        mainHandler.post {
-            runCatching {
-                EzXposed.appContext?.let { ctx ->
-                    android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
-                }
-            }.onFailure { Log.w(TAG, "toast failed: ${it.message}") }
-        }
+        toastOnMain(safeAppContext(), toast)
     }
 
     private fun purgeCoverRefs() {
@@ -507,6 +519,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private fun startCoverWatchdog() {
         mainHandler.postDelayed(object : Runnable {
             override fun run() {
+                // 手动重试检查（2s 粒度）：设置页写 circuitResetAt > 本端熔断时刻即解除
+                if (breaker.open) breaker.maybeManualReset()
                 purgeCoverRefs()
                 if (!coverRefs.isEmpty()) {
                     coverRefs.forEach { ref -> ref.get()?.let { applyCoverFlag(it) } }

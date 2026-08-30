@@ -9,6 +9,7 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import com.lsp.hypersidebar.ui.fan.FanMenuController
+import io.github.kyuubiran.ezxhelper.core.ClassLoaderProvider
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.EzXposed
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createBeforeHook
@@ -61,12 +62,14 @@ class EdgeGestureHook(
 
     override fun init() {
         Log.i(TAG, "=== EdgeGestureHook init, pid=${android.os.Process.myPid()} ===")
-        var okTouch = false
-        runCatching { hookOnTouchEvent(); okTouch = true }
+        val okTouch = runCatching { hookOnTouchEvent() }
             .onFailure { Log.e(TAG, "A FAILED hookOnTouchEvent: ${it.message}", it) }
-        var okStop = false
-        runCatching { hookOnSwipeStop(); okStop = true }
+            .getOrDefault(false)
+        val okStop = runCatching { hookOnSwipeStop() }
             .onFailure { Log.e(TAG, "C FAILED hookOnSwipeStop: ${it.message}", it) }
+            .getOrDefault(false)
+        // okStop=真实安装结果（含兜底扫描成功）：此前"未抛异常"就算 true，曾把拦截层
+        // 静默失效伪装成 installed（1C 轮一实测教训）
         Log.i(TAG, "hooks installed: onTouchEvent=$okTouch onSwipeStop=$okStop")
         // 预热推荐列表缓存：launcher 进程 init 时 EzXposed.appContext 可能尚未就绪
         // （实测 getAppContext 直接抛 NPE 而非返回 null，首轮 prewarm skipped 是
@@ -77,18 +80,21 @@ class EdgeGestureHook(
     }
 
     /** 记录层：触摸流入口，BeforeHook。返回 true = 消费（拦截原生处理）。 */
-    private fun hookOnTouchEvent() {
-        MethodFinder.fromClass(STUB_CLASS)
+    private fun hookOnTouchEvent(): Boolean {
+        val method = MethodFinder.fromClass(STUB_CLASS)
             .filterByName("onTouchEvent")
             .filterByParamTypes(MotionEvent::class.java)
             .filterByReturnType(Boolean::class.java)
-            .firstOrNull()
-            ?.createBeforeHook {
-                val ev = it.args[0] as? MotionEvent ?: return@createBeforeHook
-                val stub = it.thisObject as? View
-                if (handleTouch(ev, stub)) it.result = true
-            }
-            ?: Log.e(TAG, "onTouchEvent NOT FOUND on $STUB_CLASS")
+            .firstOrNull() ?: run {
+            Log.e(TAG, "onTouchEvent NOT FOUND on $STUB_CLASS")
+            return false
+        }
+        method.createBeforeHook {
+            val ev = it.args[0] as? MotionEvent ?: return@createBeforeHook
+            val stub = it.thisObject as? View
+            if (handleTouch(ev, stub)) it.result = true
+        }
+        return true
     }
 
     /**
@@ -96,23 +102,33 @@ class EdgeGestureHook(
      * 主路 = 实测混淆名 `$3` 直连；类名漂移（匿名类数字索引随混淆轮次变动）时按
      * 接口契约扫描兜底（1C 新写，0.x 仅识别未实现）：遍历 GestureStubView 全部
      * 内部类，命中"声明 onSwipeStop 且首参 Boolean"者即拦截回调。
+     *
+     * 类解析必须走宿主 classloader（EzXHelper ClassLoaderProvider，MethodFinder.fromClass
+     * 内部同源）：裸 Class.forName 用的是模块自身 classloader，看不见宿主类——1C 轮一
+     * 实测踩坑：直连误判 NOT FOUND + 扫描报 GestureStubView missing，拦截层静默失效
+     * （呼出扇形后返回事件不被消费，原生返回直通执行）。
      */
-    private fun hookOnSwipeStop() {
-        val direct = runCatching { hookSwipeStopCallback(Class.forName(CALLBACK_CLASS), "direct") }
-            .getOrDefault(false)
-        if (direct) return
-        Log.w(TAG, "onSwipeStop NOT FOUND on $CALLBACK_CLASS, scanning GestureStubView inner classes")
-        val stub = runCatching { Class.forName(STUB_CLASS) }.getOrNull() ?: run {
-            Log.e(TAG, "scan fallback: $STUB_CLASS missing")
-            return
+    private fun hookOnSwipeStop(): Boolean {
+        val cl = ClassLoaderProvider.safeClassLoader
+        val stubClass = runCatching { Class.forName(STUB_CLASS, false, cl) }.getOrNull() ?: run {
+            Log.e(TAG, "onSwipeStop: cannot resolve $STUB_CLASS via host classloader")
+            return false
         }
+        val direct = runCatching { hookSwipeStopCallback(Class.forName(CALLBACK_CLASS, false, cl), "direct") }
+            .getOrDefault(false)
+        if (direct) return true
+        Log.w(TAG, "onSwipeStop NOT FOUND on $CALLBACK_CLASS, scanning GestureStubView inner classes")
         var hooked = 0
-        for (inner in stub.declaredClasses) {
+        for (inner in stubClass.declaredClasses) {
             val ok = runCatching { hookSwipeStopCallback(inner, "scan") }.getOrDefault(false)
             if (ok) hooked++
         }
-        if (hooked == 0) Log.e(TAG, "scan fallback: no onSwipeStop(Boolean,...) in any inner class")
-        else Log.i(TAG, "scan fallback: $hooked onSwipeStop callback(s) hooked")
+        if (hooked == 0) {
+            Log.e(TAG, "scan fallback: no onSwipeStop(Boolean,...) in any inner class")
+            return false
+        }
+        Log.i(TAG, "scan fallback: $hooked onSwipeStop callback(s) hooked")
+        return true
     }
 
     /** @return true = 该类声明 onSwipeStop(Bool First, ...) 且已挂 before hook */

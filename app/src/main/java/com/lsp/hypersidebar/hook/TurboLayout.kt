@@ -30,23 +30,23 @@ private const val TAG = "TurboLayout"
 private const val LANDSCAPE_ANCHOR_Y_DP = 56f
 
 /**
- * 小白条通道（securitycenter:ui）：hook 侧边栏触摸（com.miui.dock.sidebar.f.onTouch），
- * 内滑手势触发 FanMenuController 弹出扇形菜单；执行动作用 DirectLaunchStrategy。
+ * :ui 进程宿主（securitycenter:ui）。产品形态（PRD §7.1，channelMode=EDGE 为唯一产品值）：
  *
- * EDGE 模式（channelMode pref）：
+ * - B 路线横屏触发（1B，PRD §7.1/§7.3.1，反编译取证 2026-08-30）：横屏隐藏条本身即触发器
+ *   （HyperCeiler 同款思路），f.onTouch 走锚点圆状态机（EdgeGestureHook 同款：内滑确认
+ *   40px/60°、15px 锚点圆 + dwell 停顿、滑回重置）→ 停顿呼出 fan。触摸链路 cover.onTouch →
+ *   j.d0() → bar.dispatchTouchEvent → f.onTouch 无方向分支；系统侧 setEnabled 仅在拖动动画/
+ *   游戏 turbo 面板/系统隐藏侧边栏时禁用，空闲态恒 enabled。
+ * - 触摸穿透（仅竖屏）：flag 施加在窗口生命周期边界——addView 添加期注入（窗口生而
+ *   NOT_TOUCHABLE）+ updateViewLayout 更新期重涂（宿主任何重置即时失效）；applyCoverFlag +
+ *   2s 看门狗降级为兜底。所有创建/修改 cover 窗口 lp 的路径必经 hook，竞态窗从"最多 2s"
+ *   收敛为不存在。f.onTouch 吞事件分支保留作纵深防御 + 失效计数（S1 数据源）。
  * - 视觉隐藏（三层封口）：① `c.draw(Canvas)` before-skip（可见像素唯一出口，C7680c.java:253）；
  *   ② `ImageView.onDraw` 身份过滤置空；③ `View.draw` 身份过滤置空——覆盖熄屏重建/主题切换
  *   换 drawable 类等一切绘制路径。M1/N1 提示一并清理。
- * - 触摸穿透（机制升级，迭代一 v2 §4，仅竖屏）：flag 施加挪到窗口生命周期边界——addView 添加期
- *   注入（窗口生而 NOT_TOUCHABLE）+ updateViewLayout 更新期重涂（宿主任何重置即时失效）；
- *   事后 applyCoverFlag + 2s 看门狗降级为兜底。所有创建/修改 cover 窗口 lp 的路径必经
- *   hook，竞态窗从"最多 2s"收敛为不存在。f.onTouch 吞事件分支保留作纵深防御 + 失效计数
- *   （S1 数据源）。系统侧边栏开关保持开启 → :ui 常驻 → 活动面板与 B 链路正常。
- * - B 路线横屏（1B，PRD §7.1/§7.3.1，反编译取证 2026-08-30）：横屏不加穿透 flag——隐藏条
- *   本身即触发器（HyperCeiler 同款思路），f.onTouch 走锚点圆状态机（EdgeGestureHook 同款：
- *   内滑确认 40px/60°、15px 锚点圆 + dwell 停顿、滑回重置）→ 停顿呼出 fan。触摸链路
- *   cover.onTouch → j.d0() → bar.dispatchTouchEvent → f.onTouch 无方向分支；系统侧
- *   setEnabled 仅在拖动动画/游戏 turbo 面板/系统隐藏侧边栏时禁用，空闲态恒 enabled。
+ * 系统侧边栏开关保持开启 → :ui 常驻 → 活动面板与 B 链路正常。
+ * 非 EDGE 值（HANDLE）为遗留调试通道：条可见可摸、f.onTouch 直呼 fan，产品不暴露。
+ * 执行动作用 DirectLaunchStrategy（本进程直执行）。
  */
 class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
@@ -94,6 +94,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                     it.result = true
                     return@createBeforeHook
                 }
+
+                // 非 EDGE（遗留调试通道）：条可见可摸，一滑即出 fan（无停顿状态机）
 
                 if (fanController.isShowing) {
                     fanController.dispatchTouchEvent(event)
@@ -362,7 +364,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             runCatching { step() }.onFailure { Log.e(TAG, "init step failed: ${it.message}", it) }
         }
         Log.i(TAG, "init done: ${getStats()}")
-        // 预热推荐列表缓存（:ui 侧 HANDLE 通道共用 DataLoader；反射 ~1s 不进呼出关键路径）
+        // 预热推荐列表缓存（:ui 侧 B 路线横屏呼出共用 DataLoader；反射 ~1s 不进呼出关键路径）
         runCatching {
             EzXposed.appContext?.let { com.lsp.hypersidebar.util.DataLoader.prewarm(it) }
         }
@@ -376,7 +378,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
      * 小白条像素出口封口（2026-08-25 反编译取证定稿）：
      * 条的可见像素唯一来源是其 drawable 的 draw(Canvas)（运行时类 com.miui.dock.sidebar.c，
      * 画 Path 处 C7680c.java:253）。before 置空后上层无论设什么 alpha/visibility/Folme，
-     * 屏幕输出恒为空白。HANDLE 模式不拦截（条即触发器）；类名漂移时安全降级为可见。
+     * 屏幕输出恒为空白。非 EDGE（遗留调试通道）不拦截；类名漂移时安全降级为可见。
      */
     private fun hookHideWhiteBar() {
         runCatching {
@@ -413,7 +415,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
      * 其 layoutParams 即 WindowManager.LayoutParams（轮五退役的旧机制败因是子 view 的 lp
      * 不是）。EDGE 模式对其窗口加 FLAG_NOT_TOUCHABLE（仅竖屏，横屏 B 路线条需收事件）：
      * 原小白条区域事件穿透到下层手势桩/应用（PRD 决策 6），f.onTouch 吞事件分支降级为纵深防御。
-     * 看门狗兜底通道切换（EDGE↔HANDLE）、系统重置与旋转后残留收敛；HANDLE 模式清除 flag 保原生可用。
+     * 看门狗兜底通道切换、系统重置与旋转后残留收敛；非 EDGE 清除 flag 保原生可用。
      */
     private fun hookCoverPassThrough() {
         runCatching {

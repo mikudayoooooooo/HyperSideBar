@@ -30,7 +30,7 @@ class XposedInit : XposedModule() {
         val procName = currentProcessName()
         when {
             param.packageName == "com.miui.securitycenter" && procName.endsWith(":ui") -> {
-                // 小白条通道宿主 + B 链路执行端（EDGE 模式下小白条隐藏穿透但进程保活）
+                // 横屏 B 路线触发端 + 竖屏小白条隐藏穿透宿主 + 执行端（fan 选中动作本进程直执行）
                 if (turboLayoutHook == null) {
                     turboLayoutHook = TurboLayout(getRemotePreferences("hyperSidebar"))
                 }
@@ -40,7 +40,7 @@ class XposedInit : XposedModule() {
                 initHooks(turboLayoutHook!!, freeformRelayHook!!)
             }
             param.packageName == "com.miui.home" && procName == "com.miui.home" -> {
-                // 边缘手势通道（channelMode=EDGE 时激活，快速滑动零干扰透传）
+                // 竖屏边缘手势通道（内滑+停顿零干扰透传；横屏触发已移交 :ui B 路线）
                 if (edgeGestureHook == null) {
                     edgeGestureHook = EdgeGestureHook(getRemotePreferences("hyperSidebar"))
                 }

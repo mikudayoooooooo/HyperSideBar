@@ -115,13 +115,13 @@ class EdgeGestureHook(
     private fun handleTouch(ev: MotionEvent, stub: View?): Boolean {
         if (remotePrefs.readChannelMode() != ChannelModes.EDGE) {
             resetGesture()
-            return false   // HANDLE 模式：零干预透传
+            return false   // 非 EDGE（遗留调试通道）：零干预透传
         }
 
         // fan 展示中：事件转发给 fan 并消费；UP/CANCEL 收起（未预选立即收起，PRD §7.1）
         if (fanController.isShowing) {
             if (!fanSeenThisGesture) {
-                // fan 在手势中途异步落地：先合成 DOWN 起始选择状态（同小白条通道）。
+                // fan 在手势中途异步落地：先合成 DOWN 起始选择状态（同 :ui 条上通道）。
                 // 仅在真正送达时才置位——showInternal 主线程阻塞期间 host==null 会静默丢事件，
                 // 实测合成 DOWN 被丢后整条手势再无 DOWN：窗口原点捕获、选中起点全部失效，
                 // 整条手势退回 94px 窗口 inset 偏差（g#6 实锤）

@@ -43,7 +43,7 @@ data class FanGeometry(
     val isLandscape: Boolean
 )
 
-/** 屏幕安全边距（原 computeMaxRadius 的 48dp×1.5）。 */
+/** 屏幕安全边距（PRD §9.5：竖屏 72dp；横屏独立取值见下）。 */
 private const val SCREEN_MARGIN_DP = 72f
 
 /** 横屏边距：短轴空间紧张（1080px 内 72dp 边距+扇形投影+快捷栏超出全高），派生值按方向缩至 24dp。 */

@@ -42,11 +42,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.graphics.drawable.toBitmap
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.theme.HyperSidebarTheme
 import com.lsp.hypersidebar.theme.ThemeModes
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
+import com.lsp.hypersidebar.util.AppIconCache
 import com.lsp.hypersidebar.util.AppMetaCache
 import com.lsp.hypersidebar.util.DataLoader
 import io.github.libxposed.service.XposedService
@@ -161,8 +161,14 @@ private fun letterFor(label: String): String {
 private data class LetterGroup(val letter: String, val items: List<Pair<String, String>>) // pkg to label
 
 private sealed class GridEntry {
-    data class Header(val text: String) : GridEntry()
-    data class App(val pkg: String, val label: String) : GridEntry()
+    abstract val key: String
+    data class Header(val text: String) : GridEntry() {
+        override val key: String = "h:$text"
+    }
+    /** section：同 pkg 可能在"已添加"与字母组重复出现，key 带分区前缀防撞（LazyGrid key 必须唯一） */
+    data class App(val pkg: String, val label: String, val section: String) : GridEntry() {
+        override val key: String = "$section:$pkg"
+    }
 }
 
 @Composable
@@ -172,19 +178,9 @@ private fun AllAppsScreen(
     onLaunch: (String) -> Unit
 ) {
     val context = LocalContext.current
-    var fixedApps by remember { mutableStateOf<List<String>>(emptyList()) }
     var allPkgs by remember { mutableStateOf<List<String>>(emptyList()) }
-    var labels by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
-
-    // 固定应用：prefs 即读即显（StringSet 无序，按 label 排序保证显示确定）
-    LaunchedEffect(prefs) {
-        fixedApps = runCatching {
-            prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty()
-                .map { it to AppMetaCache.label(context, it) }
-                .sortedBy { it.second.lowercase() }
-                .map { it.first }
-        }.getOrDefault(emptyList())
-    }
+    var entries by remember { mutableStateOf<List<GridEntry>>(emptyList()) }
+    var hasFixedApps by remember { mutableStateOf(false) }
 
     // 全部应用：优先用 ：ui 经 intent 传入的列表（首帧可显）；extras 缺失（异常路径）
     // 才退回进程内 DataLoader——模块进程被 hidden API blocklist 拒绝，大概率空结果
@@ -202,34 +198,29 @@ private fun AllAppsScreen(
         }
     }
 
-    // label 批量回填：IO 线程走 AppMetaCache（miss 才有 PM binder，重复触发近乎免费），
-    // 主线程只做 state 提交
-    LaunchedEffect(allPkgs, fixedApps) {
-        val wanted = (allPkgs + fixedApps).distinct()
-        if (wanted.isEmpty()) return@LaunchedEffect
-        val map = withContext(Dispatchers.IO) {
-            wanted.associateWith { AppMetaCache.label(context, it) }
+    // 数据组装单次 IO 化（1C P1）：label 的 PM binder 与 buildGroups 的逐条 ICU 转写
+    // 全部离开主线程（此前 label 回填帧在主线程整段分组，219 项转写卡一帧），
+    // 主线程只收最终 entries
+    LaunchedEffect(prefs, allPkgs) {
+        val pkgs = allPkgs
+        val fixed = runCatching {
+            prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty()
+        }.getOrDefault(emptySet())
+        if (pkgs.isEmpty() && fixed.isEmpty()) {
+            hasFixedApps = false
+            entries = emptyList()
+            return@LaunchedEffect
         }
-        labels = map
+        val result = withContext(Dispatchers.IO) {
+            val labels = (pkgs + fixed).distinct().associateWith { AppMetaCache.label(context, it) }
+            val fixedSorted = fixed.map { it to (labels[it] ?: it) }
+                .sortedBy { it.second.lowercase() }
+            buildEntries(pkgs, fixedSorted, labels)
+        }
+        hasFixedApps = fixed.isNotEmpty()
+        entries = result
     }
 
-    val fixedLabelled = fixedApps.map { it to (labels[it] ?: it) }
-    val groups = remember(allPkgs, labels) {
-        buildGroups(allPkgs.map { it to (labels[it] ?: it) })
-    }
-    // 网格扁平条目：header 占满整行，应用为磁贴
-    val entries = remember(fixedLabelled, groups) {
-        buildList {
-            if (fixedLabelled.isNotEmpty()) {
-                add(GridEntry.Header("已添加"))
-                fixedLabelled.forEach { add(GridEntry.App(it.first, it.second)) }
-            }
-            groups.forEach { g ->
-                add(GridEntry.Header(g.letter))
-                g.items.forEach { add(GridEntry.App(it.first, it.second)) }
-            }
-        }
-    }
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
     // 字母 → 该组 header 在网格条目中的下标
@@ -255,7 +246,7 @@ private fun AllAppsScreen(
             if (entries.isEmpty()) {
                 // 空态显式占位：避免被误读为黑屏（remote prefs 异步绑定与数据等待期间的过渡态）
                 Text(
-                    if (fixedApps.isEmpty()) "加载中…" else "暂无更多可打开应用",
+                    if (!hasFixedApps) "加载中…" else "暂无更多可打开应用",
                     fontSize = 13.sp,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     modifier = Modifier.align(Alignment.Center)
@@ -268,7 +259,8 @@ private fun AllAppsScreen(
             ) {
                 itemsIndexed(
                     entries,
-                    key = { idx, _ -> idx },
+                    // 稳定 key（此前用索引 key：列表位移全量重组、无法复用）
+                    key = { _, entry -> entry.key },
                     span = { _, entry ->
                         if (entry is GridEntry.Header) GridItemSpan(maxLineSpan) else GridItemSpan(1)
                     }
@@ -284,7 +276,9 @@ private fun AllAppsScreen(
                                 .fillMaxWidth()
                                 .padding(horizontal = 20.dp, vertical = 6.dp)
                         )
-                        is GridEntry.App -> AppTile(entry.pkg, entry.label) { onLaunch(entry.pkg) }
+                        is GridEntry.App -> AppTile(entry.pkg, entry.label, entry.section) {
+                            onLaunch(entry.pkg)
+                        }
                     }
                 }
             }
@@ -315,13 +309,17 @@ private fun AllAppsScreen(
 
 /** 抽屉磁贴：图标在上、应用名在下（PRD 参考图样式）。 */
 @Composable
-private fun AppTile(pkg: String, label: String, onClick: () -> Unit) {
+private fun AppTile(pkg: String, label: String, section: String, onClick: () -> Unit) {
     val context = LocalContext.current
-    // Drawable → Bitmap 转写同 QuickAppsBar.rememberIconBitmap（128px 足够 40dp 显示）
-    val bitmap = remember(pkg) {
-        runCatching {
-            context.packageManager.getApplicationIcon(pkg).toBitmap(width = 128, height = 128)
-        }.getOrNull()
+    // 图标异步加载（1C P1，滑动卡顿主因修复）：此前 remember(pkg) 在主线程组合期
+    // 同步做 PM binder + 128px 解码，LazyGrid 滑出即弃、回滑重拉。改为：缓存命中
+    // 同帧即显；miss 先显字母占位，IO 线程加载后提交——主线程组合路径零 binder
+    var bitmap by remember(section, pkg) { mutableStateOf(AppIconCache.peek(pkg)) }
+    LaunchedEffect(section, pkg) {
+        if (bitmap == null) {
+            val loaded = withContext(Dispatchers.IO) { AppIconCache.load(context, pkg) }
+            if (loaded != null) bitmap = loaded
+        }
     }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -337,9 +335,11 @@ private fun AppTile(pkg: String, label: String, onClick: () -> Unit) {
                 .background(MiuixTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center
         ) {
-            if (bitmap != null) {
+            // 局部捕获：delegated property 不能 smart cast
+            val bmp = bitmap
+            if (bmp != null) {
                 Image(
-                    painter = BitmapPainter(bitmap.asImageBitmap()),
+                    painter = BitmapPainter(bmp.asImageBitmap()),
                     contentDescription = label,
                     modifier = Modifier.size(40.dp)
                 )
@@ -355,6 +355,22 @@ private fun AppTile(pkg: String, label: String, onClick: () -> Unit) {
             color = MiuixTheme.colorScheme.onSurface,
             modifier = Modifier.padding(top = 4.dp)
         )
+    }
+}
+
+/** 网格扁平条目组装（IO 线程调用）：header 占满整行，应用为磁贴。 */
+private fun buildEntries(
+    allPkgs: List<String>,
+    fixed: List<Pair<String, String>>,
+    labels: Map<String, String>
+): List<GridEntry> = buildList {
+    if (fixed.isNotEmpty()) {
+        add(GridEntry.Header("已添加"))
+        fixed.forEach { add(GridEntry.App(it.first, it.second, "fixed")) }
+    }
+    buildGroups(allPkgs.map { it to (labels[it] ?: it) }).forEach { g ->
+        add(GridEntry.Header(g.letter))
+        g.items.forEach { add(GridEntry.App(it.first, it.second, "all")) }
     }
 }
 

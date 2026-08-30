@@ -16,6 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.IntSize
+import androidx.core.view.OneShotPreDrawListener
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -76,33 +77,16 @@ class ComposeFanHost(
         windowManager = wm
 
         val density = context.resources.displayMetrics.density
-        val screenSize = IntSize(
-            context.resources.displayMetrics.widthPixels,
-            context.resources.displayMetrics.heightPixels
-        )
         val config = buildFanConfig()
-        val anchorOffset = Offset(anchorX, anchorY)
 
-        val geometry = computeFanGeometry(
-            anchorOffset, screenSize, apps, quickApps, config, density, isLandscape
-        )
-        Log.i(
-            TAG,
-            "geometry: anchor=(${geometry.anchor.x.toInt()},${geometry.anchor.y.toInt()}) " +
-                "outer=${geometry.outerRadius.toInt()} inner=${geometry.innerRadius.toInt()} " +
-                "span=[${geometry.startAngle.toInt()},${geometry.endAngle.toInt()}] " +
-                "icon=${geometry.iconSize} quickBar=(${geometry.quickBarX.toInt()},${geometry.quickBarY.toInt()})"
-        )
+        // origin-before-geometry（1B）：几何延到首帧绘制前计算（见下方 OneShotPreDrawListener）。
+        // 悬浮窗会被系统 inset 让出状态栏（launcher 竖屏实测 origin=(0,94) 高 2262≠屏幕 2400），
+        // 窗口真实原点/尺寸只有布局后才可知——此前锚点用 raw 屏幕坐标直接当本地坐标画，
+        // 扇形圆心恒比触摸点低一个状态栏（94px）；绘制/命中/空间估算三者必须同处窗口
+        // 本地坐标系，锚点须先减 origin 再进几何层
+        val geometryState = mutableStateOf<FanGeometry?>(null)
 
         val touchState = mutableStateOf(FanTouchState(0f, 0f, 3, -1))
-        val activeZonePx = geometry.activeZonePx
-        // 行为规则 4：实际死区 = max(deadZone×density, innerRadius×0.08)，上限 60px
-        val deadZonePx = maxOf(config.deadZoneDp * density, geometry.innerRadius * 0.08f).coerceAtMost(60f)
-        val innerCancelPx = ((geometry.innerRadius * 0.85f - geometry.iconSize * density * 0.5f) * 0.75f)
-        val outerCancelPx = ((geometry.outerRadius + geometry.iconSize * density * 0.5f) * 1.25f)
-        // 选区计算必须用钳制后的圆心（几何层可能平移 anchorY 保屏内），否则触摸映射错位
-        val ax = geometry.anchor.x
-        val ay = geometry.anchor.y
 
         val lcOwner = FanLifecycleOwner()
         this.lifecycleOwner = lcOwner
@@ -115,14 +99,18 @@ class ComposeFanHost(
             setContent {
                 FanMenuWithTheme {
                     val themeColors = extractFanThemeColors()
-                    FanMenuCompose(
-                        geometry = geometry,
-                        touchState = touchState,
-                        colors = themeColors,
-                        onAppSelected = { app -> onAppSelected?.invoke(app) },
-                        onQuickAppSelected = { app -> onQuickAppSelected?.invoke(app) },
-                        onDismiss = { onDismiss?.invoke() }
-                    )
+                    // 几何未就绪（首帧布局前）不渲染任何内容——无错位闪烁；
+                    // 状态就绪后重组出现扇形（晚一帧，~16ms 不可感知）
+                    geometryState.value?.let { g ->
+                        FanMenuCompose(
+                            geometry = g,
+                            touchState = touchState,
+                            colors = themeColors,
+                            onAppSelected = { app -> onAppSelected?.invoke(app) },
+                            onQuickAppSelected = { app -> onQuickAppSelected?.invoke(app) },
+                            onDismiss = { onDismiss?.invoke() }
+                        )
+                    }
                 }
             }
         }
@@ -146,6 +134,18 @@ class ComposeFanHost(
                     originValid = true
                     Log.i(TAG, "fan origin=(${viewOrigin[0]},${viewOrigin[1]}) size=(${width},${height})")
                 }
+                // 几何未就绪（首帧布局前的 ~1 帧）：消费事件不解析——屏上无渲染，无图标
+                // 可命中；事件归属本手势，漏给下层应用会成幽灵触摸
+                val geometry = geometryState.value ?: return true
+                val density = context.resources.displayMetrics.density
+                // 行为规则 4：实际死区 = max(deadZone×density, innerRadius×0.08)，上限 60px；
+                // 圆心 = 锚点（几何层不平移，PRD §9.5），选区计算直接用 geometry.anchor
+                // （与渲染同一坐标源）
+                val deadZonePx = maxOf(config.deadZoneDp * density, geometry.innerRadius * 0.08f).coerceAtMost(60f)
+                val innerCancelPx = ((geometry.innerRadius * 0.85f - geometry.iconSize * density * 0.5f) * 0.75f)
+                val outerCancelPx = ((geometry.outerRadius + geometry.iconSize * density * 0.5f) * 1.25f)
+                val ax = geometry.anchor.x
+                val ay = geometry.anchor.y
                 val x = rawX - viewOrigin[0]
                 val y = rawY - viewOrigin[1]
                 val dx = x - ax
@@ -272,10 +272,26 @@ class ComposeFanHost(
 
         try {
             wm.addView(wrapper, params)
-            wrapper.post {
+            // 首帧绘制前（布局已完成，原点/尺寸保证有效）：锚点转窗口本地坐标后算几何，
+            // 并用窗口真实尺寸（被 inset 后的高宽）做空间估算。OneShot 保证只算一次
+            OneShotPreDrawListener.add(wrapper) {
                 val loc = IntArray(2)
                 runCatching { wrapper.getLocationOnScreen(loc) }
-                Log.i(TAG, "fan window: origin=(${loc[0]},${loc[1]}) size=(${wrapper.width},${wrapper.height}) anchor=(${ax.toInt()},${ay.toInt()})")
+                val g = computeFanGeometry(
+                    Offset(anchorX - loc[0], anchorY - loc[1]),
+                    IntSize(wrapper.width, wrapper.height),
+                    apps, quickApps, config, density, isLandscape
+                )
+                geometryState.value = g
+                Log.i(
+                    TAG,
+                    "geometry: origin=(${loc[0]},${loc[1]}) winSize=(${wrapper.width},${wrapper.height}) " +
+                        "rawAnchor=(${anchorX.toInt()},${anchorY.toInt()}) anchor=(${g.anchor.x.toInt()},${g.anchor.y.toInt()}) " +
+                        "outer=${g.outerRadius.toInt()} inner=${g.innerRadius.toInt()} " +
+                        "span=[${g.startAngle.toInt()},${g.endAngle.toInt()}] icon=${g.iconSize} " +
+                        "quickBar=(${g.quickBarX.toInt()},${g.quickBarY.toInt()})"
+                )
+                true
             }
             Log.i(TAG, "Compose fan host added, ${apps.size} apps, ${quickApps.size} quick")
         } catch (e: Throwable) {

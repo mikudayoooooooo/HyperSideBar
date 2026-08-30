@@ -34,6 +34,12 @@ object DataLoader {
     @Volatile private var backstopStarted = false
     @Volatile private var prewarmed = false
 
+    // 连续失败计数（1C，PRD §9.4"推荐数据获取失败→toast"）：数据源是系统 API，
+    // 连续失败通常=ROM 更新后反射签名失效（模块与该 ROM 根本不兼容的信号）——
+    // 达 5 次且缓存仍为空时 toast 一次（进程生命周期内仅此一次，不重复打扰）
+    @Volatile private var consecutiveFailures = 0
+    @Volatile private var failureToastShown = false
+
     private val executor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
         Thread(r, "FanDataLoader").apply { isDaemon = true }
     }
@@ -106,31 +112,42 @@ object DataLoader {
                 val suggestion = loadSuggestionApps(context)
                 cachedResult = suggestion
                 lastFetchTime = System.currentTimeMillis()
+                consecutiveFailures = 0
                 Log.i(TAG, "refreshed ${suggestion.size} suggestion apps in ${android.os.SystemClock.elapsedRealtime() - t0}ms (background)")
             } catch (e: Throwable) {
                 Log.w(TAG, "refresh failed: ${e.message}")
+                consecutiveFailures++
+                if (!failureToastShown && cachedResult == null && consecutiveFailures >= 5) {
+                    failureToastShown = true
+                    mainHandler.post {
+                        runCatching {
+                            android.widget.Toast.makeText(
+                                context,
+                                "扇形侧边栏：推荐数据获取失败，ROM 可能不兼容",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }
             } finally {
                 refreshing = false
             }
         }
     }
 
+    /** 反射失败直接抛（1C：失败计数/兜底 toast 需要区分"拉取失败"与"合法空列表"）。 */
     private fun loadSuggestionApps(context: Context): List<String> {
-        return try {
-            val cls = Class.forName("android.util.MiuiMultiWindowUtils")
-            val method = try {
-                cls.getMethod("getFreeformSuggestionList", Context::class.java)
-            } catch (_: NoSuchMethodException) {
-                cls.getDeclaredMethod("getFreeformSuggestionList", Context::class.java).apply {
-                    isAccessible = true
-                }
+        val cls = Class.forName("android.util.MiuiMultiWindowUtils")
+        val method = try {
+            cls.getMethod("getFreeformSuggestionList", Context::class.java)
+        } catch (_: NoSuchMethodException) {
+            cls.getDeclaredMethod("getFreeformSuggestionList", Context::class.java).apply {
+                isAccessible = true
             }
-            @Suppress("UNCHECKED_CAST")
-            val rawList = method.invoke(null, context) as? List<String> ?: emptyList()
-            rawList.map { it.split(",,").first() }
-        } catch (e: Throwable) {
-            Log.w(TAG, "loadSuggestionApps: ${e.message}")
-            emptyList()
         }
+        @Suppress("UNCHECKED_CAST")
+        val rawList = method.invoke(null, context) as? List<String>
+            ?: throw IllegalStateException("getFreeformSuggestionList returned ${method.returnType}")
+        return rawList.map { it.split(",,").first() }
     }
 }

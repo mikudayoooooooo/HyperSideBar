@@ -17,6 +17,8 @@
     <string name="checking_module">正在检测</string>
     <string name="checking_module_summary">正在连接 LSPosed 服务</string>
     <string name="lsposed_not_found">未找到 LSPosed Manager</string>
+    <string name="passthrough_degraded">扇形通道已自动降级</string>
+    <string name="passthrough_degraded_summary">边缘穿透持续失效，已恢复原生小白条；重启手机或重启模块后恢复扇形</string>
 
     <string name="effect_preview">效果预览</string>
     <string name="portrait_preview">竖屏</string>

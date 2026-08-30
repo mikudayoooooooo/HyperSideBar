@@ -1,8 +1,12 @@
 package com.lsp.hypersidebar.hook
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.widget.Toast
 import com.lsp.hypersidebar.ui.fan.FanLaunchStrategy
 import com.lsp.hypersidebar.util.ShortcutAction
 
@@ -11,45 +15,66 @@ private const val TAG = "FanLaunch"
 /**
  * com.miui.home（launcher）进程的广播策略：执行动作转发给 securitycenter:ui。
  * 广播 action 与 :ui 侧 FreeformRelayHook 注册的接收器对应。
+ *
+ * :ui 存活探测（1C，PRD §9.4 ":ui 进程不存活 → toast"）：全部转发走有序广播，
+ * 初始 code=0，:ui 中继接收器收到即置 1；最终回调读 0 = :ui 已死或接收器未注册
+ * （典型场景：用户关掉系统侧边栏开关）→ toast 提示。"尝试拉起"未实现——
+ * :ui 内无可验证的启动入口 service，凭空发明违反纪律，PRD 场景由提示替代。
  */
 class BroadcastLaunchStrategy(
     private val launchAction: String
 ) : FanLaunchStrategy {
 
     override fun launchFreeform(context: Context, pkg: String) {
-        val intent = Intent(launchAction).apply {
-            setPackage("com.miui.securitycenter")
-            putExtra("pkg", pkg)
-        }
-        context.sendBroadcast(intent)
-        Log.i(TAG, "launchFreeform broadcast sent (pkg=$pkg)")
+        sendToRelay(context, "freeform pkg=$pkg") { putExtra("pkg", pkg) }
     }
 
     override fun launchAllApps(context: Context) {
-        val intent = Intent(launchAction).apply {
-            setPackage("com.miui.securitycenter")
-            putExtra("allApps", true)
-        }
-        context.sendBroadcast(intent)
-        Log.i(TAG, "launchAllApps broadcast sent")
+        sendToRelay(context, "allApps") { putExtra("allApps", true) }
     }
 
     override fun launchShortcut(context: Context, shortcut: ShortcutAction) {
-        val intent = Intent(launchAction).apply {
-            setPackage("com.miui.securitycenter")
+        sendToRelay(context, "shortcut id=${shortcut.id}") {
             putExtra("shortcut", shortcut.toJson().toString())
         }
-        context.sendBroadcast(intent)
-        Log.i(TAG, "launchShortcut broadcast sent (id=${shortcut.id})")
     }
 
     override fun openNativePanel(context: Context) {
         // 面板打开经 :ui 的 FreeformRelayHook 转发（其负责 PanelHideState 的设置与恢复）
+        sendToRelay(context, "openPanel") { putExtra("openPanel", true) }
+    }
+
+    private inline fun sendToRelay(
+        context: Context,
+        what: String,
+        crossinline configure: Intent.() -> Unit
+    ) {
         val intent = Intent(launchAction).apply {
             setPackage("com.miui.securitycenter")
-            putExtra("openPanel", true)
+            configure()
         }
-        context.sendBroadcast(intent)
-        Log.i(TAG, "openNativePanel: broadcast sent")
+        context.sendOrderedBroadcast(
+            intent,
+            null,
+            object : BroadcastReceiver() {
+                override fun onReceive(c: Context, result: Intent?) {
+                    if (resultCode != 0) {
+                        Log.i(TAG, "relay alive: $what delivered")
+                        return
+                    }
+                    Log.e(TAG, "relay DEAD: $what not delivered (result code untouched)")
+                    runCatching {
+                        Toast.makeText(
+                            c,
+                            "扇形执行端不可用：请检查系统侧边栏开关",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+            },
+            Handler(Looper.getMainLooper()),
+            0, null, null
+        )
+        Log.i(TAG, "relay broadcast sent (ordered): $what")
     }
 }

@@ -30,6 +30,9 @@ object PrefKeys {
 
     const val CUSTOM_APPS = "customApps"
     const val SHORTCUT_ACTIONS = "shortcut_actions"   // 用户快捷方式 JSON（权威 key）
+
+    /** 穿透失效自动降级状态（1C：:ui 写入，设置页读出标注；非用户设置） */
+    const val PASSTHROUGH_DEGRADED = "passthroughDegraded"
 }
 
 // channelMode（EDGE/HANDLE）已废弃（1B：EDGE 为唯一产品形态，HANDLE 遗留调试通道代码

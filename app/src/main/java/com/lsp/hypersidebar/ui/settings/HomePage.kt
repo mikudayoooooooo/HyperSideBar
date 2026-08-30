@@ -12,11 +12,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
+import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.theme.LocalSemanticColors
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
@@ -31,6 +33,10 @@ internal fun HomePage(
     status: ModuleStatus,
     modifier: Modifier = Modifier
 ) {
+    // 降级状态（1C：:ui 穿透失效自动降级时写入 remotePrefs）；revision 变化驱动实时刷新
+    val passthroughDegraded = remember(prefs, prefsRevision) {
+        runCatching { prefs.getBoolean(PrefKeys.PASSTHROUGH_DEGRADED, false) }.getOrDefault(false)
+    }
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -47,6 +53,15 @@ internal fun HomePage(
             }
         }
 
+        if (passthroughDegraded) {
+            item { SmallTitle(text = stringResource(R.string.module_section)) }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    DegradedStatusComponent()
+                }
+            }
+        }
+
         item { SmallTitle(text = stringResource(R.string.effect_preview)) }
         item {
             FanPreviewCard(
@@ -55,6 +70,23 @@ internal fun HomePage(
             )
         }
     }
+}
+
+@Composable
+private fun DegradedStatusComponent() {
+    BasicComponent(
+        title = stringResource(R.string.passthrough_degraded),
+        summary = stringResource(R.string.passthrough_degraded_summary),
+        startAction = {
+            Box(
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(MiuixTheme.colorScheme.error)
+            )
+        }
+    )
 }
 
 @Composable

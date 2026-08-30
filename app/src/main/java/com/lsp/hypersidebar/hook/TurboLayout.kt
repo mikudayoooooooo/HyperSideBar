@@ -27,6 +27,9 @@ private const val TAG = "TurboLayout"
 /** B 路线横屏固定圆心 Y：条中心（条=[0,112dp]，112/2=56dp；securitycenter 私有资源取常量）。 */
 private const val LANDSCAPE_ANCHOR_Y_DP = 56f
 
+/** S1 自动降级门（1C，PRD §9.4）：60s 窗口内穿透失效 ≥3 次 → 恢复原生侧边栏。 */
+private const val LEAK_DEGRADE_THRESHOLD = 3
+
 /**
  * :ui 进程宿主（securitycenter:ui）。产品形态（PRD §7.1，唯一；channelMode 已废弃删除）：
  *
@@ -45,6 +48,9 @@ private const val LANDSCAPE_ANCHOR_Y_DP = 56f
  * 系统侧边栏开关保持开启 → :ui 常驻 → 活动面板与 B 链路正常。
  * 非 EDGE 值（HANDLE）为遗留调试通道：条可见可摸、f.onTouch 直呼 fan，产品不暴露。
  * 执行动作用 DirectLaunchStrategy（本进程直执行）。
+ * 自动降级（1C，PRD §9.4）：竖屏穿透失效 ≥3 次/分钟 → 恢复原生侧边栏（条可摸/可见/
+ * 事件原生流）+ toast + remotePrefs 状态标注；无自动恢复（观测通道已停用），恢复=重启
+ * :ui 进程（重启手机/重启模块）。
  */
 class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
@@ -73,8 +79,10 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 val view = it.args[0] as? View ?: return@createBeforeHook
 
                 // 竖屏=吞掉漏到小白条的事件（穿透失效信号，防唤起原生侧边栏/
-                // 幽灵入口）；横屏=B 路线状态机接管（隐藏条即触发器）
+                // 幽灵入口）；横屏=B 路线状态机接管（隐藏条即触发器）。
+                // 已降级（1C）：条已恢复原生，事件放行原生流（不吞不计数）
                 if (!isLandscape(view)) {
+                    if (passthroughDegraded) return@createBeforeHook
                     if (event.actionMasked == MotionEvent.ACTION_DOWN) onCoverTouchLeak()
                     it.result = true
                     return@createBeforeHook
@@ -286,7 +294,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
      * 小白条像素出口封口（2026-08-25 反编译取证定稿）：
      * 条的可见像素唯一来源是其 drawable 的 draw(Canvas)（运行时类 com.miui.dock.sidebar.c，
      * 画 Path 处 C7680c.java:253）。before 置空后上层无论设什么 alpha/visibility/Folme，
-     * 屏幕输出恒为空白。非 EDGE（遗留调试通道）不拦截；类名漂移时安全降级为可见。
+     * 屏幕输出恒为空白。已降级（1C）放行（条恢复可见）；类名漂移时安全降级为可见。
      */
     private fun hookHideWhiteBar() {
         runCatching {
@@ -294,7 +302,9 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 .filterByName("draw")
                 .filterByParamTypes(Canvas::class.java)
                 .firstOrNull()
-                ?.createBeforeHook { it.result = null }
+                ?.createBeforeHook {
+                    if (!passthroughDegraded) it.result = null
+                }
                 ?.also { Log.i(TAG, "hookHideWhiteBar: c.draw hooked OK") }
                 ?: Log.w(TAG, "hookHideWhiteBar: c.draw NOT FOUND（条保持可见，安全降级）")
         }.onFailure { Log.w(TAG, "hookHideWhiteBar failed: ${it.message}（条保持可见）") }
@@ -393,9 +403,10 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     /**
      * 窗口边界处的 flag 期望态收敛（addView/updateViewLayout 共用）：
      * 竖屏 EDGE=注入（穿透），横屏 EDGE=清除（B 路线收事件）；仅在偏离期望时改写并记日志。
+     * 已降级（1C）：竖屏期望态翻为"可触摸"（原生侧边栏恢复），任何窗口重建不再注入。
      */
     private fun applyCoverFlagAtBoundary(view: View, lp: WindowManager.LayoutParams, via: String) {
-        val wantFlag = !isLandscape(view)
+        val wantFlag = !isLandscape(view) && !passthroughDegraded
         val hasFlag = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0
         when {
             wantFlag && !hasFlag -> {
@@ -410,9 +421,16 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     }
 
     // 穿透失效计数（S1 数据源）：EDGE 下事件本应穿透 cover 窗口，漏到 f.onTouch 即 flag 失效。
-    // 每次手势计一次（仅 DOWN），按分钟窗口滚动；≥3 次/分钟的自动降级接线在 1B
+    // 每次手势计一次（仅 DOWN），按分钟窗口滚动；达阈值自动降级（1C 接线）
     private var leakWindowStartMs = 0L
     private var leakCountInWindow = 0
+
+    // ===== 穿透失效自动降级（1C，PRD §9.4"功能让位于可用性"） =====
+    // 降级 = 恢复原生侧边栏全部能力（条可摸/可见/事件走原生流），本进程 hook 让位。
+    // 无自动恢复：降级期间事件走原生流，"是否已愈合"无法观测（观测通道=leak 本身
+    // 已停用），盲恢复只会反复横跳——恢复路径 = 重启 :ui 进程（重启手机/重启模块）。
+    @Volatile private var passthroughDegraded = false
+
     private fun onCoverTouchLeak() {
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - leakWindowStartMs >= 60_000L) {
@@ -421,6 +439,33 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         }
         leakCountInWindow++
         Log.w(TAG, "EDGE touch leak: DOWN reached f.onTouch (穿透失效) count=$leakCountInWindow/min")
+        if (leakCountInWindow >= LEAK_DEGRADE_THRESHOLD) {
+            enterDegradedMode("leak $leakCountInWindow/min >= $LEAK_DEGRADE_THRESHOLD")
+        }
+    }
+
+    private fun enterDegradedMode(reason: String) {
+        if (passthroughDegraded) return
+        passthroughDegraded = true
+        Log.e(TAG, "PASSTHROUGH DEGRADED ($reason)：恢复原生侧边栏；恢复扇形=重启手机或重启模块")
+        // 三条恢复线：条可摸（applyCoverFlag 在 degraded 态反向清 flag，立即 updateViewLayout
+        // 生效）、条可见（三层封口 hook 内放行）、事件不吞（hookOnTouch 分支放行原生流）
+        coverRefs.forEach { ref -> ref.get()?.let { v -> applyCoverFlag(v) } }
+        // 状态标注（设置页读）：remotePrefs 跨进程写，尽力而为
+        runCatching {
+            remotePrefs.edit().putBoolean(PrefKeys.PASSTHROUGH_DEGRADED, true).commit()
+        }.onFailure { Log.w(TAG, "degrade status write failed: ${it.message}") }
+        toastOnMain("扇形侧边栏：边缘穿透持续失效，已恢复原生小白条（重启后恢复扇形）")
+    }
+
+    private fun toastOnMain(msg: String) {
+        mainHandler.post {
+            runCatching {
+                EzXposed.appContext?.let { ctx ->
+                    android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
+                }
+            }.onFailure { Log.w(TAG, "toast failed: ${it.message}") }
+        }
     }
 
     private fun purgeCoverRefs() {
@@ -443,8 +488,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             val lp = view.layoutParams as? WindowManager.LayoutParams
                 ?: return@runCatching Log.w(TAG, "applyCoverFlag: lp=${view.layoutParams?.javaClass?.name} 非 WM.LayoutParams")
             // B 路线（1B）：横屏条要收事件——仅竖屏 EDGE 期望穿透 flag；旋转后本方法
-            // （看门狗 2s 周期）负责收敛残留
-            val want = !isLandscape(view)
+            // （看门狗 2s 周期）负责收敛残留。已降级（1C）：竖屏反向清 flag 恢复可摸
+            val want = !isLandscape(view) && !passthroughDegraded
             val has = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0
             if (want != has) {
                 lp.flags = if (want) {
@@ -487,7 +532,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 .firstOrNull()
                 ?.createBeforeHook {
                     val v = it.thisObjectOrNull ?: return@createBeforeHook
-                    if (v.javaClass.name == handleBarView) it.result = null
+                    // 已降级（1C）放行：条恢复可见
+                    if (v.javaClass.name == handleBarView && !passthroughDegraded) it.result = null
                 }
                 ?.also { Log.i(TAG, "hookHandleBarPixelKill: ImageView.onDraw hooked OK") }
                 ?: Log.w(TAG, "hookHandleBarPixelKill: ImageView.onDraw NOT FOUND（降级仅靠 c.draw）")
@@ -502,7 +548,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 .firstOrNull()
                 ?.createBeforeHook {
                     val v = it.thisObjectOrNull ?: return@createBeforeHook
-                    if (v.javaClass.name == handleBarView) it.result = null
+                    // 已降级（1C）放行：条恢复可见
+                    if (v.javaClass.name == handleBarView && !passthroughDegraded) it.result = null
                 }
                 ?.also { Log.i(TAG, "hookHandleBarPixelKill: View.draw (L3) hooked OK") }
                 ?: Log.w(TAG, "hookHandleBarPixelKill: View.draw NOT FOUND")

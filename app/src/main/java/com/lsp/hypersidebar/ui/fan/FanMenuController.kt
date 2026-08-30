@@ -14,6 +14,14 @@ import com.lsp.hypersidebar.util.ShortcutStore
 private const val TAG = "FanMenuController"
 
 /**
+ * 驱动源看门狗超时（1C §3）：fan 展示中 N 秒无任何触摸事件 → 自收起 + 计数。
+ * 手指按住不动时 MOVE 不再产生（输入系统只在移动时投递），10s 恒静止仍指向图标的
+ * 场景不现实；而 0.x"fan 常驻不可撤回"的症状本质是事件流断供（无人再送 UP），
+ * 收起路径全部依赖驱动源存活，看门狗是唯一不依赖它的兜底。
+ */
+private const val FAN_IDLE_TIMEOUT_MS = 10_000L
+
+/**
  * 扇形菜单编排器：数据组装 + ComposeFanHost 装配 + 选中回调接线。
  * 进程无关（securitycenter:ui 与 com.miui.home 共用），执行动作经 [FanLaunchStrategy] 差异化。
  */
@@ -28,6 +36,30 @@ class FanMenuController(
     private var host: ComposeFanHost? = null
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    // ===== 驱动源看门狗（1C §3） =====
+    private var lastTouchElapsedMs = 0L
+    private var watchdogFires = 0
+    private val watchdogRunnable = Runnable {
+        if (!isShowing) return@Runnable
+        val idleMs = android.os.SystemClock.elapsedRealtime() - lastTouchElapsedMs
+        if (idleMs < FAN_IDLE_TIMEOUT_MS) return@Runnable
+        // 触摸流断供：手势中止/事件链断裂，UP 收起与滑回重置都不再有人驱动——
+        // 0.x"fan 常驻"症状的最后防线（唯一不依赖事件流的收起路径）
+        watchdogFires++
+        Log.w(TAG, "idle watchdog: no touch for ${idleMs}ms, self-dismiss (fire #$watchdogFires)")
+        dismiss()
+    }
+
+    private fun touchHeartbeat() {
+        lastTouchElapsedMs = android.os.SystemClock.elapsedRealtime()
+        mainHandler.removeCallbacks(watchdogRunnable)
+        mainHandler.postDelayed(watchdogRunnable, FAN_IDLE_TIMEOUT_MS)
+    }
+
+    private fun cancelWatchdog() {
+        mainHandler.removeCallbacks(watchdogRunnable)
+    }
 
     fun show(context: Context, anchorX: Float, anchorY: Float) {
         // hook 的触摸回调可能不在主线程（launcher 的 GestureStubView.onTouchEvent 经
@@ -130,6 +162,7 @@ class FanMenuController(
 
             host = fanHost
             fanHost.show(anchorX, anchorY, apps, allQuick, isLandscape)
+            touchHeartbeat()
             Log.i(TAG, "show: compose fan overlay added, ${allQuick.size} quick actions, landscape=$isLandscape")
 
         } catch (e: Throwable) {
@@ -146,6 +179,7 @@ class FanMenuController(
     /** 触摸事件转发给扇形菜单；返回 false 表示当前无菜单。跨线程安全（自动跳主线程）。 */
     fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (!isShowing) return false
+        touchHeartbeat()
         // 必须捕获局部引用：跨线程路径下 dismiss() 会在 post 之后立即置空 host，
         // 若 lambda 里读字段，转发的 UP 会被静默丢弃（实测 4 次呼出 0 次 UP 送达）
         val h = host ?: return false
@@ -179,20 +213,26 @@ class FanMenuController(
     }
 
     private fun doDismiss(via: String) {
+        cancelWatchdog()
         val h = host
+        if (h == null) {
+            isShowing = false
+            return
+        }
+        Log.i(TAG, "doDismiss($via): tearing down host")
+        // 强一致（1C §3）：先完成视图真实摘除，再清状态位——顺序颠倒会把
+        // "视图还活着"伪装成"已收起"，下次呼出在旧窗口之上再叠一个（双开根因）
+        try {
+            h.dismiss()
+        } catch (e: Throwable) {
+            Log.w(TAG, "host.dismiss threw: ${e.message}")
+        }
         isShowing = false
         host = null
-        if (h == null) return
-        Log.i(TAG, "doDismiss($via): tearing down host")
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            h.dismiss()
-        } else {
-            // 防御：doDismiss 理论上恒在主线程；保留定向拆除兜底
-            mainHandler.post { h.dismiss() }
-        }
     }
 
-    fun getStats(): String = "fanMenu=${host != null}, isShowing=$isShowing"
+    fun getStats(): String =
+        "fanMenu=${host != null}, isShowing=$isShowing, watchdogFires=$watchdogFires"
 
     private fun readPref(key: String, default: Float): Float {
         return try { prefs.getFloat(key, default) } catch (_: Exception) { default }

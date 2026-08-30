@@ -20,6 +20,7 @@ object FreeformLauncher {
         val clsName = getMainActivity(context, packageName)
         if (clsName == null) {
             Log.w(TAG, "launch: cannot resolve main activity for $packageName")
+            toastOnMain(context, "无法打开 $packageName：找不到入口 Activity")
             return
         }
 
@@ -59,17 +60,24 @@ object FreeformLauncher {
             Log.w(TAG, "own activity freeform failed: ${e.message} → plain launch")
         }
         runCatching { context.startActivity(intent) }
-            .onFailure { Log.e(TAG, "own activity plain launch failed: ${it.message}") }
+            .onFailure {
+                Log.e(TAG, "own activity plain launch failed: ${it.message}")
+                toastOnMain(context, "面板启动失败：${it.message}")
+            }
     }
 
     /**
-     * MiuiMultiWindowUtils.getActivityOptions + startActivityAsUser（实测可用路径）
+     * MiuiMultiWindowUtils.getActivityOptions + startActivityAsUser（实测可用路径）。
+     * 失败路径 toast 兜底（PRD §9.4）：options 为 null = 小窗资格变化（getActivityOptions
+     * 对无资格包返回 null）；注意 startActivityAsUser 对无效组件静默"成功"（-92），
+     * 那条失败路径无法在此检测，只能靠数据源（准入列表）过滤。
      */
     private fun tryMiuiMultiWindow(context: Context, packageName: String, clsName: String) {
         try {
             val cls = Class.forName("android.util.MiuiMultiWindowUtils")
             val options = getActivityOptions(cls, context, packageName) ?: run {
                 Log.w(TAG, "MiuiMultiWindow: getActivityOptions returned null")
+                toastOnMain(context, "小窗启动失败：$packageName（无小窗资格）")
                 return
             }
             val intent = Intent(Intent.ACTION_MAIN).apply {
@@ -85,6 +93,18 @@ object FreeformLauncher {
             Log.i(TAG, "MiuiMultiWindow fallback success: $packageName/$clsName")
         } catch (e: Exception) {
             Log.e(TAG, "MiuiMultiWindow fallback failed: ${e.message}")
+            toastOnMain(context, "小窗启动失败：$packageName")
+        }
+    }
+
+    private fun toastOnMain(context: Context, msg: String) {
+        val show = Runnable {
+            runCatching {
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) show.run() else {
+            android.os.Handler(android.os.Looper.getMainLooper()).post(show)
         }
     }
 

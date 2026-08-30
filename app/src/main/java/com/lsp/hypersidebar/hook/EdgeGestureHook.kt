@@ -93,21 +93,45 @@ class EdgeGestureHook(
 
     /**
      * 拦截层：停顿标志命中时翻转 shouldBack → 原生走 onBackCancelled 复位分支。
+     * 主路 = 实测混淆名 `$3` 直连；类名漂移（匿名类数字索引随混淆轮次变动）时按
+     * 接口契约扫描兜底（1C 新写，0.x 仅识别未实现）：遍历 GestureStubView 全部
+     * 内部类，命中"声明 onSwipeStop 且首参 Boolean"者即拦截回调。
      */
     private fun hookOnSwipeStop() {
-        MethodFinder.fromClass(CALLBACK_CLASS)
+        val direct = runCatching { hookSwipeStopCallback(Class.forName(CALLBACK_CLASS), "direct") }
+            .getOrDefault(false)
+        if (direct) return
+        Log.w(TAG, "onSwipeStop NOT FOUND on $CALLBACK_CLASS, scanning GestureStubView inner classes")
+        val stub = runCatching { Class.forName(STUB_CLASS) }.getOrNull() ?: run {
+            Log.e(TAG, "scan fallback: $STUB_CLASS missing")
+            return
+        }
+        var hooked = 0
+        for (inner in stub.declaredClasses) {
+            val ok = runCatching { hookSwipeStopCallback(inner, "scan") }.getOrDefault(false)
+            if (ok) hooked++
+        }
+        if (hooked == 0) Log.e(TAG, "scan fallback: no onSwipeStop(Boolean,...) in any inner class")
+        else Log.i(TAG, "scan fallback: $hooked onSwipeStop callback(s) hooked")
+    }
+
+    /** @return true = 该类声明 onSwipeStop(Bool First, ...) 且已挂 before hook */
+    private fun hookSwipeStopCallback(cls: Class<*>, via: String): Boolean {
+        val method = MethodFinder.fromClass(cls)
             .filterByName("onSwipeStop")
-            .firstOrNull()
-            ?.createBeforeHook {
-                if (stallFired || fanController.isShowing) {
-                    val shouldBack = it.args[0] as? Boolean ?: return@createBeforeHook
-                    if (shouldBack) {
-                        it.args[0] = false
-                        Log.i(TAG, "g#$gestureSeq onSwipeStop INTERCEPTED: shouldBack=true -> false")
-                    }
+            .firstOrNull() ?: return false
+        if (method.parameterTypes.firstOrNull() != Boolean::class.javaPrimitiveType) return false
+        method.createBeforeHook {
+            if (stallFired || fanController.isShowing) {
+                val shouldBack = it.args[0] as? Boolean ?: return@createBeforeHook
+                if (shouldBack) {
+                    it.args[0] = false
+                    Log.i(TAG, "g#$gestureSeq onSwipeStop($via) INTERCEPTED: shouldBack=true -> false")
                 }
             }
-            ?: Log.e(TAG, "onSwipeStop NOT FOUND on $CALLBACK_CLASS（混淆名漂移，需 GesturesBackCallback 接口扫描兜底）")
+        }
+        Log.i(TAG, "onSwipeStop hooked ($via): ${cls.name}")
+        return true
     }
 
     private fun handleTouch(ev: MotionEvent, stub: View?): Boolean {

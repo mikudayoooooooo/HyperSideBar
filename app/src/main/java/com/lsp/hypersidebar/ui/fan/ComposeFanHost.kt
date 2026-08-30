@@ -305,28 +305,34 @@ class ComposeFanHost(
     }
 
     fun dismiss() {
-        val wv = wrapperView ?: return
+        // 逐字段收尾（1C 强一致）：不再因 wrapperView 为 null 早退——半拆状态
+        // （视图已摘但 compose/lifecycle 未清）会泄漏 lifecycle 与 composition
+        val wv = wrapperView
         wrapperView = null
+        if (wv != null) {
+            try {
+                windowManager?.removeViewImmediate(wv)
+            } catch (e: Throwable) {
+                // "not attached"= 窗口已不在（等价摘除成功）；其余异常窗口同样已脱离
+                // 本进程管理——都按"摘除已确认"处理，isShowing 与视图真实状态保持一致
+                Log.w(TAG, "removeView failed (treated as removed): ${e.message}")
+            }
+        }
         val cv = composeView
         composeView = null
-        lastSelectedFanIndex = -1
-        lastSelectedQuickIndex = -1
-
-        try {
-            windowManager?.removeViewImmediate(wv)
-        } catch (e: Throwable) {
-            Log.w(TAG, "removeView failed", e)
-        }
-
-        try {
-            cv?.disposeComposition()
-        } catch (e: Throwable) {
-            Log.w(TAG, "disposeComposition failed", e)
+        if (cv != null) {
+            try {
+                cv.disposeComposition()
+            } catch (e: Throwable) {
+                Log.w(TAG, "disposeComposition failed", e)
+            }
         }
 
         lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         lifecycleOwner = null
+        lastSelectedFanIndex = -1
+        lastSelectedQuickIndex = -1
 
         onDismiss?.invoke()
     }

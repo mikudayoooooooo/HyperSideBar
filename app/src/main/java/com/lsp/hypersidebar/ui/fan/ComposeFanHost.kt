@@ -60,9 +60,35 @@ class ComposeFanHost(
     private var selectedSince = 0L
     private val DWELL_MS = 150L
 
+    // ===== 池化复用（1C P2，方案对比后选"池=1 实例重配"）=====
+    // composition/lifecycle/视图树跨呼出存活（只摘窗口），把暖呼出从 ~250-300ms
+    // 压到 <100ms（重建 composition 的成本消失）。拒绝"常驻隐藏窗口"方案：
+    // 本项目根基就是消灭常驻覆盖窗口（小白条之祸），不能自己再造一个。
+    private var built = false
+    private val geometryState: MutableState<FanGeometry?> = mutableStateOf(null)
+    private val touchState: MutableState<FanTouchState> =
+        mutableStateOf(FanTouchState(0f, 0f, 3, -1))
+    private var config: FanConfig = FanConfig()
+    private var density = 1f
+    private var pendingInput: GeometryInput? = null
+
+    // 窗口在屏上的原点（每手势 DOWN 刷新）：命中测试必须与渲染同处窗口本地坐标系。
+    // 若 overlay 窗口被系统 inset（让出状态栏等），raw 屏幕坐标与本地坐标会差出
+    // 一个状态栏高度（实测≈110px），"指到的图标"与"命中的扇区"系统性错一位
+    private var originValid = false
+    private val viewOrigin = IntArray(2)
+
     var onAppSelected: ((FanAppInfo) -> Unit)? = null
     var onQuickAppSelected: ((FanAppInfo) -> Unit)? = null
     var onDismiss: (() -> Unit)? = null
+
+    private class GeometryInput(
+        val anchorX: Float,
+        val anchorY: Float,
+        val apps: List<FanAppInfo>,
+        val quickApps: List<FanAppInfo>,
+        val isLandscape: Boolean
+    )
 
     fun show(
         anchorX: Float,
@@ -71,25 +97,70 @@ class ComposeFanHost(
         quickApps: List<FanAppInfo>,
         isLandscape: Boolean
     ) {
-        if (wrapperView != null) return
+        val wm = windowManager
+            ?: (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
+                .also { windowManager = it }
+        density = context.resources.displayMetrics.density
+        config = buildFanConfig()
+        pendingInput = GeometryInput(anchorX, anchorY, apps, quickApps, isLandscape)
+        resetInteractionState()
 
-        val wm = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        windowManager = wm
+        if (!built) {
+            buildComposition()
+            built = true
+        }
+        val wrapper = wrapperView ?: return
+        try {
+            // 防御：池化后理论上 dismiss 必摘窗口，但 compose 内部 onDismiss 等路径
+            // 若留下挂载态，重复 addView 会直接抛——先收敛到摘除态
+            if (wrapper.isAttachedToWindow) detachWindow()
+            wm.addView(wrapper, buildWindowParams())
+        } catch (e: Throwable) {
+            Log.e(TAG, "Failed to attach fan window", e)
+            detachWindow()
+            throw e // 上抛给 controller：失败可观测（熔断计数）并弃池
+        }
+        // 首帧绘制前算几何（origin-before-geometry，1B）：悬浮窗被系统 inset 后
+        // 真实原点/尺寸只有布局后才可知。池化后视图多次 attach，OneShot 逐 show 重挂
+        OneShotPreDrawListener.add(wrapper) { computeAndPublishGeometry(); true }
+        Log.i(TAG, "fan window attached (pooled=$built), ${apps.size} apps, ${quickApps.size} quick")
+    }
 
-        val density = context.resources.displayMetrics.density
-        val config = buildFanConfig()
+    /** 逐呼出重置交互态（几何清空 → 首帧前不渲染，touch/选中态归零）。 */
+    private fun resetInteractionState() {
+        geometryState.value = null
+        touchState.value = FanTouchState(0f, 0f, 3, -1)
+        lastSelectedFanIndex = -1
+        lastSelectedQuickIndex = -1
+        selectedSince = 0L
+        originValid = false
+    }
 
-        // origin-before-geometry（1B）：几何延到首帧绘制前计算（见下方 OneShotPreDrawListener）。
-        // 悬浮窗会被系统 inset 让出状态栏（launcher 竖屏实测 origin=(0,94) 高 2262≠屏幕 2400），
-        // 窗口真实原点/尺寸只有布局后才可知——此前锚点用 raw 屏幕坐标直接当本地坐标画，
-        // 扇形圆心恒比触摸点低一个状态栏（94px）；绘制/命中/空间估算三者必须同处窗口
-        // 本地坐标系，锚点须先减 origin 再进几何层
-        val geometryState = mutableStateOf<FanGeometry?>(null)
+    private fun computeAndPublishGeometry() {
+        val input = pendingInput ?: return
+        val wrapper = wrapperView ?: return
+        val loc = IntArray(2)
+        runCatching { wrapper.getLocationOnScreen(loc) }
+        val g = computeFanGeometry(
+            Offset(input.anchorX - loc[0], input.anchorY - loc[1]),
+            IntSize(wrapper.width, wrapper.height),
+            input.apps, input.quickApps, config, density, input.isLandscape
+        )
+        geometryState.value = g
+        Log.i(
+            TAG,
+            "geometry: origin=(${loc[0]},${loc[1]}) winSize=(${wrapper.width},${wrapper.height}) " +
+                "rawAnchor=(${input.anchorX.toInt()},${input.anchorY.toInt()}) anchor=(${g.anchor.x.toInt()},${g.anchor.y.toInt()}) " +
+                "outer=${g.outerRadius.toInt()} inner=${g.innerRadius.toInt()} " +
+                "span=[${g.startAngle.toInt()},${g.endAngle.toInt()}] icon=${g.iconSize} " +
+                "quickBar=(${g.quickBarX.toInt()},${g.quickBarY.toInt()})"
+        )
+    }
 
-        val touchState = mutableStateOf(FanTouchState(0f, 0f, 3, -1))
-
+    /** composition/视图树一次性构建（池化后不再重建）。 */
+    private fun buildComposition() {
         val lcOwner = FanLifecycleOwner()
-        this.lifecycleOwner = lcOwner
+        lifecycleOwner = lcOwner
         lcOwner.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
         lcOwner.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
 
@@ -108,7 +179,8 @@ class ComposeFanHost(
                             colors = themeColors,
                             onAppSelected = { app -> onAppSelected?.invoke(app) },
                             onQuickAppSelected = { app -> onQuickAppSelected?.invoke(app) },
-                            onDismiss = { onDismiss?.invoke() }
+                            // compose 内部请求收起 → 走同一 dismiss 语义（摘窗口+通知 controller）
+                            onDismiss = { dismiss() }
                         )
                     }
                 }
@@ -117,13 +189,6 @@ class ComposeFanHost(
         this.composeView = composeView
 
         val wrapper = object : FrameLayout(context) {
-            // 窗口在屏上的原点（每手势 DOWN 刷新）：命中测试必须与渲染同处窗口本地坐标系。
-            // 若 overlay 窗口被系统 inset（让出状态栏等），raw 屏幕坐标与本地坐标会差出
-            // 一个状态栏高度（实测≈110px），"指到的图标"与"命中的扇区"系统性错一位——
-            // 表现为"碰到哪个开隔壁的、扇区两端打不开"
-            private val viewOrigin = IntArray(2)
-            private var originValid = false
-
             override fun dispatchTouchEvent(event: MotionEvent): Boolean {
                 val rawX = event.rawX
                 val rawY = event.rawY
@@ -255,8 +320,10 @@ class ComposeFanHost(
         wrapper.setViewTreeLifecycleOwner(lcOwner)
         wrapper.setViewTreeSavedStateRegistryOwner(lcOwner)
         this.wrapperView = wrapper
+    }
 
-        val params = WindowManager.LayoutParams(
+    private fun buildWindowParams(): WindowManager.LayoutParams =
+        WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -270,71 +337,46 @@ class ComposeFanHost(
             y = 0
         }
 
+    /** 摘窗口并复位交互态（不动 composition/lifecycle——池化复用的前提）。 */
+    private fun detachWindow() {
+        val wv = wrapperView ?: return
         try {
-            wm.addView(wrapper, params)
-            // 首帧绘制前（布局已完成，原点/尺寸保证有效）：锚点转窗口本地坐标后算几何，
-            // 并用窗口真实尺寸（被 inset 后的高宽）做空间估算。OneShot 保证只算一次
-            OneShotPreDrawListener.add(wrapper) {
-                val loc = IntArray(2)
-                runCatching { wrapper.getLocationOnScreen(loc) }
-                val g = computeFanGeometry(
-                    Offset(anchorX - loc[0], anchorY - loc[1]),
-                    IntSize(wrapper.width, wrapper.height),
-                    apps, quickApps, config, density, isLandscape
-                )
-                geometryState.value = g
-                Log.i(
-                    TAG,
-                    "geometry: origin=(${loc[0]},${loc[1]}) winSize=(${wrapper.width},${wrapper.height}) " +
-                        "rawAnchor=(${anchorX.toInt()},${anchorY.toInt()}) anchor=(${g.anchor.x.toInt()},${g.anchor.y.toInt()}) " +
-                        "outer=${g.outerRadius.toInt()} inner=${g.innerRadius.toInt()} " +
-                        "span=[${g.startAngle.toInt()},${g.endAngle.toInt()}] icon=${g.iconSize} " +
-                        "quickBar=(${g.quickBarX.toInt()},${g.quickBarY.toInt()})"
-                )
-                true
-            }
-            Log.i(TAG, "Compose fan host added, ${apps.size} apps, ${quickApps.size} quick")
+            windowManager?.removeViewImmediate(wv)
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to add compose fan host", e)
-            dismiss()
+            // "not attached"= 窗口已不在（等价摘除成功）；其余异常窗口同样已脱离
+            // 本进程管理——都按"摘除已确认"处理
+            Log.w(TAG, "removeView failed (treated as detached): ${e.message}")
         }
+        resetInteractionState()
+    }
+
+    fun dismiss() {
+        // 池化（1C P2）：只摘窗口+清交互态，composition/lifecycle/视图树保留供下次呼出；
+        // 全量销毁走 destroy()（controller 在 show 失败弃池时调用）。isShowing 与
+        // "窗口真实挂载"仍强一致：detach 即 idle，controller 侧状态由 onDismiss 清位
+        detachWindow()
+        onDismiss?.invoke()
+    }
+
+    /** 全量销毁（弃池时）：controller 在 show 失败后调用，host 不得再复用。 */
+    fun destroy() {
+        detachWindow()
+        composeView?.let { cv ->
+            composeView = null
+            runCatching { cv.disposeComposition() }
+                .onFailure { Log.w(TAG, "disposeComposition failed: ${it.message}") }
+        }
+        lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+        lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+        lifecycleOwner = null
+        wrapperView = null
+        windowManager = null
+        built = false
+        pendingInput = null
     }
 
     fun dispatchTouchEvent(event: MotionEvent): Boolean {
         return wrapperView?.dispatchTouchEvent(event) ?: false
-    }
-
-    fun dismiss() {
-        // 逐字段收尾（1C 强一致）：不再因 wrapperView 为 null 早退——半拆状态
-        // （视图已摘但 compose/lifecycle 未清）会泄漏 lifecycle 与 composition
-        val wv = wrapperView
-        wrapperView = null
-        if (wv != null) {
-            try {
-                windowManager?.removeViewImmediate(wv)
-            } catch (e: Throwable) {
-                // "not attached"= 窗口已不在（等价摘除成功）；其余异常窗口同样已脱离
-                // 本进程管理——都按"摘除已确认"处理，isShowing 与视图真实状态保持一致
-                Log.w(TAG, "removeView failed (treated as removed): ${e.message}")
-            }
-        }
-        val cv = composeView
-        composeView = null
-        if (cv != null) {
-            try {
-                cv.disposeComposition()
-            } catch (e: Throwable) {
-                Log.w(TAG, "disposeComposition failed", e)
-            }
-        }
-
-        lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
-        lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
-        lifecycleOwner = null
-        lastSelectedFanIndex = -1
-        lastSelectedQuickIndex = -1
-
-        onDismiss?.invoke()
     }
 
     private fun resolveSelection(

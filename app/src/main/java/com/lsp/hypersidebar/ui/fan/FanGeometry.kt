@@ -159,7 +159,8 @@ fun computeFanGeometry(
     val items = layoutFanItems(
         apps = apps, outerCount = outerCount, innerCount = innerCount,
         anchor = settledAnchor, startAngle = startAngle, spanAngle = spanAngle,
-        innerRadius = innerRadius, outerRadius = outerRadius
+        innerRadius = innerRadius, outerRadius = outerRadius,
+        direction = direction
     )
 
     // 快捷栏固定在扇形下方（PRD"快捷方式入口在半圆的下面"）；半径已按上下空间收缩 ⇒
@@ -283,7 +284,8 @@ private fun layoutFanItems(
     startAngle: Float,
     spanAngle: Float,
     innerRadius: Float,
-    outerRadius: Float
+    outerRadius: Float,
+    direction: FanDirection
 ): List<FanItemLayout> {
     if (apps.isEmpty()) return emptyList()
 
@@ -299,8 +301,16 @@ private fun layoutFanItems(
         val countInRing = if (isOuter) outerCount else innerCount
         val step = if (isOuter) outerStep else innerStep
 
+        // 左右镜像对称（2026-08-30 用户定稿，取代 PRD 旧"顺时针"字面）：
+        // 两侧首位图标恒在展开区顶部、自上而下——RIGHT 角度自 startAngle 递增
+        // （-up→+dn，顶部→底部），LEFT 自 endAngle 递减（180+up→180-dn，顶部→底部）；
+        // 单项仍居扇区中线上
         val angle = if (countInRing > 1) {
-            startAngle + step * ringIndex + step / 2f
+            if (direction == FanDirection.LEFT) {
+                (startAngle + spanAngle) - step * ringIndex - step / 2f
+            } else {
+                startAngle + step * ringIndex + step / 2f
+            }
         } else {
             startAngle + spanAngle / 2f
         }

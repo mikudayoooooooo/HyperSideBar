@@ -2,6 +2,7 @@ package com.lsp.hypersidebar.ui.settings
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.SharedPreferences
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -18,8 +19,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,6 +33,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.BuildConfig
 import com.lsp.hypersidebar.R
+import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.prefs.savePref
 import io.github.libxposed.service.XposedService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -37,15 +42,23 @@ import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 @Composable
 internal fun AboutPage(
     service: XposedService?,
+    prefs: SharedPreferences,
+    prefsRevision: Int,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val relayBlackhole by remember(prefs, prefsRevision) {
+        mutableStateOf(
+            runCatching { prefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false) }.getOrDefault(false)
+        )
+    }
     val versionName = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
@@ -171,6 +184,21 @@ internal fun AboutPage(
                         summary = apiVersion
                     )
                 }
+            }
+        }
+
+        item { SmallTitle(text = stringResource(R.string.debug_section)) }
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                SwitchPreference(
+                    title = stringResource(R.string.debug_relay_blackhole),
+                    summary = stringResource(R.string.debug_relay_blackhole_summary),
+                    checked = relayBlackhole,
+                    onCheckedChange = {
+                        // 写 remotePrefs：launcher 侧每次执行广播时读取（binder 缓存实时同步）
+                        prefs.savePref(PrefKeys.DEBUG_RELAY_BLACKHOLE, it)
+                    }
+                )
             }
         }
     }

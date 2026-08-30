@@ -24,7 +24,9 @@ private const val TAG = "FanLaunch"
  */
 class BroadcastLaunchStrategy(
     private val launchAction: String,
-    private val onRelayResult: ((alive: Boolean, what: String) -> Unit)? = null
+    private val onRelayResult: ((alive: Boolean, what: String) -> Unit)? = null,
+    /** 调试开关（熔断链路验证用）：真机 :ui 死亡窗口太短（~10s 即被系统重绑），无法自然复现 */
+    private val shouldSimulateRelayDead: () -> Boolean = { false }
 ) : FanLaunchStrategy {
 
     override fun launchFreeform(context: Context, pkg: String) {
@@ -51,6 +53,11 @@ class BroadcastLaunchStrategy(
         what: String,
         crossinline configure: Intent.() -> Unit
     ) {
+        if (shouldSimulateRelayDead()) {
+            Log.w(TAG, "relay blackholed (debug switch): $what")
+            handleRelayDead(context, what)
+            return
+        }
         val intent = Intent(launchAction).apply {
             setPackage("com.miui.securitycenter")
             configure()
@@ -66,19 +73,23 @@ class BroadcastLaunchStrategy(
                         return
                     }
                     Log.e(TAG, "relay DEAD: $what not delivered (result code untouched)")
-                    onRelayResult?.invoke(false, what)
-                    runCatching {
-                        Toast.makeText(
-                            c,
-                            "扇形执行端不可用：请检查系统侧边栏开关",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
+                    handleRelayDead(c, what)
                 }
             },
             Handler(Looper.getMainLooper()),
             0, null, null
         )
         Log.i(TAG, "relay broadcast sent (ordered): $what")
+    }
+
+    private fun handleRelayDead(context: Context, what: String) {
+        onRelayResult?.invoke(false, what)
+        runCatching {
+            Toast.makeText(
+                context,
+                "扇形执行端不可用：请检查系统侧边栏开关",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 }

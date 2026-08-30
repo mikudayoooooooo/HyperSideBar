@@ -40,6 +40,9 @@ object PrefKeys {
 
     /** 设置页"手动重试"时间戳：hook 侧比较 resetAt > 本端熔断时刻即解除 */
     const val CIRCUIT_RESET_AT = "circuitResetAt"
+
+    /** 调试开关：模拟 :ui 执行端失联（熔断链路验证用；:ui 自然死亡窗口太短无法实测） */
+    const val DEBUG_RELAY_BLACKHOLE = "debugRelayBlackhole"
 }
 
 // channelMode（EDGE/HANDLE）已废弃（1B：EDGE 为唯一产品形态，HANDLE 遗留调试通道代码

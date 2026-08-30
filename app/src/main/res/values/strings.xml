@@ -108,6 +108,11 @@
     <string name="scope_configured">已包含 com.miui.securitycenter</string>
     <string name="unknown">未知</string>
 
+    <!-- Debug -->
+    <string name="debug_section">调试</string>
+    <string name="debug_relay_blackhole">模拟执行端失联</string>
+    <string name="debug_relay_blackhole_summary">所有执行广播按失联处理，用于验证熔断链路；测完务必关闭</string>
+
     <!-- Shortcut -->
     <string name="shortcut_count_format">%1$d / %2$d</string>
     <string name="shortcut_unnamed">未命名</string>

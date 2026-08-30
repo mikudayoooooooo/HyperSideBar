@@ -163,7 +163,11 @@ internal fun MainScreen(
                             onNavigateToLayout = { detailScreen = DetailScreen.LayoutSettings },
                             onNavigateToInteraction = { detailScreen = DetailScreen.InteractionSettings }
                         )
-                        RootTab.ABOUT -> AboutPage(service = service)
+                        RootTab.ABOUT -> AboutPage(
+                            service = service,
+                            prefs = prefs,
+                            prefsRevision = prefsRevision
+                        )
                     }
                 }
 

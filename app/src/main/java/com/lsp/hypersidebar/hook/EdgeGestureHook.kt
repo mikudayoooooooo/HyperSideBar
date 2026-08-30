@@ -46,10 +46,17 @@ class EdgeGestureHook(
     private val fanController: FanMenuController by lazy {
         FanMenuController(
             remotePrefs,
-            BroadcastLaunchStrategy(ACTION_FAN_LAUNCH) { alive, what ->
-                // :ui 执行端失联 = 机制性失败（熔断数据源）；送达 = 连续失败清零
-                if (alive) breaker.recordSuccess() else breaker.recordFailure("relay dead: $what")
-            },
+            BroadcastLaunchStrategy(
+                launchAction = ACTION_FAN_LAUNCH,
+                onRelayResult = { alive, what ->
+                    // :ui 执行端失联 = 机制性失败（熔断数据源）；送达 = 连续失败清零
+                    if (alive) breaker.recordSuccess() else breaker.recordFailure("relay dead: $what")
+                },
+                shouldSimulateRelayDead = {
+                    runCatching { remotePrefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false) }
+                        .getOrDefault(false)
+                }
+            ),
             onMechanismResult = { ok, reason ->
                 if (ok) breaker.recordSuccess() else breaker.recordFailure(reason)
             }

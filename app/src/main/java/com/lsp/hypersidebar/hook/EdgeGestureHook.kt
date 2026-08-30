@@ -13,7 +13,6 @@ import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import com.lsp.hypersidebar.ui.fan.FanMenuController
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.EzXposed
-import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHook
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createBeforeHook
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -26,8 +25,8 @@ private const val TAG = "EdgeGesture"
  * 设计（PRD §7.1/§7.2，全部实测背书）：
  * - 与全面屏返回手势共享同一次触摸：快速滑动松手 = 原生返回（零干扰透传）；
  *   内滑确认后位移停滞 triggerDwellMs（默认 250ms，锚点圆法 v2）= 呼出 fan 并消费后续事件
- * - 触发区：竖屏 [H/3, 2H/3]、横屏=白条触摸条 [0, 112dp]（cover lp 实测：系统横屏固定
- *   条位于短轴顶部，竖屏才跟随用户自定义），DOWN 时过滤，区外完全透传
+ * - 触发区（仅竖屏）：[H/3, 2H/3]，DOWN 时过滤，区外完全透传；横屏触发已整体移交
+ *   B 路线（:ui 的 cover 通道直接收事件，见 TurboLayout），launcher 侧横屏区置空防双触发
  * - 滑回边缘（inward 回落至确认阈值下）→ 整体重置手势状态（PRD"滑回边缘→待触发"）
  * - fan 选中项经 BroadcastLaunchStrategy 广播到 :ui 执行（B 链路实测 2-3ms）
  * - 拦截层：GestureStubView$3.onSwipeStop 翻转首参为 false（消费路径漏事件时的兜底）
@@ -41,20 +40,6 @@ class EdgeGestureHook(
     companion object {
         const val STUB_CLASS = "com.miui.home.recents.GestureStubView"
         const val CALLBACK_CLASS = "com.miui.home.recents.GestureStubView\$3"
-
-        const val SWIPE_CONFIRM_PX = 40f    // PRD §9.5 最小触发距离（内滑超此值进入"触发确认中"）
-        const val MAX_SWIPE_ANGLE_DEG = 60f // PRD §9.5 触发最大夹角（滑动方向与水平方向）
-        const val STALL_RADIUS_PX = 15f     // 锚点圆半径：dwell 期间位移不超此值视为停顿
-
-        // 横屏触发带=白条触摸条实测位置（cover lp 取证 2026-08-29）：竖屏条位跟随用户
-        // 自定义（本机 [871,1179]），横屏系统固定于短轴顶部 [0, 112dp]（条高
-        // R.dimen.sidebar_height_vertical=112dp，securitycenter 私有资源 launcher 读不到，
-        // 取常量）。B 路线落地后整条经 cover 直接收事件，此带仅为 A 路线过渡
-        const val LANDSCAPE_STRIP_HEIGHT_DP = 112f
-
-        // GestureStubView 横屏带放宽系数（hookLandscapeBand 覆写原生 0.6→此值），带=居中
-        // [(1-系数)/2, 1-(1-系数)/2]——横屏触发带上界受带顶约束（带外收不到事件）
-        const val LANDSCAPE_BAND_FRACTION = 0.8f
     }
 
     private val fanController: FanMenuController by lazy {
@@ -84,10 +69,7 @@ class EdgeGestureHook(
         var okStop = false
         runCatching { hookOnSwipeStop(); okStop = true }
             .onFailure { Log.e(TAG, "C FAILED hookOnSwipeStop: ${it.message}", it) }
-        var okBand = false
-        runCatching { hookLandscapeBand(); okBand = true }
-            .onFailure { Log.e(TAG, "D FAILED hookLandscapeBand: ${it.message}", it) }
-        Log.i(TAG, "hooks installed: onTouchEvent=$okTouch onSwipeStop=$okStop landscapeBand=$okBand")
+        Log.i(TAG, "hooks installed: onTouchEvent=$okTouch onSwipeStop=$okStop")
         // 预热推荐列表缓存（尽力而为）：launcher 进程 init 时 EzXposed.appContext 可能尚未就绪
         // ——实测 getAppContext 在上下文未建好时直接抛 NPE 而非返回 null。预热失败无碍：
         // DataLoader 已是后台异步刷新，首呼出会自行触发且不阻塞主线程
@@ -128,37 +110,6 @@ class EdgeGestureHook(
                 }
             }
             ?: Log.e(TAG, "onSwipeStop NOT FOUND on $CALLBACK_CLASS（混淆名漂移，需 GesturesBackCallback 接口扫描兜底）")
-    }
-
-    /**
-     * 横屏手势带放宽（实测轮六，反编译取证定稿）：
-     * 原生 updateGestureTouchHeight 硬编码 0.6 → 横屏可触摸带居中 60% [0.2S,0.8S]，
-     * 而竖屏走 expansion 分支≈全高——这就是"横屏难呼出"的结构性根因。
-     * AfterHook 仅在横屏（rotation 1/3）+EDGE 模式把字段覆写为短轴×0.8
-     * → 带 [0.1S,0.9S]，配合逻辑区 [0,H/2] 实际可用 [0.1S,0.5S]；
-     * 原生返回仅两端各多 10%，副作用最小。窗口本就 MATCH_PARENT，单点足够。
-     * 反射失败静默保留原值 = 安全降级。旋转时原方法必被重调，覆写随之刷新。
-     */
-    private fun hookLandscapeBand() {
-        MethodFinder.fromClass(STUB_CLASS)
-            .filterByName("updateGestureTouchHeight")
-            .filterByParamTypes()
-            .firstOrNull()
-            ?.createAfterHook { param ->
-                if (remotePrefs.readChannelMode() != ChannelModes.EDGE) return@createAfterHook
-                val v = param.thisObject as? View ?: return@createAfterHook
-                runCatching {
-                    val cls = v.javaClass
-                    val rotationField = cls.getDeclaredField("mRotation").apply { isAccessible = true }
-                    val rotation = rotationField.getInt(v)
-                    if (rotation == 1 || rotation == 3) {
-                        val screenW = cls.getDeclaredField("mScreenWidth")
-                            .apply { isAccessible = true }.getInt(v)
-                        cls.getDeclaredField("mGestureTouchHeight")
-                            .apply { isAccessible = true }.setInt(v, (screenW * LANDSCAPE_BAND_FRACTION).toInt())
-                    }
-                }.onFailure { Log.w(TAG, "landscapeBand: ${it.message}") }
-            } ?: Log.w(TAG, "updateGestureTouchHeight NOT FOUND（横屏带维持原生 60%）")
     }
 
     private fun handleTouch(ev: MotionEvent, stub: View?): Boolean {
@@ -214,8 +165,8 @@ class EdgeGestureHook(
                 val inward = inwardDx(ev.rawX)
 
                 // 滑回边缘：整体重置（PRD 状态机"滑回边缘→待触发"；修 spike 锁存 bug）
-                if (swipeConfirmed && inward < SWIPE_CONFIRM_PX) {
-                    Log.i(TAG, "g#$gestureSeq RESET slide-back (inward=${inward.toInt()}px < ${SWIPE_CONFIRM_PX.toInt()})")
+                if (swipeConfirmed && inward < GestureThresholds.SWIPE_CONFIRM_PX) {
+                    Log.i(TAG, "g#$gestureSeq RESET slide-back (inward=${inward.toInt()}px < ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()})")
                     resetGesture()
                     return false
                 }
@@ -226,17 +177,17 @@ class EdgeGestureHook(
                     val angle = Math.toDegrees(
                         Math.atan2(dy.toDouble(), inward.toDouble())
                     ).toFloat()
-                    if (inward >= SWIPE_CONFIRM_PX && angle <= MAX_SWIPE_ANGLE_DEG) {
+                    if (inward >= GestureThresholds.SWIPE_CONFIRM_PX && angle <= GestureThresholds.MAX_SWIPE_ANGLE_DEG) {
                         swipeConfirmed = true
                         anchorX = ev.rawX
                         anchorY = ev.rawY
                         anchorT = ev.eventTime
-                        Log.i(TAG, "g#$gestureSeq swipe confirmed: inward=${inward.toInt()}px (>= ${SWIPE_CONFIRM_PX.toInt()}) angle=${angle.toInt()}")
+                        Log.i(TAG, "g#$gestureSeq swipe confirmed: inward=${inward.toInt()}px (>= ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()}) angle=${angle.toInt()}")
                     }
                 }
 
                 if (swipeConfirmed && !stallFired) {
-                    if (hypot(ev.rawX - anchorX, ev.rawY - anchorY) > STALL_RADIUS_PX) {
+                    if (hypot(ev.rawX - anchorX, ev.rawY - anchorY) > GestureThresholds.STALL_RADIUS_PX) {
                         // 显著位移：锚点随动重置计时
                         anchorX = ev.rawX
                         anchorY = ev.rawY
@@ -278,9 +229,10 @@ class EdgeGestureHook(
         // DOWN 已被触发区过滤保证在带内；实测轮六定稿——停顿过程中的滑动漂移不再
         // 影响呼出位置）。展开方向由 computeFanGeometry 按锚点半边自动确定。
         // 圆心 Y 若超出几何层可行带会被 computeFanGeometry 二次钳制（保形恒在屏内）。
+        // 横屏区已置空（B 路线），空区间时跳过钳制防 coerceIn 抛异常（横屏本就到不了这里）
         val (zoneTop, zoneBottom) = zoneBounds(dm)
         val anchorX = if (downX < dm.widthPixels / 2f) 0f else dm.widthPixels.toFloat()
-        val anchorY = downY.coerceIn(zoneTop, zoneBottom)
+        val anchorY = if (zoneTop < zoneBottom) downY.coerceIn(zoneTop, zoneBottom) else downY
         Log.i(TAG, "showFan: anchor=($anchorX, $anchorY) downY=$downY dwell=${dwellMs()}ms")
         val r = Runnable {
             pendingShow = null
@@ -330,12 +282,9 @@ class EdgeGestureHook(
     /** 触发区唯一定义源（DOWN 过滤与 postShowFan 钳制共用，避免两处各写一份漂移）。 */
     private fun zoneBounds(dm: DisplayMetrics): Pair<Float, Float> =
         if (dm.widthPixels > dm.heightPixels) {
-            // 横屏：白条触摸条 [0, 112dp]，上界受 GestureStubView 放宽带顶
-            // （(1-0.8)/2 短轴）约束——带外收不到事件，条顶约 108px 在 A 路线下不可达，
-            // B 路线（cover 直接收事件）落地后整条可达
-            val bandInset = dm.heightPixels * (1f - LANDSCAPE_BAND_FRACTION) / 2f
-            val stripBottom = LANDSCAPE_STRIP_HEIGHT_DP * dm.density
-            bandInset to stripBottom.coerceAtMost(dm.heightPixels.toFloat())
+            // B 路线（1B）：横屏触发整体移交 :ui cover 通道（隐藏条直接收事件，整条可达
+            // 含条顶 [0,108px) 死区），launcher 侧横屏区置空防双触发；原生返回带恢复系统默认
+            1f to 0f
         } else {
             (dm.heightPixels / 3f) to (dm.heightPixels * 2f / 3f)
         }

@@ -467,19 +467,20 @@ class ComposeFanHost(
             return
         }
         // 命中半径用几何层生效的快捷图标尺寸（跟随扇形图标收缩），与 computeQuickAppCenter
-        // 及渲染保持同一尺寸源；此前用 config 原始值，图标收缩后命中圈偏大错位
+        // 及渲染保持同一尺寸源；此前用 config 原始值，图标收缩后命中圈偏大错位。
+        // 注意：本方法在"无预选松手"时作为兜底调用——触点不在任何图标 0.7 图标距内时
+        // 静默返回（滑回取消的正常路径），不打日志避免与真点击混淆（实测轮 8 次滑回
+        // 全部被此阈值正确拒绝）
         val quickIconPx = geometry.quickIconSize * density
         val pxSpacing = quickIconPx * 0.35f
         val barPadding = quickIconPx * 0.5f
-
-        Log.d(TAG, "quickBarTap: touch=($x,$y) barX=${geometry.quickBarX.toInt()} barY=${geometry.quickBarY.toInt()}")
 
         for (i in quickAppsList.indices) {
             val cx = geometry.quickBarX + barPadding + i * (quickIconPx + pxSpacing) + quickIconPx / 2f
             val cy = geometry.quickBarY + barPadding + quickIconPx / 2f
             val d = sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy))
             if (d <= quickIconPx * 0.7f) {
-                Log.i(TAG, "quickSelected: ${quickAppsList[i].packageName}")
+                Log.i(TAG, "quickSelected: ${quickAppsList[i].packageName} (dist=${d.toInt()}px)")
                 onQuickAppSelected?.invoke(quickAppsList[i])
                 return
             }

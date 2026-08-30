@@ -50,14 +50,15 @@ private const val SCREEN_MARGIN_DP = 72f
 private const val LANDSCAPE_SCREEN_MARGIN_DP = 24f
 
 /**
- * 扇形几何（1A 实测修订）：圆心 = 呼出位置（PRD §9.5 行为规则 3"以最初触摸点为圆心"），
- * 半径自适应收窄保形不越屏。
+ * 扇形几何（1B 修订 2026-08-30，用户定稿原始设想）：碰到屏幕边缘调展开角，不缩半径。
  *
- * - 展开角固定（竖 150°/横 75°），以锚点水平轴上下对称
- * - 0.x 轮五"平移圆心保形"在横屏必然退化：短轴内可行带收缩后收敛为单点（y≈H/3），
- *   实测表现为"横屏呼出永远停在屏幕中间同一处、与触摸位置无关"。改按 PRD 字面：
- *   半径取 min(用户设置, 锚点上下可容纳)，圆心不再移动；竖屏高位呼出半径不变，
- *   低位呼出半径收窄但圆心贴手
+ * - 圆心 = 呼出位置（竖屏=初始触摸点高度；横屏由 B 路线通道固定为条中心，见 TurboLayout）
+ * - 展开角自适应：默认以锚点水平轴上下对称（竖 ±75°/横 ±37.5°）；触碰屏幕边缘的一侧
+ *   收窄至可容纳、另一侧放宽补足总角——弧长与图标间距不变，扇形向空侧倾斜
+ *   （0.x 轮五"平移圆心保形"与 1A"半径收窄"两条路均废弃）
+ * - 半径 = 用户设置（不再主动收窄）；仅双侧同时受限且总角塌缩至配置 60% 以下时
+ *   兜底收缩并按上下可容纳空间比例分配剩余总角
+ * - 单侧上限 acos(半图标/半径)：图标不得越过锚点后方（x 投影 ≥ 半图标）
  * - 快捷栏图标跟随扇形图标实际生效尺寸（PRD §9.5"与扇形应用图标大小一致，跟随"）
  */
 fun computeFanGeometry(
@@ -75,9 +76,7 @@ fun computeFanGeometry(
     val direction = if (anchor.x <= width / 2f) FanDirection.RIGHT else FanDirection.LEFT
 
     val span = if (isLandscape) config.landscapeSpanAngle else config.defaultSpanAngle
-    val startAngle = if (direction == FanDirection.RIGHT) -span / 2f else 180f - span / 2f
-    val endAngle = startAngle + span
-    val spanAngle = span
+    val halfSpan = span / 2f
 
     val outerRadiusConfig = if (isLandscape) config.landscapeOuterRadiusDp else config.outerRadiusDp
     val innerRadiusConfig = if (isLandscape) config.landscapeInnerRadiusDp else config.innerRadiusDp
@@ -88,19 +87,61 @@ fun computeFanGeometry(
     val outerCount = minOf(if (isLandscape) config.landscapeMaxAppsOuter else config.maxAppsOuter, appCount)
     val innerCount = (appCount - outerCount).coerceIn(0, if (isLandscape) config.landscapeMaxAppsInner else config.maxAppsInner)
 
-    // 快捷栏占位估算（供半径收缩预留下方空间；渲染用生效图标重算，估算偏大属保守）
+    // 快捷栏占位估算（供下侧房间预留；渲染用生效图标重算，估算偏大属保守）
     val quickList = quickApps.take(6)
     val estBarBlockPx = config.quickIconSizeDp * density * 2.6f   // barGap(0.6) + 栏高(icon+上下各 0.5 padding)
 
-    val maxAbsSin = abs(sin(Math.toRadians((span / 2f).toDouble())).toFloat()).coerceAtLeast(0.01f)
+    // ===== 展开角自适应 =====
+    // 半径先取配置值（不收窄）
+    var outerRadius = outerRadiusConfig * density
 
-    // PRD §9.5 半径自适应 + 行为规则 3：圆心 = 请求位置（不再平移），实际外圈半径 =
-    // min(用户设置, 锚点上下可容纳)
-    val roomAbove = anchor.y - marginPx
-    val roomBelow = height - marginPx - estBarBlockPx - anchor.y
-    val maxRByScreen = (minOf(roomAbove, roomBelow) / maxAbsSin).coerceAtLeast(0f)
-    val outerRadius = minOf(outerRadiusConfig * density, maxRByScreen)
-        .coerceAtLeast(config.minRadiusDp * density)
+    val roomAbove = (anchor.y - marginPx).coerceAtLeast(0f)
+    val roomBelow = (height - marginPx - estBarBlockPx - anchor.y).coerceAtLeast(0f)
+
+    // 单侧角上限：图标不得越过锚点后方（x 投影 ≥ 半图标），另设 85° 硬顶
+    val halfIconPx = (if (isLandscape) config.landscapeIconSizeDp else config.iconSizeDp) * density / 2f
+    fun sideCap(r: Float): Float = Math.toDegrees(
+        Math.acos((halfIconPx / r).coerceIn(0.02f, 0.98f).toDouble())
+    ).toFloat().coerceAtMost(85f)
+
+    // 该半径下单侧可容纳的最大角（房间投影）
+    fun sideMax(room: Float, r: Float): Float = if (r <= 1f) 0f else
+        Math.toDegrees(Math.asin((room / r).coerceIn(0f, 1f).toDouble())).toFloat()
+
+    var up = minOf(halfSpan, sideMax(roomAbove, outerRadius))
+    var dn = minOf(halfSpan, sideMax(roomBelow, outerRadius))
+    // 受限侧让出的预算补到另一侧（总角守恒 → 弧长/图标间距不变）
+    if (up < halfSpan) {
+        dn = minOf(span - up, sideMax(roomBelow, outerRadius), sideCap(outerRadius))
+    } else if (dn < halfSpan) {
+        up = minOf(span - dn, sideMax(roomAbove, outerRadius), sideCap(outerRadius))
+    }
+
+    // 双侧同时受限兜底：总角塌缩（< 配置 60%）时收缩半径，按房间比例恢复最小总角
+    val minTotal = span * 0.6f
+    if (up + dn < minTotal && roomAbove + roomBelow > 0f) {
+        val fracUp = roomAbove / (roomAbove + roomBelow)
+        val wantUp = (minTotal * fracUp).coerceIn(2f, minTotal - 2f)
+        val wantDn = minTotal - wantUp
+        val rFit = minOf(
+            roomAbove / degSin(wantUp),
+            roomBelow / degSin(wantDn)
+        )
+        outerRadius = minOf(outerRadius, rFit).coerceAtLeast(config.minRadiusDp * density)
+        up = minOf(wantUp, sideMax(roomAbove, outerRadius))
+        dn = minOf(wantDn, sideMax(roomBelow, outerRadius))
+    }
+    // 房间数据异常的极端防御：退回对称默认
+    if (up + dn < 4f) {
+        up = halfSpan
+        dn = halfSpan
+    }
+
+    // 上下不对称展开角 → 起止角（RIGHT：[-up, +dn]；LEFT：[180-dn, 180+up]）
+    val startAngle = if (direction == FanDirection.RIGHT) -up else 180f - dn
+    val endAngle = startAngle + up + dn
+    val spanAngle = up + dn
+
     var innerRadius = innerRadiusConfig * density
     if (innerRadius > outerRadius * 0.8f || innerRadius < 50f * density) {
         innerRadius = outerRadius * 0.75f
@@ -163,6 +204,8 @@ fun computeFanGeometry(
         isLandscape = isLandscape
     )
 }
+
+private fun degSin(deg: Float): Float = sin(Math.toRadians(deg.toDouble())).toFloat()
 
 /** [startAngle, endAngle] 扫描区间内 sin/cos 的极值（4° 步进采样，布局精度足够）。 */
 private fun sweepExtremes(startAngle: Float, endAngle: Float): FloatArray {

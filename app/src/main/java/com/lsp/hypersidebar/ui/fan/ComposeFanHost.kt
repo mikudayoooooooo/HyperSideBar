@@ -102,6 +102,13 @@ class ComposeFanHost(
                 .also { windowManager = it }
         density = context.resources.displayMetrics.density
         config = buildFanConfig()
+        // 诊断（迭代二 P5）：呼出时回显实际读到的配置值——对照滑条改动可判定
+        // hook 侧 prefs 是否实时同步（stale=快照不更新）
+        Log.i(
+            TAG,
+            "config: icon=${config.iconSizeDp} inner=${config.innerRadiusDp}d outer=${config.outerRadiusDp}d " +
+                "dead=${config.deadZoneDp}d outerN=${config.maxAppsOuter} innerN=${config.maxAppsInner} landscape=$isLandscape"
+        )
         pendingInput = GeometryInput(anchorX, anchorY, apps, quickApps, isLandscape)
         resetInteractionState()
 

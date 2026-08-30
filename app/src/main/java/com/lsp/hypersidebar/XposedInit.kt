@@ -1,5 +1,6 @@
 package com.lsp.hypersidebar
 
+import android.content.SharedPreferences
 import android.util.Log
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.*
@@ -32,7 +33,8 @@ class XposedInit : XposedModule() {
             param.packageName == "com.miui.securitycenter" && procName.endsWith(":ui") -> {
                 // 横屏 B 路线触发端 + 竖屏小白条隐藏穿透宿主 + 执行端（fan 选中动作本进程直执行）
                 if (turboLayoutHook == null) {
-                    turboLayoutHook = TurboLayout(getRemotePreferences("hyperSidebar"))
+                    val prefs = remotePrefsWithProbe()
+                    turboLayoutHook = TurboLayout(prefs)
                 }
                 if (freeformRelayHook == null) {
                     freeformRelayHook = FreeformRelayHook()
@@ -42,12 +44,28 @@ class XposedInit : XposedModule() {
             param.packageName == "com.miui.home" && procName == "com.miui.home" -> {
                 // 竖屏边缘手势通道（内滑+停顿零干扰透传；横屏触发已移交 :ui B 路线）
                 if (edgeGestureHook == null) {
-                    edgeGestureHook = EdgeGestureHook(getRemotePreferences("hyperSidebar"))
+                    val prefs = remotePrefsWithProbe()
+                    edgeGestureHook = EdgeGestureHook(prefs)
                 }
                 initHooks(edgeGestureHook!!)
             }
             else -> Log.d(TAG, "Skip package/process: ${param.packageName} / $procName")
         }
+    }
+
+    /**
+     * 诊断探针（迭代二 P5）：hook 侧 remotePrefs 是否接收 App 写入的实时推送。
+     * API 契约=hook 侧只读且无推送说明；若滑条改动后本探针无日志、呼出配置仍为旧值，
+     * 即证实"启动时快照、不更新"——需要专门的同步通道（见 iteration2-perf-plan §7.3）。
+     */
+    private fun remotePrefsWithProbe(): SharedPreferences {
+        val prefs = getRemotePreferences("hyperSidebar")
+        runCatching {
+            prefs.registerOnSharedPreferenceChangeListener { _, key ->
+                Log.i(TAG, "remote prefs push: $key")
+            }
+        }.onFailure { Log.w(TAG, "remote prefs listener register failed: ${it.message}") }
+        return prefs
     }
 
     private fun currentProcessName(): String {

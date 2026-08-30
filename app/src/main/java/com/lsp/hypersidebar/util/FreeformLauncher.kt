@@ -10,6 +10,12 @@ private const val TAG = "FreeformLauncher"
 
 object FreeformLauncher {
 
+    /** 模块自身包名：Intent(context, Class) 会把 component 包名绑到宿主进程包（:ui 里
+     *  =com.miui.securitycenter，实测系统 resolve "does not exist" result -92 且
+     *  startActivityAsUser 静默"成功"）——activity 类随模块代码加载进宿主，但 manifest
+     *  注册在模块包，跨进程拉起必须显式用模块包名。 */
+    const val MODULE_PACKAGE = "com.lsp.hypersidebar"
+
     fun launch(context: Context, packageName: String) {
         val clsName = getMainActivity(context, packageName)
         if (clsName == null) {
@@ -60,7 +66,11 @@ object FreeformLauncher {
      * getActivityOptions 返回 null（无资格）或反射失败时降级普通全屏启动，功能不中断。
      */
     fun launchSelfFreeform(context: Context, activity: Class<*>) {
-        val intent = Intent(context, activity).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        // 显式模块包名（勿用 Intent(context, Class)——宿主进程包名错误，见 MODULE_PACKAGE 注释）
+        val intent = Intent().apply {
+            setClassName(MODULE_PACKAGE, activity.name)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
         try {
             val cls = Class.forName("android.util.MiuiMultiWindowUtils")
             val options = getActivityOptions(cls, context, context.packageName)

@@ -1,5 +1,6 @@
 package com.lsp.hypersidebar.ui.settings
 
+import com.lsp.hypersidebar.prefs.savePref
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
@@ -39,6 +40,7 @@ import top.yukonga.miuix.kmp.basic.SearchBar
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 private data class AppItem(
     val label: String,
@@ -180,7 +182,11 @@ private fun AppList(
         return
     }
     val firstSystemIndex = remember(apps) { apps.indexOfFirst { it.isSystem } }
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .overScrollVertical()
+    ) {
         items(apps.size, key = { apps[it].packageName }) { index ->
             val app = apps[index]
             if (showGroups) {

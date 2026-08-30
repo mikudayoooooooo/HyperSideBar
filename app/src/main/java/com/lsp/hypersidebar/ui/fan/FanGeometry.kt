@@ -5,7 +5,6 @@ import androidx.compose.ui.unit.IntSize
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
-import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -40,10 +39,27 @@ data class FanGeometry(
     val items: List<FanItemLayout>,
     val apps: List<FanAppInfo>,
     val quickApps: List<FanAppInfo>,
-    val activeZonePx: Float,
     val isLandscape: Boolean
 )
 
+/** 屏幕安全边距（PRD §9.5：竖屏 72dp；横屏独立取值见下）。 */
+private const val SCREEN_MARGIN_DP = 72f
+
+/** 横屏边距：短轴空间紧张（1080px 内 72dp 边距+扇形投影+快捷栏超出全高），派生值按方向缩至 24dp。 */
+private const val LANDSCAPE_SCREEN_MARGIN_DP = 24f
+
+/**
+ * 扇形几何（1B 修订 2026-08-30，用户定稿原始设想）：碰到屏幕边缘调展开角，不缩半径。
+ *
+ * - 圆心 = 呼出位置（竖屏=初始触摸点高度；横屏由 B 路线通道固定为条中心，见 TurboLayout）
+ * - 展开角自适应：默认以锚点水平轴上下对称（竖 ±75°/横 ±37.5°）；触碰屏幕边缘的一侧
+ *   收窄至可容纳、另一侧放宽补足总角——弧长与图标间距不变，扇形向空侧倾斜
+ *   （0.x 轮五"平移圆心保形"与 1A"半径收窄"两条路均废弃）
+ * - 半径 = 用户设置（不再主动收窄）；仅双侧同时受限且总角塌缩至配置 60% 以下时
+ *   兜底收缩并按上下可容纳空间比例分配剩余总角
+ * - 单侧上限 acos(半图标/半径)：图标不得越过锚点后方（x 投影 ≥ 半图标）
+ * - 快捷栏图标跟随扇形图标实际生效尺寸（PRD §9.5"与扇形应用图标大小一致，跟随"）
+ */
 fun computeFanGeometry(
     anchor: Offset,
     screenSize: IntSize,
@@ -59,88 +75,114 @@ fun computeFanGeometry(
     val direction = if (anchor.x <= width / 2f) FanDirection.RIGHT else FanDirection.LEFT
 
     val span = if (isLandscape) config.landscapeSpanAngle else config.defaultSpanAngle
-
-    val topSpace = anchor.y
-    val bottomSpace = height - anchor.y
-    val totalSpace = topSpace + bottomSpace
-    val centerOffset = if (totalSpace > 0f) {
-        (bottomSpace - topSpace) / totalSpace * span / 2f
-    } else 0f
-
-    val (initStart, initEnd) = when (direction) {
-        FanDirection.RIGHT -> (centerOffset - span / 2f) to (centerOffset + span / 2f)
-        FanDirection.LEFT  -> (180f + centerOffset - span / 2f) to (180f + centerOffset + span / 2f)
-    }
-
-    val iconPx = (if (isLandscape) config.landscapeIconSizeDp else config.iconSizeDp) * density
-    val maxRadius = computeMaxRadius(anchor, width, height, initStart, initEnd, iconPx, density)
-    val effectiveRadius = min(config.outerRadiusDp * density, maxRadius)
-
-    val (startAngle, endAngle) = computeValidAngleRange(
-        anchor, effectiveRadius, initStart, initEnd, height, iconPx * 0.5f
-    )
-    val spanAngle = endAngle - startAngle
+    val halfSpan = span / 2f
 
     val outerRadiusConfig = if (isLandscape) config.landscapeOuterRadiusDp else config.outerRadiusDp
     val innerRadiusConfig = if (isLandscape) config.landscapeInnerRadiusDp else config.innerRadiusDp
-
-    var outerRadius = effectiveRadius.coerceAtMost(outerRadiusConfig * density)
-    var innerRadius = innerRadiusConfig * density
-
-    if (innerRadius > outerRadius * 0.8f || innerRadius < 50f * density) {
-        innerRadius = outerRadius * 0.75f
-    }
-    var useDualRing = config.useDualRing
-    if (outerRadius < config.minRadiusDp * density) {
-        useDualRing = false
-        innerRadius = outerRadius * 0.6f
-    }
+    // 横屏短轴空间紧张：边距按方向独立取值（72dp 为竖屏派生值，横屏缩至 24dp）
+    val marginPx = (if (isLandscape) LANDSCAPE_SCREEN_MARGIN_DP else SCREEN_MARGIN_DP) * density
 
     val appCount = apps.size
     val outerCount = minOf(if (isLandscape) config.landscapeMaxAppsOuter else config.maxAppsOuter, appCount)
     val innerCount = (appCount - outerCount).coerceIn(0, if (isLandscape) config.landscapeMaxAppsInner else config.maxAppsInner)
 
+    // 快捷栏占位估算（供下侧房间预留；渲染用生效图标重算，估算偏大属保守）
+    val quickList = quickApps.take(6)
+    val estBarBlockPx = config.quickIconSizeDp * density * 2.6f   // barGap(0.6) + 栏高(icon+上下各 0.5 padding)
+
+    // ===== 展开角自适应 =====
+    // 半径先取配置值（不收窄）
+    var outerRadius = outerRadiusConfig * density
+
+    val roomAbove = (anchor.y - marginPx).coerceAtLeast(0f)
+    val roomBelow = (height - marginPx - estBarBlockPx - anchor.y).coerceAtLeast(0f)
+
+    // 单侧角上限：图标不得越过锚点后方（x 投影 ≥ 半图标），另设 85° 硬顶
+    val halfIconPx = (if (isLandscape) config.landscapeIconSizeDp else config.iconSizeDp) * density / 2f
+    fun sideCap(r: Float): Float = Math.toDegrees(
+        Math.acos((halfIconPx / r).coerceIn(0.02f, 0.98f).toDouble())
+    ).toFloat().coerceAtMost(85f)
+
+    // 该半径下单侧可容纳的最大角（房间投影）
+    fun sideMax(room: Float, r: Float): Float = if (r <= 1f) 0f else
+        Math.toDegrees(Math.asin((room / r).coerceIn(0f, 1f).toDouble())).toFloat()
+
+    var up = minOf(halfSpan, sideMax(roomAbove, outerRadius))
+    var dn = minOf(halfSpan, sideMax(roomBelow, outerRadius))
+    // 受限侧让出的预算补到另一侧（总角守恒 → 弧长/图标间距不变）
+    if (up < halfSpan) {
+        dn = minOf(span - up, sideMax(roomBelow, outerRadius), sideCap(outerRadius))
+    } else if (dn < halfSpan) {
+        up = minOf(span - dn, sideMax(roomAbove, outerRadius), sideCap(outerRadius))
+    }
+
+    // 双侧同时受限兜底：总角塌缩（< 配置 60%）时收缩半径，按房间比例恢复最小总角
+    val minTotal = span * 0.6f
+    if (up + dn < minTotal && roomAbove + roomBelow > 0f) {
+        val fracUp = roomAbove / (roomAbove + roomBelow)
+        val wantUp = (minTotal * fracUp).coerceIn(2f, minTotal - 2f)
+        val wantDn = minTotal - wantUp
+        val rFit = minOf(
+            roomAbove / degSin(wantUp),
+            roomBelow / degSin(wantDn)
+        )
+        outerRadius = minOf(outerRadius, rFit).coerceAtLeast(config.minRadiusDp * density)
+        up = minOf(wantUp, sideMax(roomAbove, outerRadius))
+        dn = minOf(wantDn, sideMax(roomBelow, outerRadius))
+    }
+    // 房间数据异常的极端防御：退回对称默认
+    if (up + dn < 4f) {
+        up = halfSpan
+        dn = halfSpan
+    }
+
+    // 上下不对称展开角 → 起止角（RIGHT：[-up, +dn]；LEFT：[180-dn, 180+up]）
+    val startAngle = if (direction == FanDirection.RIGHT) -up else 180f - dn
+    val endAngle = startAngle + up + dn
+    val spanAngle = up + dn
+
+    var innerRadius = innerRadiusConfig * density
+    if (innerRadius > outerRadius * 0.8f || innerRadius < 50f * density) {
+        innerRadius = outerRadius * 0.75f
+    }
+
+    val settledAnchor = Offset(anchor.x, anchor.y)
+
     var iconSizeDp = if (isLandscape) config.landscapeIconSizeDp else config.iconSizeDp
     if (appCount > 1 && spanAngle > 0f) {
         iconSizeDp = fitIconSize(outerCount, innerCount, spanAngle, outerRadius, innerRadius, iconSizeDp, density)
     }
-    val finalIconPx = iconSizeDp * density
+    // 快捷栏图标跟随扇形实际生效图标（PRD §9.5"与扇形应用图标大小一致，跟随"）
+    val quickIconSizeDpEff = iconSizeDp
 
     val items = layoutFanItems(
         apps = apps, outerCount = outerCount, innerCount = innerCount,
-        anchor = anchor, startAngle = startAngle, spanAngle = spanAngle,
-        innerRadius = innerRadius, outerRadius = outerRadius
+        anchor = settledAnchor, startAngle = startAngle, spanAngle = spanAngle,
+        innerRadius = innerRadius, outerRadius = outerRadius,
+        direction = direction
     )
 
-    val quickIconPx = config.quickIconSizeDp * density
-    val quickAppsList = quickApps.take(6)
-    val quickSpacing = quickIconPx * 0.35f
-    val quickBarPadding = quickIconPx * 0.5f
-    val quickBarContentWidth = if (quickAppsList.isNotEmpty()) {
-        quickAppsList.size * quickIconPx + (quickAppsList.size - 1) * quickSpacing + quickBarPadding * 2
+    // 快捷栏固定在扇形下方（PRD"快捷方式入口在半圆的下面"）；半径已按上下空间收缩 ⇒
+    // fanBottom 天然在屏内，此处 coerce 仅作防御。扫描极值不能用端点：左向扇形 startAngle
+    // 的 sin 为正，端点命名易反（见 sweepExtremes 注释历史）
+    val (_, maxSin, minCos, maxCos) = sweepExtremes(startAngle, endAngle)
+    val effQuickIconPx = quickIconSizeDpEff * density
+    val effSpacing = effQuickIconPx * 0.35f
+    val effPadding = effQuickIconPx * 0.5f
+    val effBarWidth = if (quickList.isNotEmpty()) {
+        quickList.size * effQuickIconPx + (quickList.size - 1) * effSpacing + effPadding * 2f
     } else 0f
-    val quickBarContentHeight = quickIconPx + quickBarPadding * 2
+    val effBarHeight = effQuickIconPx + effPadding * 2f
+    val fanLeftX = settledAnchor.x + outerRadius * minCos
+    val fanRightX = settledAnchor.x + outerRadius * maxCos
+    val baseY = settledAnchor.y + outerRadius * maxSin + effQuickIconPx * 0.6f
+    val baseX = (fanLeftX + fanRightX) / 2f - effBarWidth / 2f
 
-    val fanTopY = anchor.y + outerRadius * sin(Math.toRadians(startAngle.toDouble())).toFloat()
-    val fanBottomY = anchor.y + outerRadius * sin(Math.toRadians(endAngle.toDouble())).toFloat()
-    val fanLeftX = anchor.x + outerRadius * cos(Math.toRadians(startAngle.toDouble())).toFloat()
-    val fanRightX = anchor.x + outerRadius * cos(Math.toRadians(endAngle.toDouble())).toFloat()
-
-    val barGap = quickIconPx * 0.6f
-    val baseY = if (isLandscape) fanBottomY + barGap else fanTopY - quickBarContentHeight - barGap
-    val baseX = (fanLeftX + fanRightX) / 2f - quickBarContentWidth / 2f
-
-    val quickBarX = baseX.coerceIn(quickBarPadding, width - quickBarContentWidth - quickBarPadding)
-    val quickBarY = baseY.coerceIn(quickBarPadding, height - quickBarContentHeight - quickBarPadding)
-    val quickBarVertical = false
-
-    val quickBarCenterX = quickBarX + quickBarContentWidth / 2f
-    val quickBarCenterY = quickBarY + quickBarContentHeight / 2f
-    val quickBarDistance = distance(anchor, Offset(quickBarCenterX, quickBarCenterY))
-    val activeZonePx = maxOf(config.activeZoneDp * density, quickBarDistance + quickIconPx * 0.8f)
+    val quickBarX = baseX.coerceIn(effPadding, (width - effBarWidth - effPadding).coerceAtLeast(effPadding))
+    val quickBarY = baseY.coerceIn(effPadding, (height - effBarHeight - effPadding).coerceAtLeast(effPadding))
 
     return FanGeometry(
-        anchor = anchor,
+        anchor = settledAnchor,
         direction = direction,
         startAngle = startAngle,
         endAngle = endAngle,
@@ -148,76 +190,52 @@ fun computeFanGeometry(
         innerRadius = innerRadius,
         outerRadius = outerRadius,
         iconSize = iconSizeDp,
-        quickIconSize = config.quickIconSizeDp,
+        quickIconSize = quickIconSizeDpEff,
         quickBarX = quickBarX,
         quickBarY = quickBarY,
-        quickBarVertical = quickBarVertical,
+        quickBarVertical = false,
         items = items,
         apps = apps,
         quickApps = quickApps,
-        activeZonePx = activeZonePx,
         isLandscape = isLandscape
     )
 }
 
-private fun computeMaxRadius(
-    anchor: Offset,
-    width: Float,
-    height: Float,
-    startAngle: Float,
-    endAngle: Float,
-    iconSize: Float,
-    density: Float
-): Float {
-    val margin = 48f * density * 1.5f
-    var maxR = Float.MAX_VALUE
-    val step = maxOf(1f, (endAngle - startAngle) / 20f)
-    var angle = startAngle
+private fun degSin(deg: Float): Float = sin(Math.toRadians(deg.toDouble())).toFloat()
 
-    while (angle <= endAngle) {
-        val c = cos(Math.toRadians(angle.toDouble())).toFloat()
-        val s = sin(Math.toRadians(angle.toDouble())).toFloat()
-
-        val toRight  = if (c >  0.01f) (width  - margin - anchor.x) / c else Float.MAX_VALUE
-        val toLeft   = if (c < -0.01f) (margin - anchor.x) / c else Float.MAX_VALUE
-        val toBottom = if (s >  0.01f) (height - margin - anchor.y) / s else Float.MAX_VALUE
-        val toTop    = if (s < -0.01f) (margin - anchor.y) / s else Float.MAX_VALUE
-
-        val r = minOf(toRight, toLeft, toBottom, toTop)
-        if (r > 0 && r < maxR) maxR = r
-        angle += step
+/** [startAngle, endAngle] 扫描区间内 sin/cos 的极值（4° 步进采样，布局精度足够）。 */
+private fun sweepExtremes(startAngle: Float, endAngle: Float): FloatArray {
+    var minSin = 1f
+    var maxSin = -1f
+    var minCos = 1f
+    var maxCos = -1f
+    fun fold(angle: Float) {
+        val rad = Math.toRadians(angle.toDouble())
+        val s = sin(rad).toFloat()
+        val c = cos(rad).toFloat()
+        if (s < minSin) minSin = s
+        if (s > maxSin) maxSin = s
+        if (c < minCos) minCos = c
+        if (c > maxCos) maxCos = c
     }
-
-    return if (maxR == Float.MAX_VALUE) 300f else maxR
+    val step = maxOf(1f, (endAngle - startAngle) / 90f)
+    var a = startAngle
+    while (a <= endAngle) {
+        fold(a)
+        a += step
+    }
+    fold(endAngle)   // 循环可能因步进跳过终点
+    return floatArrayOf(minSin, maxSin, minCos, maxCos)
 }
 
-private fun computeValidAngleRange(
-    anchor: Offset,
-    radius: Float,
-    initStart: Float,
-    initEnd: Float,
-    height: Float,
-    margin: Float
-): Pair<Float, Float> {
-    if (radius <= 0f) return initStart to initEnd
-
-    val topRatio = ((margin - anchor.y) / radius).coerceIn(-1f, 1f)
-    val bottomRatio = ((height - margin - anchor.y) / radius).coerceIn(-1f, 1f)
-
-    val topAngle = Math.toDegrees(Math.asin(topRatio.toDouble())).toFloat()
-    val bottomAngle = Math.toDegrees(Math.asin(bottomRatio.toDouble())).toFloat()
-
-    val adjustedStart = maxOf(initStart, topAngle)
-    val adjustedEnd = minOf(initEnd, bottomAngle)
-
-    return if (adjustedEnd - adjustedStart < 30f) {
-        val mid = (initStart + initEnd) / 2f
-        val halfSpan = maxOf(15f, (adjustedEnd - adjustedStart) / 2f)
-        (mid - halfSpan) to (mid + halfSpan)
-    } else {
-        adjustedStart to adjustedEnd
-    }
-}
+/** 供设置页显示"实际生效图标尺寸"：与扇形渲染同一弦长收缩逻辑（数量按用户上限取最坏情况）。 */
+fun effectiveIconSizeDp(
+    outerCount: Int, innerCount: Int, spanAngleDeg: Float,
+    outerRadiusDp: Float, innerRadiusDp: Float, targetDp: Float, density: Float
+): Float = fitIconSize(
+    outerCount, innerCount, spanAngleDeg,
+    outerRadiusDp * density, innerRadiusDp * density, targetDp, density
+)
 
 private fun fitIconSize(
     outerCount: Int,
@@ -261,7 +279,8 @@ private fun layoutFanItems(
     startAngle: Float,
     spanAngle: Float,
     innerRadius: Float,
-    outerRadius: Float
+    outerRadius: Float,
+    direction: FanDirection
 ): List<FanItemLayout> {
     if (apps.isEmpty()) return emptyList()
 
@@ -277,8 +296,16 @@ private fun layoutFanItems(
         val countInRing = if (isOuter) outerCount else innerCount
         val step = if (isOuter) outerStep else innerStep
 
+        // 左右镜像对称（2026-08-30 用户定稿，取代 PRD 旧"顺时针"字面）：
+        // 两侧首位图标恒在展开区顶部、自上而下——RIGHT 角度自 startAngle 递增
+        // （-up→+dn，顶部→底部），LEFT 自 endAngle 递减（180+up→180-dn，顶部→底部）；
+        // 单项仍居扇区中线上
         val angle = if (countInRing > 1) {
-            startAngle + step * ringIndex + step / 2f
+            if (direction == FanDirection.LEFT) {
+                (startAngle + spanAngle) - step * ringIndex - step / 2f
+            } else {
+                startAngle + step * ringIndex + step / 2f
+            }
         } else {
             startAngle + spanAngle / 2f
         }

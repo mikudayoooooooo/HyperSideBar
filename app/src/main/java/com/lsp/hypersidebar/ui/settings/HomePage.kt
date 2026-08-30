@@ -4,7 +4,6 @@ import android.content.SharedPreferences
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,111 +12,74 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
+import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.theme.LocalSemanticColors
-import io.github.libxposed.service.XposedService
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.preference.ArrowPreference
-import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-
-private const val SCOPE_PACKAGE = "com.miui.securitycenter"
+import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 @Composable
 internal fun HomePage(
     prefs: SharedPreferences,
     prefsRevision: Int,
     status: ModuleStatus,
-    service: XposedService?,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    var enabled by remember(prefs, prefsRevision) {
-        mutableStateOf(prefs.getBoolean(PrefKeys.ENABLED, true))
+    // 降级/熔断状态（1C：hook 侧写入 remotePrefs）；revision 变化驱动实时刷新。
+    // 熔断按进程分键（home/ui），任一端熔断即显示；显示优先级：熔断 > 降级
+    val passthroughDegraded = remember(prefs, prefsRevision) {
+        runCatching { prefs.getBoolean(PrefKeys.PASSTHROUGH_DEGRADED, false) }.getOrDefault(false)
     }
-    val frameworkName by produceState(
-        initialValue = context.getString(R.string.unknown),
-        key1 = service
-    ) {
-        value = withContext(Dispatchers.IO) {
-            runCatching { service?.frameworkName?.toString() }.getOrNull()
-                ?: context.getString(R.string.unknown)
-        }
+    val circuitOpen = remember(prefs, prefsRevision) {
+        runCatching {
+            prefs.getBoolean(PrefKeys.CIRCUIT_OPEN_HOME, false) ||
+                prefs.getBoolean(PrefKeys.CIRCUIT_OPEN_UI, false)
+        }.getOrDefault(false)
     }
-    val frameworkVersion by produceState(
-        initialValue = "--",
-        key1 = service
-    ) {
-        value = withContext(Dispatchers.IO) {
-            runCatching { service?.frameworkVersion?.toString() }.getOrNull() ?: "--"
-        }
-    }
-    val apiVersion by produceState(
-        initialValue = "--",
-        key1 = service
-    ) {
-        value = withContext(Dispatchers.IO) {
-            runCatching { service?.apiVersion?.toString() }.getOrNull() ?: "--"
-        }
-    }
-
-
     LazyColumn(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .overScrollVertical(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        item { SmallTitle(text = stringResource(R.string.module_section)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                ModuleStatusComponent(
-                    status = status,
-                    onClick = if (status == ModuleStatus.ACTIVE) null else {
-                        { openLsposedManager(context) }
-                    }
-                )
-                SwitchPreference(
-                    title = stringResource(R.string.module_enabled),
-                    summary = stringResource(R.string.module_enabled_summary),
-                    checked = enabled,
-                    onCheckedChange = {
-                        enabled = it
-                        prefs.savePref(PrefKeys.ENABLED, it)
-                    }
-                )
+        if (status == ModuleStatus.INACTIVE) {
+            item { SmallTitle(text = stringResource(R.string.module_section)) }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    ModuleStatusComponent(status = status)
+                }
             }
         }
 
-        item { SmallTitle(text = stringResource(R.string.framework_info)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    BasicComponent(
-                        title = stringResource(R.string.framework_name),
-                        summary = frameworkName
+        if (circuitOpen) {
+            item { SmallTitle(text = stringResource(R.string.module_section)) }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    CircuitStatusComponent(
+                        onRetry = {
+                            // 手动重试：写时间戳，hook 侧比较 resetAt > 本端熔断时刻即解除
+                            //（launcher=下次边缘呼出，:ui=2s 看门狗内）
+                            prefs.edit()
+                                .putLong(PrefKeys.CIRCUIT_RESET_AT, System.currentTimeMillis())
+                                .commit()
+                        }
                     )
-                    BasicComponent(
-                        title = stringResource(R.string.framework_version),
-                        summary = frameworkVersion
-                    )
-                    BasicComponent(
-                        title = stringResource(R.string.api_version),
-                        summary = apiVersion
-                    )
+                }
+            }
+        } else if (passthroughDegraded) {
+            item { SmallTitle(text = stringResource(R.string.module_section)) }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    DegradedStatusComponent()
                 }
             }
         }
@@ -133,12 +95,43 @@ internal fun HomePage(
 }
 
 @Composable
-private fun ModuleStatusComponent(
-    status: ModuleStatus,
-    onClick: (() -> Unit)?
-) {
+private fun DegradedStatusComponent() {
+    BasicComponent(
+        title = stringResource(R.string.passthrough_degraded),
+        summary = stringResource(R.string.passthrough_degraded_summary),
+        startAction = {
+            Box(
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(MiuixTheme.colorScheme.error)
+            )
+        }
+    )
+}
+
+@Composable
+private fun CircuitStatusComponent(onRetry: () -> Unit) {
+    BasicComponent(
+        title = stringResource(R.string.circuit_open),
+        summary = stringResource(R.string.circuit_open_summary),
+        startAction = {
+            Box(
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(MiuixTheme.colorScheme.error)
+            )
+        },
+        onClick = onRetry
+    )
+}
+
+@Composable
+internal fun ModuleStatusComponent(status: ModuleStatus) {
     val semantic = LocalSemanticColors.current
-    val error = MiuixTheme.colorScheme.error
     val (accent, title, summary) = when (status) {
         ModuleStatus.ACTIVE -> Triple(
             semantic.success,
@@ -146,14 +139,9 @@ private fun ModuleStatusComponent(
             stringResource(R.string.module_active_summary)
         )
         ModuleStatus.INACTIVE -> Triple(
-            error,
+            MiuixTheme.colorScheme.error,
             stringResource(R.string.module_inactive),
             stringResource(R.string.deactivation_hint)
-        )
-        ModuleStatus.UNKNOWN -> Triple(
-            MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            stringResource(R.string.checking_module),
-            stringResource(R.string.checking_module_summary)
         )
     }
 
@@ -168,7 +156,6 @@ private fun ModuleStatusComponent(
                     .clip(CircleShape)
                     .background(accent)
             )
-        },
-        onClick = onClick
+        }
     )
 }

@@ -1,5 +1,7 @@
 package com.lsp.hypersidebar
 
+import com.lsp.hypersidebar.prefs.savePref
+import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.util.Log
@@ -15,8 +17,6 @@ import com.lsp.hypersidebar.theme.HyperSidebarTheme
 import com.lsp.hypersidebar.theme.ThemeMode
 import com.lsp.hypersidebar.theme.ThemeModes
 import com.lsp.hypersidebar.ui.settings.MainScreen
-import com.lsp.hypersidebar.ui.settings.PrefKeys
-import com.lsp.hypersidebar.ui.settings.savePref
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 
@@ -37,7 +37,11 @@ class MainActivity : ComponentActivity() {
             override fun onServiceBind(service: XposedService) {
                 Log.d(TAG, "XposedService bound")
                 xposedService = service
-                remotePrefs = service.getRemotePreferences("hyperSidebar")
+                // getRemotePreferences 是一次性同步 binder 拉取全量快照，挪出主线程
+                Thread {
+                    val prefs = service.getRemotePreferences("hyperSidebar")
+                    runOnUiThread { remotePrefs = prefs }
+                }.start()
             }
 
             override fun onServiceDied(service: XposedService) {

@@ -90,10 +90,15 @@ data class ShortcutAction(
  */
 object ShortcutStore {
 
-    private const val KEY = "shortcut_actions"
+    private val KEY = com.lsp.hypersidebar.prefs.PrefKeys.SHORTCUT_ACTIONS
     private const val TOOLBOX_PACKAGE = "com.miui.securitycenter"
     private const val TOOLBOX_ID = "__toolbox__"
-    const val MAX_USER_SHORTCUTS = 5
+
+    /**
+     * 用户快捷方式存储上限（PRD §7.1：快捷栏上限 6 个**含占位**——占位在场时运行时
+     * 只取前 5 个用户项，占位隐藏时 6 个全上；存储上限取 6 才能不丢第 6 项）。
+     */
+    const val MAX_USER_SHORTCUTS = 6
 
     /**
      * 从 SharedPreferences 读取所有用户快捷方式（按 order 排序）。
@@ -203,8 +208,8 @@ object ShortcutStore {
     }
 
     /**
-     * 构建运行时快捷栏完整列表：
-     * 用户启用的快捷方式 + 条件性 TOOLBOX 内置项。
+     * 构建运行时快捷栏完整列表（PRD §7.1：面板占位固定第一位，无面板时用户项前移）：
+     * 条件性 TOOLBOX 内置项（第一位）+ 用户启用的快捷方式。
      *
      * @param toolboxAvailable 当前场景是否支持视频/游戏面板
      * @param toolboxLabel 面板显示名称（游戏工具箱/视频工具箱/打开面板）
@@ -216,12 +221,7 @@ object ShortcutStore {
     ): List<ShortcutAction> {
         val result = mutableListOf<ShortcutAction>()
 
-        // 用户启用的快捷方式
-        loadUserShortcuts(prefs)
-            .filter { it.enabled }
-            .forEach { result.add(it) }
-
-        // 条件性内置 TOOLBOX 项
+        // 条件性内置 TOOLBOX 项（第一位）
         if (toolboxAvailable) {
             result.add(ShortcutAction(
                 id = TOOLBOX_ID,
@@ -232,6 +232,13 @@ object ShortcutStore {
                 packageName = TOOLBOX_PACKAGE
             ))
         }
+
+        // 用户启用的快捷方式：栏上限 6 含占位（PRD §7.1）——占位在场取 5 个，隐藏时 6 个全上
+        val maxUser = if (toolboxAvailable) 5 else 6
+        loadUserShortcuts(prefs)
+            .filter { it.enabled }
+            .take(maxUser)
+            .forEach { result.add(it) }
 
         return result
     }

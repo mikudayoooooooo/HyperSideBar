@@ -63,6 +63,9 @@ private const val TAG = "AllAppsActivity"
 private const val PREFS_NAME = "hyperSidebar_prefs"
 private const val MAX_DATA_WAIT_MS = 1500L
 
+/** 磁贴圆角提为常量：避免每磁贴每次重组重复分配 Shape。 */
+private val TILE_SHAPE = RoundedCornerShape(14.dp)
+
 /**
  * 全部应用面板（PRD §7.3.2，样式参照 assets/image/全部应用.png 的抽屉网格）：
  * freeform 小窗内上下两分区——上=已添加（固定应用）图标磁贴网格，下=全部可打开应用
@@ -219,6 +222,9 @@ private fun AllAppsScreen(
         }
         hasFixedApps = fixed.isNotEmpty()
         entries = result
+        // 图标全量预灌（后台单线程顺序）：快滑时新磁贴基本同帧命中缓存，消除
+        // 逐磁贴 miss 的解码风暴与重组洪水；未及覆盖的格子由 AppTile miss 路径兜底
+        AppIconCache.preload(context, pkgs + fixed)
     }
 
     val gridState = rememberLazyGridState()
@@ -261,6 +267,8 @@ private fun AllAppsScreen(
                     entries,
                     // 稳定 key（此前用索引 key：列表位移全量重组、无法复用）
                     key = { _, entry -> entry.key },
+                    // 类型提示：header/磁贴各自复用组合槽，减少快滑时的组合成本
+                    contentType = { _, entry -> if (entry is GridEntry.Header) "header" else "app" },
                     span = { _, entry ->
                         if (entry is GridEntry.Header) GridItemSpan(maxLineSpan) else GridItemSpan(1)
                     }
@@ -321,6 +329,8 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
             if (loaded != null) bitmap = loaded
         }
     }
+    // Painter 随位图记忆化：否则每次重组（含同位图）都重建 BitmapPainter/asImageBitmap
+    val painter = remember(bitmap) { bitmap?.let { BitmapPainter(it.asImageBitmap()) } }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
@@ -331,15 +341,14 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
         Box(
             modifier = Modifier
                 .size(56.dp)
-                .clip(RoundedCornerShape(14.dp))
+                .clip(TILE_SHAPE)
                 .background(MiuixTheme.colorScheme.surfaceContainerHigh),
             contentAlignment = Alignment.Center
         ) {
             // 局部捕获：delegated property 不能 smart cast
-            val bmp = bitmap
-            if (bmp != null) {
+            if (painter != null) {
                 Image(
-                    painter = BitmapPainter(bmp.asImageBitmap()),
+                    painter = painter,
                     contentDescription = label,
                     modifier = Modifier.size(40.dp)
                 )

@@ -25,6 +25,15 @@ class BroadcastLaunchStrategy(
         Log.i(TAG, "launchFreeform broadcast sent (pkg=$pkg)")
     }
 
+    override fun launchAllApps(context: Context) {
+        val intent = Intent(launchAction).apply {
+            setPackage("com.miui.securitycenter")
+            putExtra("allApps", true)
+        }
+        context.sendBroadcast(intent)
+        Log.i(TAG, "launchAllApps broadcast sent")
+    }
+
     override fun launchShortcut(context: Context, shortcut: ShortcutAction) {
         val intent = Intent(launchAction).apply {
             setPackage("com.miui.securitycenter")

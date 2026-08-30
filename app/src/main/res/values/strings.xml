@@ -156,4 +156,5 @@
     <string name="activity_picker_search">搜索活动…</string>
     <string name="activity_picker_loading">正在加载…</string>
     <string name="activity_picker_count">%d 个活动</string>
+    <string name="all_apps_title">全部应用</string>
 </resources>

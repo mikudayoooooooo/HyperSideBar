@@ -73,14 +73,11 @@ class FanMenuController(
             val merged = LinkedHashSet<String>()
             merged.addAll(customApps)
             merged.addAll(allSystemApps)
-            val apps = merged.take(maxOuter + maxInner)
-                .map { pkg -> FanAppInfo(pkg, AppMetaCache.label(context, pkg)) }
-
-            if (apps.isEmpty()) {
-                Log.w(TAG, "show: no apps available, aborting")
-                isShowing = false
-                return
-            }
+            // 圈内末位常驻"全部应用"入口（PRD §7.3.2）：合并列表截到（总数-1）留出末位，
+            // 哨兵项计入 7+4 参与正常环布局；合并列表为空时扇形单独承载哨兵（不再中止呼出）
+            val apps = merged.take((maxOuter + maxInner - 1).coerceAtLeast(0))
+                .map { pkg -> FanAppInfo(pkg, AppMetaCache.label(context, pkg)) } +
+                FanAppInfo(ALL_APPS_PKG, "全部应用")
 
             // 快捷栏单一来源：面板占位（第一位，可用时）+ 用户启用的 shortcut_actions（PRD §7.1）
             val runtimeQuick = ShortcutStore.buildRuntimeQuickList(
@@ -105,7 +102,11 @@ class FanMenuController(
             val fanHost = ComposeFanHost(context, prefs).apply {
                 onAppSelected = { appInfo ->
                     Log.i(TAG, "onAppSelected: ${appInfo.packageName}")
-                    launchStrategy.launchFreeform(context, appInfo.packageName)
+                    if (appInfo.packageName == ALL_APPS_PKG) {
+                        launchStrategy.launchAllApps(context)
+                    } else {
+                        launchStrategy.launchFreeform(context, appInfo.packageName)
+                    }
                     hideAll()
                 }
 

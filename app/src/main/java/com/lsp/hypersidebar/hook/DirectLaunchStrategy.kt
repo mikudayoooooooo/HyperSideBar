@@ -26,6 +26,11 @@ class DirectLaunchStrategy : FanLaunchStrategy {
         FreeformLauncher.launch(context, pkg)
     }
 
+    override fun launchAllApps(context: Context) {
+        // :ui 与模块进程都走本进程直启（Com.lsp.hypersidebar 的 activity，exported 已声明）
+        FreeformLauncher.launchSelfFreeform(context, com.lsp.hypersidebar.ui.allapps.AllAppsActivity::class.java)
+    }
+
     override fun openNativePanel(context: Context) {
         PanelHideState.hidden.set(true)
         val intent = Intent("com.miui.gamebooster.PANNEL_OPEN").apply {

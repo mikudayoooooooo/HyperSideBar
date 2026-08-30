@@ -57,6 +57,10 @@ class FreeformRelayHook : BaseHook() {
                             Log.i(TAG, "relay: openPanel")
                             strategy.openNativePanel(ctx)
                         }
+                        intent.getBooleanExtra("allApps", false) -> {
+                            Log.i(TAG, "relay: allApps")
+                            strategy.launchAllApps(ctx)
+                        }
                         intent.getStringExtra("shortcut") != null -> {
                             val json = intent.getStringExtra("shortcut") ?: return
                             runCatching {

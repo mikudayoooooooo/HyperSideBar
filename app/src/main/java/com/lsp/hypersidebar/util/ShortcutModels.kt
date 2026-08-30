@@ -93,7 +93,12 @@ object ShortcutStore {
     private val KEY = com.lsp.hypersidebar.prefs.PrefKeys.SHORTCUT_ACTIONS
     private const val TOOLBOX_PACKAGE = "com.miui.securitycenter"
     private const val TOOLBOX_ID = "__toolbox__"
-    const val MAX_USER_SHORTCUTS = 5
+
+    /**
+     * 用户快捷方式存储上限（PRD §7.1：快捷栏上限 6 个**含占位**——占位在场时运行时
+     * 只取前 5 个用户项，占位隐藏时 6 个全上；存储上限取 6 才能不丢第 6 项）。
+     */
+    const val MAX_USER_SHORTCUTS = 6
 
     /**
      * 从 SharedPreferences 读取所有用户快捷方式（按 order 排序）。
@@ -228,9 +233,11 @@ object ShortcutStore {
             ))
         }
 
-        // 用户启用的快捷方式
+        // 用户启用的快捷方式：栏上限 6 含占位（PRD §7.1）——占位在场取 5 个，隐藏时 6 个全上
+        val maxUser = if (toolboxAvailable) 5 else 6
         loadUserShortcuts(prefs)
             .filter { it.enabled }
+            .take(maxUser)
             .forEach { result.add(it) }
 
         return result

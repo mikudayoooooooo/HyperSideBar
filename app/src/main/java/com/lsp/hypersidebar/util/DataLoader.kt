@@ -10,35 +10,65 @@ import android.util.Log
  * （即 PRD §3.2 准入规则的产物——无小窗资格的应用天然不在其中，无需二次过滤）。
  * 快捷栏数据（用户 shortcut_actions）不经此类（Phase 3 接入）。
  *
- * 缓存策略（1A 实测修订）：反射调用实测 ~0.7-1s，绝不允许出现在呼出关键路径——
- * [loadApps] 永远同步返回缓存（冷缓存时为空，扇形只显示用户固定应用，推荐位下次呼出
- * 补齐，PRD"用户固定优先"），过期由后台线程刷新；hook init 调 [prewarm] 预热，
- * 首呼出大概率已命中缓存（修 S6：停顿→扇形可见间歇性 ~950ms 超标）。
+ * 缓存策略（三层，1B 增补周期兜底）：反射调用实测 ~0.7-1s，绝不允许出现在呼出关键路径。
+ * - 惰性层：[loadApps] 永远同步返回缓存（冷缓存时为空，扇形只显示用户固定应用，推荐位
+ *   下次呼出补齐，PRD"用户固定优先"），距上次成功拉取 ≥30s 触发后台刷新；
+ * - 预热层：hook init 调 [prewarm]，首呼出大概率命中缓存（修 S6：停顿→扇形可见
+ *   间歇性 ~950ms 超标）；
+ * - 周期兜底层：每 [BACKSTOP_INTERVAL_MS] 自续排后台刷新（1B 2026-08-30）——消灭
+ *   "长期闲置后首呼出显示旧数据"（惰性层只惠及下一次呼出）与"prewarm 因 context
+ *   未就绪被跳过后永不刷新"（[loadApps] 也会补启循环）。数据源为使用习惯驱动的
+ *   系统建议列表，5 分钟远超其真实变化速度；成本 ~1s 后台 binder/次，常驻进程可忽略。
+ *   周期挂主线程 handler（仅 postDelayed 微秒级），刷新在后台 executor（[refreshing]
+ *   标志防重入，fixed-rate 循环安全）。
  */
 object DataLoader {
 
     private const val TAG = "DataLoader"
     private const val CACHE_TTL_MS = 30_000L
+    private const val BACKSTOP_INTERVAL_MS = 5 * 60_000L
 
     @Volatile private var cachedResult: List<String>? = null
     @Volatile private var lastFetchTime = 0L
     @Volatile private var refreshing = false
+    @Volatile private var backstopStarted = false
 
     private val executor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
         Thread(r, "FanDataLoader").apply { isDaemon = true }
     }
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     fun loadApps(context: Context): List<String> {
+        val appContext = context.applicationContext
+        startBackstop(appContext)
         val now = System.currentTimeMillis()
         if (cachedResult == null || (now - lastFetchTime) >= CACHE_TTL_MS) {
-            refreshAsync(context)
+            refreshAsync(appContext)
         }
         return cachedResult ?: emptyList()
     }
 
-    /** hook init 时调用：进程存活期间提前把推荐列表拉进缓存。 */
+    /** hook init 时调用：进程存活期间提前把推荐列表拉进缓存，并启动周期兜底循环。 */
     fun prewarm(context: Context) {
-        refreshAsync(context)
+        val appContext = context.applicationContext
+        refreshAsync(appContext)
+        startBackstop(appContext)
+    }
+
+    /**
+     * 周期兜底循环（每进程一次）：自续排而非 fixed-rate 定时器框架，每轮独立容错——
+     * 单次失败不杀循环。挂主线程 handler，触发成本微秒级；实际刷新走后台 executor。
+     */
+    private fun startBackstop(appContext: Context) {
+        if (backstopStarted) return
+        backstopStarted = true
+        mainHandler.postDelayed(object : Runnable {
+            override fun run() {
+                runCatching { refreshAsync(appContext) }
+                    .onFailure { Log.w(TAG, "backstop dispatch failed: ${it.message}") }
+                mainHandler.postDelayed(this, BACKSTOP_INTERVAL_MS)
+            }
+        }, BACKSTOP_INTERVAL_MS)
     }
 
     private fun refreshAsync(context: Context) {

@@ -54,8 +54,9 @@ class FreeformRelayHook : BaseHook() {
                 override fun onReceive(ctx: Context, intent: Intent) {
                     // 有序广播存活探测标记（1C，PRD §9.4 ":ui 不存活→toast"）：launcher 发
                     // ordered broadcast，初始 code=0，本接收器置 1；最终回调读 0 = 本进程
-                    // 已死或接收器未注册。普通 sendBroadcast 下 setResult 被忽略，无害。
-                    resultCode = 1
+                    // 已死或接收器未注册。普通 sendBroadcast（如 AllAppsActivity 面板内启动）
+                    // 里 setResult 会抛 RuntimeException——必须先判 isOrderedBroadcast
+                    if (isOrderedBroadcast) resultCode = 1
                     when {
                         intent.getBooleanExtra("openPanel", false) -> {
                             Log.i(TAG, "relay: openPanel")

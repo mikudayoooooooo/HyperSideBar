@@ -3,29 +3,27 @@ package com.lsp.hypersidebar.ui.allapps
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,15 +39,16 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.drawable.toBitmap
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.theme.HyperSidebarTheme
 import com.lsp.hypersidebar.theme.ThemeModes
+import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import com.lsp.hypersidebar.util.AppMetaCache
 import com.lsp.hypersidebar.util.DataLoader
-import com.lsp.hypersidebar.util.FreeformLauncher
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import kotlinx.coroutines.Dispatchers
@@ -65,13 +64,11 @@ private const val PREFS_NAME = "hyperSidebar_prefs"
 private const val MAX_DATA_WAIT_MS = 1500L
 
 /**
- * 全部应用面板（PRD §7.3.2"全部应用面板"）：以 freeform 小窗打开的抽屉式 Activity，
- * 上分区 = 用户固定应用，下分区 = 全部可打开应用按字母排序 + 字母索引；
- * 点击目标小窗打开后自动关闭。数据源 = DataLoader（系统准入列表，无资格不展示）。
- *
- * 性能（PRD §9.3 加载 ≤1s）：列表先以包名渲染（DataLoader 缓存即时返回），label 由
- * AppMetaCache 后台线程批量回填渐进刷新——PM binder 查询绝不在首帧路径。
- * 冷缓存时 DataLoader 拉取 ~1s，轮询至多 1.5s 等待首份数据。
+ * 全部应用面板（PRD §7.3.2，样式参照 assets/image/全部应用.png 的抽屉网格）：
+ * freeform 小窗内上下两分区——上=已添加（固定应用）图标磁贴网格，下=全部可打开应用
+ * 按字母分组的磁贴网格 + 右侧字母索引条；磁贴=图标在上、应用名在下。
+ * 点击目标 → 经 :ui 中继以小窗启动（模块进程被 hidden API blocklist 拒绝，
+ * getActivityOptions/getFreeformSuggestionList 均不可用）→ 面板自行关闭。
  */
 class AllAppsActivity : ComponentActivity() {
 
@@ -79,6 +76,12 @@ class AllAppsActivity : ComponentActivity() {
         /** :ui（system uid）启动时经 intent 传入的准入应用列表——模块进程被 hidden API
          *  blocklist 拒绝（getFreeformSuggestionList denied），自取数据不可行。 */
         const val EXTRA_SUGGESTIONS = "suggestions"
+
+        /** 跨实例缓存：XposedServiceHelper 全局只绑定一次，第二个 Activity 实例注册的
+         *  监听器可能不再收到回调——静态持有 remotePrefs 供后续实例直接可用
+         *  （修"后续打开看不到固定应用"：fallback 本地 prefs 是空壳）。 */
+        @Volatile
+        var cachedRemotePrefs: SharedPreferences? = null
     }
 
     private var remotePrefs by mutableStateOf<SharedPreferences?>(null)
@@ -88,12 +91,16 @@ class AllAppsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         fallbackPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        remotePrefs = cachedRemotePrefs
         suggestions = intent.getStringArrayListExtra(EXTRA_SUGGESTIONS)
         XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
             override fun onServiceBind(service: XposedService) {
                 Thread {
                     runCatching { service.getRemotePreferences("hyperSidebar") }
-                        .onSuccess { runOnUiThread { remotePrefs = it } }
+                        .onSuccess { prefs ->
+                            cachedRemotePrefs = prefs
+                            runOnUiThread { remotePrefs = prefs }
+                        }
                 }.start()
             }
 
@@ -108,7 +115,14 @@ class AllAppsActivity : ComponentActivity() {
                     prefs = remotePrefs ?: fallbackPrefs,
                     initialSuggestions = suggestions,
                     onLaunch = { pkg ->
-                        if (!FreeformLauncher.launchFromApp(applicationContext, pkg)) {
+                        // 打开目标一律经 :ui 中继（system uid 才能算小窗 options 并
+                        // startActivityAsUser）；本进程直启必降级全屏（blocklist）
+                        runCatching {
+                            Intent(ACTION_FAN_LAUNCH).apply {
+                                setPackage("com.miui.securitycenter")
+                                putExtra("pkg", pkg)
+                            }.let { applicationContext.sendBroadcast(it) }
+                        }.onFailure {
                             Toast.makeText(this, "启动失败：$pkg", Toast.LENGTH_SHORT).show()
                         }
                         // PRD：从"全部应用"打开目标小窗后，列表小窗自动关闭
@@ -146,6 +160,11 @@ private fun letterFor(label: String): String {
 
 private data class LetterGroup(val letter: String, val items: List<Pair<String, String>>) // pkg to label
 
+private sealed class GridEntry {
+    data class Header(val text: String) : GridEntry()
+    data class App(val pkg: String, val label: String) : GridEntry()
+}
+
 @Composable
 private fun AllAppsScreen(
     prefs: SharedPreferences,
@@ -157,10 +176,13 @@ private fun AllAppsScreen(
     var allPkgs by remember { mutableStateOf<List<String>>(emptyList()) }
     var labels by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
 
-    // 固定应用：prefs 即读即显
+    // 固定应用：prefs 即读即显（StringSet 无序，按 label 排序保证显示确定）
     LaunchedEffect(prefs) {
         fixedApps = runCatching {
-            prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty().toList()
+            prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty()
+                .map { it to AppMetaCache.label(context, it) }
+                .sortedBy { it.second.lowercase() }
+                .map { it.first }
         }.getOrDefault(emptyList())
     }
 
@@ -195,16 +217,26 @@ private fun AllAppsScreen(
     val groups = remember(allPkgs, labels) {
         buildGroups(allPkgs.map { it to (labels[it] ?: it) })
     }
-    val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
-    // 字母 → 该组在 LazyColumn 中的 item 下标（每组占 1 header + n items）
-    val letterOffsets = remember(groups) {
-        var acc = 0
-        groups.associate { g ->
-            val idx = acc
-            acc += 1 + g.items.size
-            g.letter to idx
+    // 网格扁平条目：header 占满整行，应用为磁贴
+    val entries = remember(fixedLabelled, groups) {
+        buildList {
+            if (fixedLabelled.isNotEmpty()) {
+                add(GridEntry.Header("已添加"))
+                fixedLabelled.forEach { add(GridEntry.App(it.first, it.second)) }
+            }
+            groups.forEach { g ->
+                add(GridEntry.Header(g.letter))
+                g.items.forEach { add(GridEntry.App(it.first, it.second)) }
+            }
         }
+    }
+    val gridState = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
+    // 字母 → 该组 header 在网格条目中的下标
+    val letterOffsets = remember(entries) {
+        entries.mapIndexedNotNull { idx, e ->
+            (e as? GridEntry.Header)?.let { if (it.text != "已添加") it.text to idx else null }
+        }.toMap()
     }
 
     Column(
@@ -219,29 +251,8 @@ private fun AllAppsScreen(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)
         )
 
-        if (fixedLabelled.isNotEmpty()) {
-            Text(
-                "固定应用",
-                fontSize = 12.sp,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
-            )
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                fixedLabelled.forEach { (pkg, label) ->
-                    AppIconItem(pkg, label) { onLaunch(pkg) }
-                }
-            }
-            Spacer(Modifier.size(6.dp))
-        }
-
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            if (groups.isEmpty()) {
+            if (entries.isEmpty()) {
                 // 空态显式占位：避免被误读为黑屏（remote prefs 异步绑定与数据等待期间的过渡态）
                 Text(
                     if (fixedApps.isEmpty()) "加载中…" else "暂无更多可打开应用",
@@ -250,22 +261,30 @@ private fun AllAppsScreen(
                     modifier = Modifier.align(Alignment.Center)
                 )
             }
-            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                groups.forEach { group ->
-                    item(key = "h_${group.letter}") {
-                        Text(
-                            group.letter,
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                state = gridState,
+                modifier = Modifier.fillMaxSize()
+            ) {
+                itemsIndexed(
+                    entries,
+                    key = { idx, _ -> idx },
+                    span = { _, entry ->
+                        if (entry is GridEntry.Header) GridItemSpan(maxLineSpan) else GridItemSpan(1)
+                    }
+                ) { _, entry ->
+                    when (entry) {
+                        is GridEntry.Header -> Text(
+                            entry.text,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                             modifier = Modifier
                                 .background(MiuixTheme.colorScheme.surfaceContainerHigh)
                                 .fillMaxWidth()
-                                .padding(horizontal = 20.dp, vertical = 4.dp)
+                                .padding(horizontal = 20.dp, vertical = 6.dp)
                         )
-                    }
-                    items(group.items, key = { it.first }) { (pkg, label) ->
-                        AppRow(pkg, label) { onLaunch(pkg) }
+                        is GridEntry.App -> AppTile(entry.pkg, entry.label) { onLaunch(entry.pkg) }
                     }
                 }
             }
@@ -279,18 +298,14 @@ private fun AllAppsScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                groups.forEach { g ->
+                letterOffsets.forEach { (letter, idx) ->
                     Text(
-                        g.letter,
+                        letter,
                         fontSize = 10.sp,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         modifier = Modifier
                             .padding(vertical = 1.dp)
-                            .clickable {
-                                letterOffsets[g.letter]?.let { idx ->
-                                    scope.launch { listState.scrollToItem(idx) }
-                                }
-                            }
+                            .clickable { scope.launch { gridState.scrollToItem(idx) } }
                     )
                 }
             }
@@ -298,49 +313,48 @@ private fun AllAppsScreen(
     }
 }
 
+/** 抽屉磁贴：图标在上、应用名在下（PRD 参考图样式）。 */
 @Composable
-private fun AppRow(pkg: String, label: String, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        AppIconItem(pkg, label, onClick = onClick)
-        Spacer(Modifier.width(12.dp))
-        Text(label, fontSize = 15.sp, color = MiuixTheme.colorScheme.onSurface)
-    }
-}
-
-@Composable
-private fun AppIconItem(pkg: String, label: String, onClick: () -> Unit) {
+private fun AppTile(pkg: String, label: String, onClick: () -> Unit) {
     val context = LocalContext.current
-    // 图标逐项 PM 查询：LazyColumn 只组合可见行，行级 remember 天然惰性；
-    // 固定应用区（横向 Row）全量组合，数量受 7+4 上限约束可接受。
-    // Drawable → Bitmap 转写同 QuickAppsBar.rememberIconBitmap（128px 足够 30dp 显示）
+    // Drawable → Bitmap 转写同 QuickAppsBar.rememberIconBitmap（128px 足够 40dp 显示）
     val bitmap = remember(pkg) {
         runCatching {
             context.packageManager.getApplicationIcon(pkg).toBitmap(width = 128, height = 128)
         }.getOrNull()
     }
-    Box(
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .size(40.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 8.dp)
     ) {
-        if (bitmap != null) {
-            Image(
-                painter = BitmapPainter(bitmap.asImageBitmap()),
-                contentDescription = label,
-                modifier = Modifier.size(30.dp)
-            )
-        } else {
-            Text(label.take(1), fontSize = 14.sp, color = MiuixTheme.colorScheme.onSurface)
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+            contentAlignment = Alignment.Center
+        ) {
+            if (bitmap != null) {
+                Image(
+                    painter = BitmapPainter(bitmap.asImageBitmap()),
+                    contentDescription = label,
+                    modifier = Modifier.size(40.dp)
+                )
+            } else {
+                Text(label.take(1), fontSize = 18.sp, color = MiuixTheme.colorScheme.onSurface)
+            }
         }
+        Text(
+            label,
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            color = MiuixTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(top = 4.dp)
+        )
     }
 }
 

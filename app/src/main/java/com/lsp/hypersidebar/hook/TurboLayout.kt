@@ -364,10 +364,11 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             runCatching { step() }.onFailure { Log.e(TAG, "init step failed: ${it.message}", it) }
         }
         Log.i(TAG, "init done: ${getStats()}")
-        // 预热推荐列表缓存（:ui 侧 B 路线横屏呼出共用 DataLoader；反射 ~1s 不进呼出关键路径）
-        runCatching {
-            EzXposed.appContext?.let { com.lsp.hypersidebar.util.DataLoader.prewarm(it) }
-        }
+        // 预热推荐列表缓存（:ui 侧 B 路线横屏呼出共用 DataLoader；反射 ~1s 不进呼出关键路径）。
+        // :ui 的 appContext 一般立即可用；带重试防未就绪（与边缘通道同款）
+        com.lsp.hypersidebar.util.DataLoader.prewarmWithRetry(
+            provider = { runCatching { EzXposed.appContext }.getOrNull() }
+        )
     }
 
     // ===== 小白条视觉隐藏（EDGE 模式） =====

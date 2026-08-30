@@ -70,12 +70,12 @@ class EdgeGestureHook(
         runCatching { hookOnSwipeStop(); okStop = true }
             .onFailure { Log.e(TAG, "C FAILED hookOnSwipeStop: ${it.message}", it) }
         Log.i(TAG, "hooks installed: onTouchEvent=$okTouch onSwipeStop=$okStop")
-        // 预热推荐列表缓存（尽力而为）：launcher 进程 init 时 EzXposed.appContext 可能尚未就绪
-        // ——实测 getAppContext 在上下文未建好时直接抛 NPE 而非返回 null。预热失败无碍：
-        // DataLoader 已是后台异步刷新，首呼出会自行触发且不阻塞主线程
-        runCatching {
-            EzXposed.appContext?.let { com.lsp.hypersidebar.util.DataLoader.prewarm(it) }
-        }.onFailure { Log.w(TAG, "prewarm skipped: ${it.message}") }
+        // 预热推荐列表缓存：launcher 进程 init 时 EzXposed.appContext 可能尚未就绪
+        // （实测 getAppContext 直接抛 NPE 而非返回 null，首轮 prewarm skipped 是
+        // "首次呼出只有固定应用"的根因）——prewarmWithRetry 每 5s 重试直到就绪
+        com.lsp.hypersidebar.util.DataLoader.prewarmWithRetry(
+            provider = { runCatching { EzXposed.appContext }.getOrNull() }
+        )
     }
 
     /** 记录层：触摸流入口，BeforeHook。返回 true = 消费（拦截原生处理）。 */

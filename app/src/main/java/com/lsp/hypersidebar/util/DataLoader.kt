@@ -32,6 +32,7 @@ object DataLoader {
     @Volatile private var lastFetchTime = 0L
     @Volatile private var refreshing = false
     @Volatile private var backstopStarted = false
+    @Volatile private var prewarmed = false
 
     private val executor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
         Thread(r, "FanDataLoader").apply { isDaemon = true }
@@ -53,6 +54,31 @@ object DataLoader {
         val appContext = context.applicationContext
         refreshAsync(appContext)
         startBackstop(appContext)
+    }
+
+    /**
+     * 带重试的预热（修"首次呼出只有固定应用"）：hook init 时宿主 appContext 可能未就绪
+     * （launcher 实测直接抛 NPE，prewarm skipped），首轮呼出必然冷缓存。此方法每 intervalMs
+     * 重试 provider 直到拿到上下文或耗尽次数，成功即 prewarm（刷新+兜底循环）。
+     */
+    fun prewarmWithRetry(provider: () -> Context?, maxAttempts: Int = 12, intervalMs: Long = 5000L) {
+        val task = object : Runnable {
+            var attempt = 0
+            override fun run() {
+                if (prewarmed) return
+                val ctx = runCatching { provider() }.getOrNull()?.applicationContext
+                if (ctx != null) {
+                    prewarmed = true
+                    Log.i(TAG, "prewarm ok (attempt ${attempt + 1})")
+                    prewarm(ctx)
+                } else if (++attempt < maxAttempts) {
+                    mainHandler.postDelayed(this, intervalMs)
+                } else {
+                    Log.w(TAG, "prewarm gave up after $maxAttempts attempts")
+                }
+            }
+        }
+        mainHandler.post(task)
     }
 
     /**

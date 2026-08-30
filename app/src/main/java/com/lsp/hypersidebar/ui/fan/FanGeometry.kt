@@ -39,7 +39,6 @@ data class FanGeometry(
     val items: List<FanItemLayout>,
     val apps: List<FanAppInfo>,
     val quickApps: List<FanAppInfo>,
-    val activeZonePx: Float,
     val isLandscape: Boolean
 )
 
@@ -182,9 +181,6 @@ fun computeFanGeometry(
     val quickBarX = baseX.coerceIn(effPadding, (width - effBarWidth - effPadding).coerceAtLeast(effPadding))
     val quickBarY = baseY.coerceIn(effPadding, (height - effBarHeight - effPadding).coerceAtLeast(effPadding))
 
-    // activeZone 真实控制扇形选中半径（Phase 2 语义修正）
-    val activeZonePx = config.activeZoneDp * density
-
     return FanGeometry(
         anchor = settledAnchor,
         direction = direction,
@@ -201,7 +197,6 @@ fun computeFanGeometry(
         items = items,
         apps = apps,
         quickApps = quickApps,
-        activeZonePx = activeZonePx,
         isLandscape = isLandscape
     )
 }

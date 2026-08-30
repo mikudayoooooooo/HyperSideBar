@@ -349,7 +349,6 @@ internal fun InteractionSettingsPage(
     prefsRevision: Int,
     modifier: Modifier = Modifier
 ) {
-    var activeZone by remember(prefs, prefsRevision) { mutableFloatStateOf(prefs.getFloat(PrefKeys.ACTIVE_ZONE, LayoutDefaults.ACTIVE_ZONE)) }
     var deadZone by remember(prefs, prefsRevision) { mutableFloatStateOf(prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)) }
     var vibrate by remember(prefs, prefsRevision) { mutableStateOf(prefs.getBoolean(PrefKeys.VIBRATE, LayoutDefaults.VIBRATE)) }
 
@@ -358,15 +357,8 @@ internal fun InteractionSettingsPage(
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
-                    SettingsSliderItem(
-                        title = stringResource(R.string.stick_sensitivity),
-                        summary = stringResource(R.string.stick_sensitivity_description, activeZone.toInt()),
-                        value = activeZone,
-                        valueRange = 120f..300f,
-                        steps = 8,
-                        onValueChange = { activeZone = it },
-                        onValueChangeFinished = { prefs.savePref(PrefKeys.ACTIVE_ZONE, activeZone) }
-                    )
+                    // activeZone（灵敏度）参数已废弃（1B 定稿）：其唯一运行时用途是距离
+                    // 门控——正是"完全没有选中反馈"的根因，选中语义由死区+内外取消区派生
                     SettingsSliderItem(
                         title = stringResource(R.string.dead_zone),
                         summary = stringResource(R.string.dead_zone_description, deadZone.toInt()),

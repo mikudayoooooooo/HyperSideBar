@@ -5,10 +5,8 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
-import com.lsp.hypersidebar.prefs.ChannelModes
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
-import com.lsp.hypersidebar.prefs.readChannelMode
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import com.lsp.hypersidebar.ui.fan.FanMenuController
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
@@ -113,11 +111,6 @@ class EdgeGestureHook(
     }
 
     private fun handleTouch(ev: MotionEvent, stub: View?): Boolean {
-        if (remotePrefs.readChannelMode() != ChannelModes.EDGE) {
-            resetGesture()
-            return false   // 非 EDGE（遗留调试通道）：零干预透传
-        }
-
         // fan 展示中：事件转发给 fan 并消费；UP/CANCEL 收起（未预选立即收起，PRD §7.1）
         if (fanController.isShowing) {
             if (!fanSeenThisGesture) {

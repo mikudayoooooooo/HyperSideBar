@@ -9,7 +9,6 @@ import android.content.SharedPreferences
 
 object PrefKeys {
     const val ENABLED = "enabled"
-    const val CHANNEL_MODE = "channelMode"
     const val THEME_MODE = "themeMode"
 
     const val ICON_SIZE = "iconSize"
@@ -24,7 +23,6 @@ object PrefKeys {
     const val LANDSCAPE_INNER_RADIUS = "landscapeInnerRadius"
     const val LANDSCAPE_OUTER_RADIUS = "landscapeOuterRadius"
 
-    const val ACTIVE_ZONE = "activeZone"
     const val DEAD_ZONE = "deadZone"
     const val VIBRATE = "vibrateEnabled"
     const val TRIGGER_DWELL_MS = "triggerDwellMs"
@@ -34,19 +32,9 @@ object PrefKeys {
     const val SHORTCUT_ACTIONS = "shortcut_actions"   // 用户快捷方式 JSON（权威 key）
 }
 
-object ChannelModes {
-    const val EDGE = "EDGE"
-    const val HANDLE = "HANDLE"
-}
-
-/** 读取当前呼出通道（容错：值类型漂移时回退默认 EDGE）。 */
-fun SharedPreferences.readChannelMode(): String {
-    return try {
-        getString(PrefKeys.CHANNEL_MODE, ChannelModes.EDGE) ?: ChannelModes.EDGE
-    } catch (_: Exception) {
-        ChannelModes.EDGE
-    }
-}
+// channelMode（EDGE/HANDLE）已废弃（1B：EDGE 为唯一产品形态，HANDLE 遗留调试通道代码
+// 一并移除）；activeZone 已废弃（运行时唯一用途是 1A 拆除的距离门控——正是"完全没有
+// 选中反馈"的根因，选中语义由死区/内外取消区派生即可）。旧 key 残留在 prefs 文件中无害。
 
 /** 布局与交互参数默认值（竖屏/横屏独立），与 PRD 参数表对齐。 */
 object LayoutDefaults {
@@ -64,12 +52,10 @@ object LayoutDefaults {
 
     const val QUICK_ICON_SIZE = 36f
 
-    const val ACTIVE_ZONE = 200f       // Phase 2 语义修正：真正控制扇形选中半径（原 60f 被快捷栏距离覆盖，从未生效）
     const val DEAD_ZONE = 12f
     const val VIBRATE = true
     const val TRIGGER_DWELL_MS = 250
     const val TRIGGER_MIN_DISTANCE_DP = 30f
-    const val CHANNEL_MODE = ChannelModes.EDGE
 
     /** 所有布局相关键。恢复默认时批量写回。 */
     val layoutKeys = listOf(

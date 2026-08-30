@@ -36,9 +36,6 @@ class SettingsRepository(val prefs: SharedPreferences) {
 
     fun enabled(): Boolean = prefs.getBoolean(PrefKeys.ENABLED, true)
 
-    fun channelMode(): String =
-        prefs.getString(PrefKeys.CHANNEL_MODE, LayoutDefaults.CHANNEL_MODE) ?: LayoutDefaults.CHANNEL_MODE
-
     fun themeMode(): String =
         prefs.getString(PrefKeys.THEME_MODE, "MONET_SYSTEM") ?: "MONET_SYSTEM"
 
@@ -54,7 +51,6 @@ class SettingsRepository(val prefs: SharedPreferences) {
     fun landscapeInnerRadius(): Float = prefs.getFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS)
     fun landscapeOuterRadius(): Float = prefs.getFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
 
-    fun activeZone(): Float = prefs.getFloat(PrefKeys.ACTIVE_ZONE, LayoutDefaults.ACTIVE_ZONE)
     fun deadZone(): Float = prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)
     fun vibrate(): Boolean = prefs.getBoolean(PrefKeys.VIBRATE, LayoutDefaults.VIBRATE)
     fun triggerDwellMs(): Int = prefs.getInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)

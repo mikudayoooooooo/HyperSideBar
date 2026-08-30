@@ -518,7 +518,6 @@ class ComposeFanHost(
             innerRadiusDp = readFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS),
             outerRadiusDp = readFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX),
             deadZoneDp = readFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE),
-            activeZoneDp = readFloat(PrefKeys.ACTIVE_ZONE, LayoutDefaults.ACTIVE_ZONE),
             useDualRing = true,
             minRadiusDp = 60f,
             maxAppsOuter = readInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER),

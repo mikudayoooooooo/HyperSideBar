@@ -8,10 +8,8 @@ import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import com.lsp.hypersidebar.prefs.ChannelModes
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
-import com.lsp.hypersidebar.prefs.readChannelMode
 import com.lsp.hypersidebar.ui.fan.FanMenuController
 import io.github.kyuubiran.ezxhelper.core.finder.ConstructorFinder
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
@@ -30,7 +28,7 @@ private const val TAG = "TurboLayout"
 private const val LANDSCAPE_ANCHOR_Y_DP = 56f
 
 /**
- * :ui 进程宿主（securitycenter:ui）。产品形态（PRD §7.1，channelMode=EDGE 为唯一产品值）：
+ * :ui 进程宿主（securitycenter:ui）。产品形态（PRD §7.1，唯一；channelMode 已废弃删除）：
  *
  * - B 路线横屏触发（1B，PRD §7.1/§7.3.1，反编译取证 2026-08-30）：横屏隐藏条本身即触发器
  *   （HyperCeiler 同款思路），f.onTouch 走锚点圆状态机（EdgeGestureHook 同款：内滑确认
@@ -55,11 +53,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private val coverView = "com.miui.dock.sidebar.b"
     override val name: String = "HookTargetBox"
 
-    private var lastTouchRawX = 0f
-    private var lastTouchRawY = 0f
-    private var touchDownRawX = 0f
-    private var touchDownRawY = 0f
-    private var lastTouchView: WeakReference<View>? = null
     private var sidebarWrapperRef: WeakReference<Any>? = null
     private val coverRefs = CopyOnWriteArrayList<WeakReference<View>>()
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -68,9 +61,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private val fanController: FanMenuController by lazy {
         FanMenuController(remotePrefs, DirectLaunchStrategy())
     }
-
-    private var fixedAnchorX = 0f
-    private var fixedAnchorY = 0f
 
     fun hookOnTouch() {
         val hooked = MethodFinder.fromClass(sideBar)
@@ -82,65 +72,14 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 val event = it.args[1] as? MotionEvent ?: return@createBeforeHook
                 val view = it.args[0] as? View ?: return@createBeforeHook
 
-                // EDGE 模式：竖屏=吞掉漏到小白条的事件（穿透失效信号，防唤起原生侧边栏/
+                // 竖屏=吞掉漏到小白条的事件（穿透失效信号，防唤起原生侧边栏/
                 // 幽灵入口）；横屏=B 路线状态机接管（隐藏条即触发器）
-                if (inEdgeMode()) {
-                    if (!isLandscape(view)) {
-                        if (event.actionMasked == MotionEvent.ACTION_DOWN) onCoverTouchLeak()
-                        it.result = true
-                        return@createBeforeHook
-                    }
-                    handleStripGesture(view, event)
+                if (!isLandscape(view)) {
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN) onCoverTouchLeak()
                     it.result = true
                     return@createBeforeHook
                 }
-
-                // 非 EDGE（遗留调试通道）：条可见可摸，一滑即出 fan（无停顿状态机）
-
-                if (fanController.isShowing) {
-                    fanController.dispatchTouchEvent(event)
-                    if (event.action == MotionEvent.ACTION_UP || event.action == MotionEvent.ACTION_CANCEL) {
-                        fanController.hideAll()
-                    }
-                    it.result = true
-                    return@createBeforeHook
-                }
-
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        touchDownRawX = event.rawX
-                        touchDownRawY = event.rawY
-                        lastTouchRawX = event.rawX
-                        lastTouchRawY = event.rawY
-                        lastTouchView = WeakReference(view)
-
-                        val loc = IntArray(2)
-                        view.getLocationOnScreen(loc)
-                        val dm = view.context.resources.displayMetrics
-                        fixedAnchorX = if (loc[0] <= dm.widthPixels / 2) 0f else dm.widthPixels.toFloat()
-                        fixedAnchorY = loc[1] + view.height / 2f
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val wasShowing = fanController.isShowing
-                        lastTouchRawX = event.rawX
-                        lastTouchRawY = event.rawY
-                        maybeTriggerFanMenu()
-                        val justCreated = fanController.isShowing && !wasShowing
-                        if (fanController.isShowing) {
-                            if (justCreated) {
-                                val down = MotionEvent.obtain(
-                                    event.downTime, event.eventTime,
-                                    MotionEvent.ACTION_DOWN, event.rawX, event.rawY, 0
-                                )
-                                try { fanController.dispatchTouchEvent(down) } finally { down.recycle() }
-                            }
-                            fanController.dispatchTouchEvent(event)
-                        }
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        if (fanController.isShowing) fanController.dismiss()
-                    }
-                }
+                handleStripGesture(view, event)
                 it.result = true
             }
         Log.d(TAG, "hookOnTouch: hooked=$hooked")
@@ -155,36 +94,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 sidebarWrapperRef = WeakReference(it.thisObject)
                 Log.d(TAG, "Q afterHook: saved wrapper ref, class=${it.thisObject.javaClass.name}")
             }
-    }
-
-    private fun maybeTriggerFanMenu() {
-        if (fanController.isShowing) return
-
-        val dx = lastTouchRawX - touchDownRawX
-        val dy = lastTouchRawY - touchDownRawY
-        val moveDistance = sqrt(dx * dx + dy * dy)
-
-        // 1. 最小触发距离
-        if (moveDistance < 40f) return
-
-        // 2. 必须向外移动（远离边缘）
-        val isOutward = if (fixedAnchorX == 0f) dx > 0 else dx < 0
-        if (!isOutward) return
-
-        // 3. 移动方向与水平方向夹角不能太大
-        val moveAngle = Math.toDegrees(
-            Math.atan2(abs(dy).toDouble(), abs(dx).toDouble())
-        ).toFloat()
-        if (moveAngle > 60f) return
-
-        val view = lastTouchView?.get()
-        val ctx = view?.context
-        if (ctx == null) {
-            Log.w(TAG, "maybeTriggerFanMenu: view/context null, abort")
-            return
-        }
-        Log.i(TAG, "maybeTriggerFanMenu: dx=$dx dy=$dy moveAngle=$moveAngle anchor=($fixedAnchorX, $fixedAnchorY)")
-        fanController.show(ctx, fixedAnchorX, fixedAnchorY)
     }
 
     // ===== B 路线横屏状态机（1B，PRD §7.1/§7.3.1） =====
@@ -373,8 +282,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
     // ===== 小白条视觉隐藏（EDGE 模式） =====
 
-    private fun inEdgeMode(): Boolean = remotePrefs.readChannelMode() == ChannelModes.EDGE
-
     /**
      * 小白条像素出口封口（2026-08-25 反编译取证定稿）：
      * 条的可见像素唯一来源是其 drawable 的 draw(Canvas)（运行时类 com.miui.dock.sidebar.c，
@@ -387,7 +294,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 .filterByName("draw")
                 .filterByParamTypes(Canvas::class.java)
                 .firstOrNull()
-                ?.createBeforeHook { if (inEdgeMode()) it.result = null }
+                ?.createBeforeHook { it.result = null }
                 ?.also { Log.i(TAG, "hookHideWhiteBar: c.draw hooked OK") }
                 ?: Log.w(TAG, "hookHideWhiteBar: c.draw NOT FOUND（条保持可见，安全降级）")
         }.onFailure { Log.w(TAG, "hookHideWhiteBar failed: ${it.message}（条保持可见）") }
@@ -404,7 +311,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                     .filterByName(method)
                     .filterByParamTypes()
                     .firstOrNull()
-                    ?.createBeforeHook { if (inEdgeMode()) it.result = null }
+                    ?.createBeforeHook { it.result = null }
                     ?: Log.w(TAG, "hookHideHints: n.$method NOT FOUND（$desc 保留）")
             }.onFailure { Log.w(TAG, "hookHideHints[$method] failed: ${it.message}") }
         }
@@ -449,7 +356,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 .firstOrNull()
                 ?.createBeforeHook {
                     val view = it.args.getOrNull(0) as? View ?: return@createBeforeHook
-                    if (!inEdgeMode() || view.javaClass.name != coverView) return@createBeforeHook
+                    if (view.javaClass.name != coverView) return@createBeforeHook
                     val lp = it.args.getOrNull(1) as? WindowManager.LayoutParams
                         ?: return@createBeforeHook
                     // lp 位置/尺寸随日志输出：cover=白条触摸条，pos 即白条当前实际位置
@@ -474,7 +381,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 .firstOrNull()
                 ?.createBeforeHook {
                     val view = it.args.getOrNull(0) as? View ?: return@createBeforeHook
-                    if (!inEdgeMode() || view.javaClass.name != coverView) return@createBeforeHook
+                    if (view.javaClass.name != coverView) return@createBeforeHook
                     val lp = it.args.getOrNull(1) as? WindowManager.LayoutParams
                         ?: return@createBeforeHook
                     applyCoverFlagAtBoundary(view, lp, "updateViewLayout")
@@ -488,7 +395,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
      * 竖屏 EDGE=注入（穿透），横屏 EDGE=清除（B 路线收事件）；仅在偏离期望时改写并记日志。
      */
     private fun applyCoverFlagAtBoundary(view: View, lp: WindowManager.LayoutParams, via: String) {
-        val wantFlag = inEdgeMode() && !isLandscape(view)
+        val wantFlag = !isLandscape(view)
         val hasFlag = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0
         when {
             wantFlag && !hasFlag -> {
@@ -537,7 +444,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 ?: return@runCatching Log.w(TAG, "applyCoverFlag: lp=${view.layoutParams?.javaClass?.name} 非 WM.LayoutParams")
             // B 路线（1B）：横屏条要收事件——仅竖屏 EDGE 期望穿透 flag；旋转后本方法
             // （看门狗 2s 周期）负责收敛残留
-            val want = inEdgeMode() && !isLandscape(view)
+            val want = !isLandscape(view)
             val has = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0
             if (want != has) {
                 lp.flags = if (want) {
@@ -579,7 +486,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 .filterByParamTypes(Canvas::class.java)
                 .firstOrNull()
                 ?.createBeforeHook {
-                    if (!inEdgeMode()) return@createBeforeHook
                     val v = it.thisObjectOrNull ?: return@createBeforeHook
                     if (v.javaClass.name == handleBarView) it.result = null
                 }
@@ -595,7 +501,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 .filterByParamTypes(Canvas::class.java)
                 .firstOrNull()
                 ?.createBeforeHook {
-                    if (!inEdgeMode()) return@createBeforeHook
                     val v = it.thisObjectOrNull ?: return@createBeforeHook
                     if (v.javaClass.name == handleBarView) it.result = null
                 }
@@ -608,7 +513,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 .filterByName("setImageDrawable")
                 .firstOrNull()
                 ?.createAfterHook {
-                    if (!inEdgeMode()) return@createAfterHook
                     val v = it.thisObjectOrNull ?: return@createAfterHook
                     if (v.javaClass.name != handleBarView) return@createAfterHook
                     val drawable = it.args.getOrNull(0) ?: return@createAfterHook

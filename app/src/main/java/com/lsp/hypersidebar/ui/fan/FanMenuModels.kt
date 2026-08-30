@@ -19,7 +19,6 @@ data class FanConfig(
     val defaultSpanAngle: Float = 150f,
     val landscapeSpanAngle: Float = 75f,
     val deadZoneDp: Float = 12f,
-    val activeZoneDp: Float = 60f,
     val useDualRing: Boolean = true,
     val minRadiusDp: Float = 60f,
     val maxAppsOuter: Int = 7,

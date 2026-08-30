@@ -103,7 +103,6 @@ internal fun FanPreviewCard(
             innerRadiusDp = prefs.getFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS),
             outerRadiusDp = prefs.getFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX),
             deadZoneDp = prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE),
-            activeZoneDp = prefs.getFloat(PrefKeys.ACTIVE_ZONE, LayoutDefaults.ACTIVE_ZONE),
             maxAppsOuter = prefs.getInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER),
             maxAppsInner = prefs.getInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER),
             landscapeIconSizeDp = prefs.getFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE),

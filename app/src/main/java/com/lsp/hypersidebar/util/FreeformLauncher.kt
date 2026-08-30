@@ -62,14 +62,16 @@ object FreeformLauncher {
 
     /**
      * 以小窗打开本模块的 Activity（全部应用面板，PRD"实质为一个以 freeform 小窗形式
-     * 打开的 activity"）。自身包的小窗资格未经生产验证（B4 验证点）：
-     * getActivityOptions 返回 null（无资格）或反射失败时降级普通全屏启动，功能不中断。
+     * 打开的 activity"）。自身包的小窗资格已验证（2026-08-30：:ui 启动，windowMode=freeform）。
+     * getActivityOptions 返回 null 或反射失败时降级普通全屏启动，功能不中断。
+     * configure = 启动前对 intent 的附加配置（如携带面板数据 extras）。
      */
-    fun launchSelfFreeform(context: Context, activity: Class<*>) {
+    fun launchSelfFreeform(context: Context, activity: Class<*>, configure: ((Intent) -> Unit)? = null) {
         // 显式模块包名（勿用 Intent(context, Class)——宿主进程包名错误，见 MODULE_PACKAGE 注释）
         val intent = Intent().apply {
             setClassName(MODULE_PACKAGE, activity.name)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            configure?.invoke(this)
         }
         try {
             val cls = Class.forName("android.util.MiuiMultiWindowUtils")

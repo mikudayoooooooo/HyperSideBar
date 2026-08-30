@@ -27,8 +27,18 @@ class DirectLaunchStrategy : FanLaunchStrategy {
     }
 
     override fun launchAllApps(context: Context) {
-        // :ui 与模块进程都走本进程直启（Com.lsp.hypersidebar 的 activity，exported 已声明）
-        FreeformLauncher.launchSelfFreeform(context, com.lsp.hypersidebar.ui.allapps.AllAppsActivity::class.java)
+        // 面板数据在启动时经 intent 传递：:ui 是 system uid，getFreeformSuggestionList
+        // 反射可用；模块进程是普通 App，被 hidden API blocklist 拒绝（实测 denied），
+        // 面板进程内的 DataLoader 永远拿不到建议列表
+        val list = ArrayList(com.lsp.hypersidebar.util.DataLoader.loadApps(context))
+        FreeformLauncher.launchSelfFreeform(
+            context,
+            com.lsp.hypersidebar.ui.allapps.AllAppsActivity::class.java
+        ) { intent ->
+            intent.putStringArrayListExtra(
+                com.lsp.hypersidebar.ui.allapps.AllAppsActivity.EXTRA_SUGGESTIONS, list
+            )
+        }
     }
 
     override fun openNativePanel(context: Context) {

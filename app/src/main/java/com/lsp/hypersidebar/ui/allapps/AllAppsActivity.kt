@@ -1,5 +1,6 @@
 package com.lsp.hypersidebar.ui.allapps
 
+import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.util.Log
@@ -74,12 +75,20 @@ private const val MAX_DATA_WAIT_MS = 1500L
  */
 class AllAppsActivity : ComponentActivity() {
 
+    companion object {
+        /** :ui（system uid）启动时经 intent 传入的准入应用列表——模块进程被 hidden API
+         *  blocklist 拒绝（getFreeformSuggestionList denied），自取数据不可行。 */
+        const val EXTRA_SUGGESTIONS = "suggestions"
+    }
+
     private var remotePrefs by mutableStateOf<SharedPreferences?>(null)
     private lateinit var fallbackPrefs: SharedPreferences
+    private var suggestions by mutableStateOf<List<String>?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         fallbackPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        suggestions = intent.getStringArrayListExtra(EXTRA_SUGGESTIONS)
         XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
             override fun onServiceBind(service: XposedService) {
                 Thread {
@@ -97,6 +106,7 @@ class AllAppsActivity : ComponentActivity() {
             HyperSidebarTheme(colorMode = currentThemeMode()) {
                 AllAppsScreen(
                     prefs = remotePrefs ?: fallbackPrefs,
+                    initialSuggestions = suggestions,
                     onLaunch = { pkg ->
                         if (!FreeformLauncher.launchFromApp(applicationContext, pkg)) {
                             Toast.makeText(this, "启动失败：$pkg", Toast.LENGTH_SHORT).show()
@@ -107,6 +117,12 @@ class AllAppsActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // singleTask 重入（上次未关闭）：刷新传入的建议列表
+        suggestions = intent.getStringArrayListExtra(EXTRA_SUGGESTIONS)
     }
 
     private fun currentThemeMode(): String =
@@ -131,7 +147,11 @@ private fun letterFor(label: String): String {
 private data class LetterGroup(val letter: String, val items: List<Pair<String, String>>) // pkg to label
 
 @Composable
-private fun AllAppsScreen(prefs: SharedPreferences, onLaunch: (String) -> Unit) {
+private fun AllAppsScreen(
+    prefs: SharedPreferences,
+    initialSuggestions: List<String>?,
+    onLaunch: (String) -> Unit
+) {
     val context = LocalContext.current
     var fixedApps by remember { mutableStateOf<List<String>>(emptyList()) }
     var allPkgs by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -144,15 +164,20 @@ private fun AllAppsScreen(prefs: SharedPreferences, onLaunch: (String) -> Unit) 
         }.getOrDefault(emptyList())
     }
 
-    // 全部应用：DataLoader 缓存即时返回并触发后台刷新；冷缓存轮询等首份数据（≤1.5s）
-    LaunchedEffect(Unit) {
-        var list = DataLoader.loadApps(context)
-        val deadline = System.currentTimeMillis() + MAX_DATA_WAIT_MS
-        while (list.isEmpty() && System.currentTimeMillis() < deadline) {
-            delay(250)
-            list = DataLoader.loadApps(context)
+    // 全部应用：优先用 ：ui 经 intent 传入的列表（首帧可显）；extras 缺失（异常路径）
+    // 才退回进程内 DataLoader——模块进程被 hidden API blocklist 拒绝，大概率空结果
+    LaunchedEffect(initialSuggestions) {
+        if (!initialSuggestions.isNullOrEmpty()) {
+            allPkgs = initialSuggestions
+        } else {
+            var list = DataLoader.loadApps(context)
+            val deadline = System.currentTimeMillis() + MAX_DATA_WAIT_MS
+            while (list.isEmpty() && System.currentTimeMillis() < deadline) {
+                delay(250)
+                list = DataLoader.loadApps(context)
+            }
+            allPkgs = list
         }
-        allPkgs = list
     }
 
     // label 批量回填：IO 线程走 AppMetaCache（miss 才有 PM binder，重复触发近乎免费），
@@ -216,6 +241,15 @@ private fun AllAppsScreen(prefs: SharedPreferences, onLaunch: (String) -> Unit) 
         }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            if (groups.isEmpty()) {
+                // 空态显式占位：避免被误读为黑屏（remote prefs 异步绑定与数据等待期间的过渡态）
+                Text(
+                    if (fixedApps.isEmpty()) "加载中…" else "暂无更多可打开应用",
+                    fontSize = 13.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            }
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 groups.forEach { group ->
                     item(key = "h_${group.letter}") {

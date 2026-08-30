@@ -54,15 +54,17 @@ class XposedInit : XposedModule() {
     }
 
     /**
-     * 诊断探针（迭代二 P5）：hook 侧 remotePrefs 是否接收 App 写入的实时推送。
-     * API 契约=hook 侧只读且无推送说明；若滑条改动后本探针无日志、呼出配置仍为旧值，
-     * 即证实"启动时快照、不更新"——需要专门的同步通道（见 iteration2-perf-plan §7.3）。
+     * remote prefs 推送订阅（P5 实测定案：**此监听是承重件，勿删**）。
+     * LSPosed 对 hook 进程的 remote prefs 变更推送是订阅触发的——不注册监听时
+     * getRemotePreferences 返回的是启动时死快照，设置 App 的滑条改动永远不可见
+     * （2026-08-30 实测：注册后 push 全量到达、下一呼出即读到新值）。
+     * 副作用仅一条日志（键名），留作同步通道的存活遥测。
      */
     private fun remotePrefsWithProbe(): SharedPreferences {
         val prefs = getRemotePreferences("hyperSidebar")
         runCatching {
             prefs.registerOnSharedPreferenceChangeListener { _, key ->
-                Log.i(TAG, "remote prefs push: $key")
+                Log.d(TAG, "remote prefs push: $key")
             }
         }.onFailure { Log.w(TAG, "remote prefs listener register failed: ${it.message}") }
         return prefs

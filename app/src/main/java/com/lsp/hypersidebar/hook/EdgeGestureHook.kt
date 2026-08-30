@@ -58,7 +58,10 @@ class EdgeGestureHook(
                 }
             ),
             onMechanismResult = { ok, reason ->
-                if (ok) breaker.recordSuccess() else breaker.recordFailure(reason)
+                // show 成功不清零（实测轮二踩坑）：呼出与执行端是独立机制，两次选中之间
+                // 必然夹一次成功呼出，若据此清零则连续失败永远到不了阈值。执行端恢复
+                // 的清零信号只有 onRelayResult(alive)
+                if (!ok) breaker.recordFailure(reason)
             }
         )
     }

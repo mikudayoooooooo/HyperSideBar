@@ -176,13 +176,12 @@ internal fun FanStaticPreview(
             quickApps = if (includeQuickBar) previewQuickApps else emptyList()
         )
     }
-    // 预览框按扇形内容宽高比收紧（居中放置），消除大片空白；快速栏不受布局滑条影响，
-    // sheet 内的预览不带快速栏
-    val viewport = remember(geometry) { previewViewport(geometry) }
+    // 固定宽高比预览框（竖屏 3:4 / 横屏 4:3）：滑条拖动时框形稳定不抖，
+    // 扇形按内容适配缩放居中；sheet 内预览不带快捷栏（不受布局滑条影响）
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         StaticFanPreview(
             geometry = geometry,
-            modifier = Modifier.aspectRatio(viewport.width / viewport.height)
+            modifier = Modifier.aspectRatio(if (isLandscape) 4f / 3f else 3f / 4f)
         )
     }
 }

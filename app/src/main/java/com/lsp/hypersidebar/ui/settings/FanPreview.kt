@@ -1,11 +1,11 @@
 package com.lsp.hypersidebar.ui.settings
 
 import com.lsp.hypersidebar.prefs.LayoutDefaults
-import com.lsp.hypersidebar.prefs.PrefKeys
-import android.content.SharedPreferences
+import com.lsp.hypersidebar.prefs.SettingsRepository
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -91,27 +91,15 @@ private val previewQuickApps = listOf(
 )
 
 @Composable
-internal fun FanPreviewCard(
-    prefs: SharedPreferences,
-    prefsRevision: Int,
+internal fun LayoutPreviewCard(
+    repo: SettingsRepository,
+    onPortraitClick: () -> Unit,
+    onLandscapeClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val config = remember(prefs, prefsRevision) {
-        FanConfig(
-            iconSizeDp = prefs.getFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE),
-            quickIconSizeDp = LayoutDefaults.QUICK_ICON_SIZE,
-            innerRadiusDp = prefs.getFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS),
-            outerRadiusDp = prefs.getFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX),
-            deadZoneDp = prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE),
-            maxAppsOuter = prefs.getInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER),
-            maxAppsInner = prefs.getInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER),
-            landscapeIconSizeDp = prefs.getFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE),
-            landscapeMaxAppsOuter = prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER),
-            landscapeMaxAppsInner = prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER),
-            landscapeInnerRadiusDp = prefs.getFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS),
-            landscapeOuterRadiusDp = prefs.getFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
-        )
-    }
+    // 草稿优先读：BottomSheet 编辑期滑条变化实时反映到本卡（revision 通道驱动重组）
+    val rev = repo.revision
+    val config = remember(rev) { buildPreviewConfig(repo) }
 
     val portraitGeometry = remember(config) {
         previewGeometry(
@@ -142,26 +130,64 @@ internal fun FanPreviewCard(
             PreviewPane(
                 title = stringResource(R.string.portrait_preview),
                 geometry = portraitGeometry,
+                onClick = onPortraitClick,
                 modifier = Modifier.weight(1f)
             )
             PreviewPane(
                 title = stringResource(R.string.landscape_preview),
                 geometry = landscapeGeometry,
+                onClick = onLandscapeClick,
                 modifier = Modifier.weight(1f)
             )
         }
     }
 }
 
+internal fun buildPreviewConfig(repo: SettingsRepository): FanConfig = FanConfig(
+    iconSizeDp = repo.iconSize(),
+    quickIconSizeDp = LayoutDefaults.QUICK_ICON_SIZE,
+    innerRadiusDp = repo.innerRadius(),
+    outerRadiusDp = repo.outerRadiusMax(),
+    deadZoneDp = repo.deadZone(),
+    maxAppsOuter = repo.maxAppsOuter(),
+    maxAppsInner = repo.maxAppsInner(),
+    landscapeIconSizeDp = repo.landscapeIconSize(),
+    landscapeMaxAppsOuter = repo.landscapeMaxAppsOuter(),
+    landscapeMaxAppsInner = repo.landscapeMaxAppsInner(),
+    landscapeInnerRadiusDp = repo.landscapeInnerRadius(),
+    landscapeOuterRadiusDp = repo.landscapeOuterRadius()
+)
+
+/** 单方向静态扇形预览（BottomSheet 内实时预览复用；geometry 与实机 computeFanGeometry 同源）。 */
+@Composable
+internal fun FanStaticPreview(
+    config: FanConfig,
+    isLandscape: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val geometry = remember(config, isLandscape) {
+        previewGeometry(
+            config = config,
+            width = if (isLandscape) LANDSCAPE_WIDTH else PORTRAIT_WIDTH,
+            height = if (isLandscape) LANDSCAPE_HEIGHT else PORTRAIT_HEIGHT,
+            isLandscape = isLandscape
+        )
+    }
+    StaticFanPreview(geometry = geometry, modifier = modifier)
+}
+
 @Composable
 private fun PreviewPane(
     title: String,
     geometry: FanGeometry,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier
             .fillMaxHeight()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {

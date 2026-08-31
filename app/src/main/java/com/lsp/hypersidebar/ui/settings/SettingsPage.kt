@@ -1,7 +1,7 @@
 package com.lsp.hypersidebar.ui.settings
 
 import com.lsp.hypersidebar.prefs.savePref
-import com.lsp.hypersidebar.ui.fan.effectiveIconSizeDp
+import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
@@ -23,7 +23,6 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
@@ -46,13 +45,13 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 @Composable
 internal fun SettingsPage(
     prefs: SharedPreferences,
+    repo: SettingsRepository,
     prefsRevision: Int,
     status: ModuleStatus,
     currentThemeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit,
     onNavigateToAppSelection: () -> Unit,
     onNavigateToShortcutSelection: () -> Unit,
-    onNavigateToLayout: () -> Unit,
     onNavigateToInteraction: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -85,6 +84,9 @@ internal fun SettingsPage(
                 prefs.getBoolean(PrefKeys.CIRCUIT_OPEN_UI, false)
         }.getOrDefault(false)
     }
+
+    // 布局编辑 BottomSheet：入口 = 布局预览卡双缩略点击（§2.2）
+    var sheetOrientation by remember { mutableStateOf<LayoutOrientation?>(null) }
 
     SettingsList(modifier = modifier) {
         item { SmallTitle(text = stringResource(R.string.module_section)) }
@@ -129,9 +131,10 @@ internal fun SettingsPage(
 
         item { SmallTitle(text = stringResource(R.string.effect_preview)) }
         item {
-            FanPreviewCard(
-                prefs = prefs,
-                prefsRevision = prefsRevision
+            LayoutPreviewCard(
+                repo = repo,
+                onPortraitClick = { sheetOrientation = LayoutOrientation.PORTRAIT },
+                onLandscapeClick = { sheetOrientation = LayoutOrientation.LANDSCAPE }
             )
         }
 
@@ -174,11 +177,6 @@ internal fun SettingsPage(
                             onThemeModeChange(ThemeModes.compose(baseMode, enabled))
                         }
                     )
-                    ArrowPreference(
-                        title = stringResource(R.string.layout_settings),
-                        summary = stringResource(R.string.layout_settings_summary),
-                        onClick = onNavigateToLayout
-                    )
                 }
             }
         }
@@ -196,198 +194,14 @@ internal fun SettingsPage(
             }
         }
     }
-}
 
-@Composable
-internal fun LayoutSettingsPage(
-    prefs: SharedPreferences,
-    prefsRevision: Int,
-    modifier: Modifier = Modifier
-) {
-    var iconSize by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE))
-    }
-    var innerRadius by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS))
-    }
-    var outerRadius by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX))
-    }
-    var outerCount by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER).toFloat())
-    }
-    var innerCount by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER).toFloat())
-    }
-    var landscapeIconSize by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE))
-    }
-    var landscapeOuterCount by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER).toFloat())
-    }
-    var landscapeInnerCount by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER).toFloat())
-    }
-    var landscapeInnerRadius by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS))
-    }
-    var landscapeOuterRadius by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS))
-    }
-
-    // 行为规则 1：设置页显示弦长收缩后的实际生效图标尺寸，超限时提示
-    val density = LocalDensity.current.density
-    val effectiveIcon = effectiveIconSizeDp(
-        outerCount.toInt(), innerCount.toInt(), 150f,
-        outerRadius, innerRadius, iconSize, density
+    // 布局编辑 sheet 常驻组合（show 控制显隐，保证退出动画）
+    LayoutBottomSheet(
+        show = sheetOrientation != null,
+        orientation = sheetOrientation ?: LayoutOrientation.PORTRAIT,
+        repo = repo,
+        onDismiss = { sheetOrientation = null }
     )
-    val effectiveLandscapeIcon = effectiveIconSizeDp(
-        landscapeOuterCount.toInt(), landscapeInnerCount.toInt(), 75f,
-        landscapeOuterRadius, landscapeInnerRadius, landscapeIconSize, density
-    )
-
-    SettingsList(modifier = modifier) {
-        item { SmallTitle(text = stringResource(R.string.portrait_layout)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    SettingsSliderItem(
-                        title = stringResource(R.string.icon_size),
-                        summary = if (effectiveIcon < iconSize) {
-                            stringResource(R.string.icon_size_limited, iconSize.toInt(), effectiveIcon.toInt())
-                        } else {
-                            stringResource(R.string.icon_size_effective, iconSize.toInt(), effectiveIcon.toInt())
-                        },
-                        value = iconSize,
-                        valueRange = 32f..80f,
-                        onValueChange = { iconSize = it },
-                        onValueChangeFinished = { prefs.savePref(PrefKeys.ICON_SIZE, iconSize) }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.inner_radius),
-                        summary = stringResource(R.string.inner_radius_summary, innerRadius.toInt()),
-                        value = innerRadius,
-                        valueRange = 80f..160f,
-                        steps = 7,
-                        onValueChange = { innerRadius = it },
-                        onValueChangeFinished = { prefs.savePref(PrefKeys.INNER_RADIUS, innerRadius) }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.outer_radius_max),
-                        summary = stringResource(R.string.outer_radius_summary, outerRadius.toInt()),
-                        value = outerRadius,
-                        valueRange = 110f..220f,
-                        steps = 10,
-                        onValueChange = { outerRadius = it },
-                        onValueChangeFinished = { prefs.savePref(PrefKeys.OUTER_RADIUS_MAX, outerRadius) }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.outer_apps_count),
-                        summary = stringResource(R.string.outer_apps_summary, outerCount.toInt()),
-                        value = outerCount,
-                        valueRange = 4f..12f,
-                        steps = 7,
-                        onValueChange = { outerCount = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.MAX_APPS_OUTER, outerCount.toInt())
-                        }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.inner_apps_count),
-                        summary = stringResource(R.string.inner_apps_summary, innerCount.toInt()),
-                        value = innerCount,
-                        valueRange = 2f..8f,
-                        steps = 5,
-                        onValueChange = { innerCount = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.MAX_APPS_INNER, innerCount.toInt())
-                        }
-                    )
-                }
-            }
-        }
-
-        item { SmallTitle(text = stringResource(R.string.landscape_layout)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    SettingsSliderItem(
-                        title = stringResource(R.string.landscape_icon_size),
-                        summary = if (effectiveLandscapeIcon < landscapeIconSize) {
-                            stringResource(R.string.landscape_icon_size_limited, landscapeIconSize.toInt(), effectiveLandscapeIcon.toInt())
-                        } else {
-                            stringResource(R.string.landscape_icon_size_effective, landscapeIconSize.toInt(), effectiveLandscapeIcon.toInt())
-                        },
-                        value = landscapeIconSize,
-                        valueRange = 32f..80f,
-                        onValueChange = { landscapeIconSize = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.LANDSCAPE_ICON_SIZE, landscapeIconSize)
-                        }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.landscape_outer_apps_count),
-                        summary = stringResource(R.string.landscape_outer_apps_summary, landscapeOuterCount.toInt()),
-                        value = landscapeOuterCount,
-                        valueRange = 3f..8f,
-                        steps = 4,
-                        onValueChange = { landscapeOuterCount = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, landscapeOuterCount.toInt())
-                        }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.landscape_inner_apps_count),
-                        summary = stringResource(R.string.landscape_inner_apps_summary, landscapeInnerCount.toInt()),
-                        value = landscapeInnerCount,
-                        valueRange = 0f..6f,
-                        steps = 5,
-                        onValueChange = { landscapeInnerCount = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.LANDSCAPE_MAX_APPS_INNER, landscapeInnerCount.toInt())
-                        }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.landscape_inner_radius),
-                        summary = stringResource(R.string.landscape_inner_radius_summary, landscapeInnerRadius.toInt()),
-                        value = landscapeInnerRadius,
-                        valueRange = 80f..160f,
-                        steps = 7,
-                        onValueChange = { landscapeInnerRadius = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.LANDSCAPE_INNER_RADIUS, landscapeInnerRadius)
-                        }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.landscape_outer_radius),
-                        summary = stringResource(R.string.landscape_outer_radius_summary, landscapeOuterRadius.toInt()),
-                        value = landscapeOuterRadius,
-                        valueRange = 110f..220f,
-                        steps = 10,
-                        onValueChange = { landscapeOuterRadius = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.LANDSCAPE_OUTER_RADIUS, landscapeOuterRadius)
-                        }
-                    )
-                }
-            }
-        }
-
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = stringResource(R.string.restore_defaults),
-                    color = MiuixTheme.colorScheme.error,
-                    style = MiuixTheme.textStyles.body1,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = { restoreLayoutDefaults(prefs) })
-                        .padding(vertical = 12.dp),
-                    textAlign = TextAlign.Center
-                )
-            }
-        }
-    }
 }
 
 @Composable
@@ -481,7 +295,7 @@ private fun CircuitStatusComponent(onRetry: () -> Unit) {
 }
 
 @Composable
-private fun SettingsSliderItem(
+internal fun SettingsSliderItem(
     title: String,
     summary: String,
     value: Float,
@@ -506,20 +320,4 @@ private fun SettingsSliderItem(
             )
         }
     )
-}
-
-private fun restoreLayoutDefaults(prefs: SharedPreferences) {
-    // 单 editor 批量落盘：1 次 binder 写 + 1 次监听器回调 + 1 轮重组（原逐 key 写 = 10 轮）
-    prefs.edit().apply {
-        putFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE)
-        putFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS)
-        putFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX)
-        putInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER)
-        putInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER)
-        putFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE)
-        putInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER)
-        putInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
-        putFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS)
-        putFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
-    }.apply()
 }

@@ -21,6 +21,5 @@ internal sealed interface SettingsKey : NavKey {
      */
     data class ShortcutEdit(val shortcut: ShortcutAction, val isNew: Boolean) : SettingsKey
     data object ShortcutPicker : SettingsKey
-    data object LayoutSettings : SettingsKey
     data object InteractionSettings : SettingsKey
 }

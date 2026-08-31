@@ -89,7 +89,6 @@ internal fun MainScreen(
         SettingsKey.ShortcutList, SettingsKey.ShortcutPicker ->
             stringResource(R.string.shortcuts_add_section)
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
-        SettingsKey.LayoutSettings -> stringResource(R.string.layout_settings)
         SettingsKey.InteractionSettings -> stringResource(R.string.interaction_settings)
     }
 
@@ -150,6 +149,7 @@ internal fun MainScreen(
                         ) {
                             SettingsPage(
                                 prefs = prefs,
+                                repo = settingsRepo,
                                 prefsRevision = prefsRevision,
                                 status = moduleStatus,
                                 currentThemeMode = themeMode,
@@ -161,9 +161,6 @@ internal fun MainScreen(
                                 },
                                 onNavigateToShortcutSelection = {
                                     settingsStack.add(SettingsKey.ShortcutList)
-                                },
-                                onNavigateToLayout = {
-                                    settingsStack.add(SettingsKey.LayoutSettings)
                                 },
                                 onNavigateToInteraction = {
                                     settingsStack.add(SettingsKey.InteractionSettings)
@@ -267,14 +264,6 @@ internal fun MainScreen(
                                     settingsStack.removeLast()
                                 },
                                 onBack = { settingsStack.removeLast() }
-                            )
-                        }
-                    }
-                    SettingsKey.LayoutSettings -> NavEntry(key) {
-                        DetailPageContainer {
-                            LayoutSettingsPage(
-                                prefs = prefs,
-                                prefsRevision = prefsRevision
                             )
                         }
                     }

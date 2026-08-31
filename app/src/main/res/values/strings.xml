@@ -57,6 +57,11 @@
     <string name="interaction_settings_summary">灵敏度、死区与触觉反馈</string>
     <string name="portrait_layout">竖屏布局</string>
     <string name="landscape_layout">横屏布局</string>
+    <string name="layout_sheet_cancel">取消</string>
+    <string name="layout_sheet_save">保存</string>
+    <string name="layout_sheet_restore_default">恢复默认</string>
+    <string name="layout_inner_clamped">已按“内圈 ≤ 外圈×80%”上限钳制</string>
+    <string name="layout_preview_hint">拖动滑条实时预览，保存后生效</string>
 
     <string name="icon_size">图标大小</string>
     <string name="inner_radius">内圈半径</string>

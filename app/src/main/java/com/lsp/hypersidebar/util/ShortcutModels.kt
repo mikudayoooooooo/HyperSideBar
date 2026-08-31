@@ -101,6 +101,9 @@ object ShortcutStore {
      */
     const val MAX_USER_SHORTCUTS = 6
 
+    /** 存储上限（§2.4 用户定值：最多可添加 10 个，超出部分仅存储不上栏）。 */
+    const val MAX_STORED_SHORTCUTS = 10
+
     /**
      * 从 SharedPreferences 读取所有用户快捷方式（按 order 排序）。
      * 不包含 TOOLBOX 内置项。
@@ -149,11 +152,12 @@ object ShortcutStore {
     }
 
     /**
-     * 添加一个用户快捷方式（存储无上限）。
+     * 添加一个用户快捷方式（存储上限 MAX_STORED_SHORTCUTS=10）。
      * NOTE: Must be called from main thread (not thread-safe).
      */
     fun addShortcut(prefs: SharedPreferences, shortcut: ShortcutAction): Boolean {
         val current = loadUserShortcuts(prefs).toMutableList()
+        if (current.size >= MAX_STORED_SHORTCUTS) return false
         val newItem = shortcut.copy(
             source = ShortcutSource.USER,
             order = current.size

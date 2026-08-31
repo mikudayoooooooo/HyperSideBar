@@ -28,6 +28,9 @@ object PrefKeys {
     const val TRIGGER_MIN_DISTANCE = "triggerMinDistance"
 
     const val CUSTOM_APPS = "customApps"
+    // 已选固定应用的拖动排序（JSON 数组字符串，仅含已选包名；StringSet 不保序，
+    // 扇形/面板按此键排序，缺失项排尾部）
+    const val CUSTOM_APPS_ORDER = "customAppsOrder"
     const val SHORTCUT_ACTIONS = "shortcut_actions"   // 用户快捷方式 JSON（权威 key）
 
     /** 穿透失效自动降级状态（1C：:ui 写入，设置页读出标注；非用户设置） */

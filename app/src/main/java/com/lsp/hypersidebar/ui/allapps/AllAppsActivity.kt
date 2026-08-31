@@ -214,10 +214,18 @@ private fun AllAppsScreen(
             entries = emptyList()
             return@LaunchedEffect
         }
+        // 固定区按用户拖动排序展示（§2.4），无序键时按 label 字母序兜底
+        val fixedOrder = runCatching {
+            prefs.getString(PrefKeys.CUSTOM_APPS_ORDER, null)?.let { s ->
+                val arr = org.json.JSONArray(s)
+                (0 until arr.length()).map { arr.optString(it) }
+            }
+        }.getOrNull() ?: emptyList()
         val result = withContext(Dispatchers.IO) {
             val labels = (pkgs + fixed).distinct().associateWith { AppMetaCache.label(context, it) }
-            val fixedSorted = fixed.map { it to (labels[it] ?: it) }
-                .sortedBy { it.second.lowercase() }
+            val fixedSorted = fixed
+                .sortedBy { pkg -> fixedOrder.indexOf(pkg).let { if (it >= 0) it else Int.MAX_VALUE } }
+                .map { it to (labels[it] ?: it) }
             buildEntries(pkgs, fixedSorted, labels)
         }
         hasFixedApps = fixed.isNotEmpty()

@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,6 +26,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
+import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.AppIconImage
 import com.lsp.hypersidebar.ui.fan.FanAppInfo
 import com.lsp.hypersidebar.ui.fan.rememberAppIcon
@@ -32,10 +35,13 @@ import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
+import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.SearchBar
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Sort
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
@@ -66,6 +72,31 @@ internal fun AppSelectionPage(
     var selectedApps by remember(prefs, prefsKey) {
         mutableStateOf(prefs.getStringSet(prefsKey, emptySet()).orEmpty().toSet())
     }
+    // 已选顺序（拖动排序，§2.4）：CUSTOM_APPS_ORDER JSON 数组为权威，新勾选追加尾部
+    var selectedOrder by remember(prefs, prefsKey) {
+        mutableStateOf(loadSelectedOrder(prefs))
+    }
+
+    fun persistSelection() {
+        prefs.savePref(prefsKey, selectedApps)
+        prefs.savePref(
+            PrefKeys.CUSTOM_APPS_ORDER,
+            org.json.JSONArray(selectedOrder.filter { it in selectedApps }).toString()
+        )
+    }
+
+    fun toggle(pkg: String) {
+        selectedApps = selectedApps.toMutableSet().apply {
+            if (!remove(pkg)) add(pkg)
+        }.toSet()
+        selectedOrder = if (pkg in selectedOrder) {
+            selectedOrder - pkg
+        } else {
+            selectedOrder + pkg
+        }
+        persistSelection()
+    }
+
     val loadState by produceState<AppLoadState>(
         initialValue = cachedApps?.let(AppLoadState::Loaded) ?: AppLoadState.Loading,
         key1 = context.applicationContext
@@ -116,8 +147,9 @@ internal fun AppSelectionPage(
             AppLoadState.Loading -> LoadingApps()
             AppLoadState.Failed -> MessageState(stringResource(R.string.apps_load_failed))
             is AppLoadState.Loaded -> {
-                // 已选优先（§2.4）：选中项置顶，其余保持 user→system 原排序；搜索结果同规则
-                val filteredApps = remember(searchQuery, state.apps, selectedApps) {
+                // 已选优先（§2.4）：选中项按 CUSTOM_APPS_ORDER 置顶成组，
+                // 未选保持 user→system 原排序；搜索结果同规则
+                val filteredApps = remember(searchQuery, state.apps, selectedApps, selectedOrder) {
                     val base = if (searchQuery.isBlank()) {
                         state.apps
                     } else {
@@ -126,23 +158,37 @@ internal fun AppSelectionPage(
                                 app.packageName.contains(searchQuery, ignoreCase = true)
                         }
                     }
-                    val (sel, rest) = base.partition { it.packageName in selectedApps }
-                    sel + rest
+                    val byPkg = base.associateBy { it.packageName }
+                    val orderedSelected = selectedOrder.mapNotNull { byPkg[it] }
+                    val rest = base.filter { it.packageName !in selectedApps }
+                    orderedSelected + rest
                 }
                 AppList(
                     apps = filteredApps,
                     showGroups = searchQuery.isBlank(),
                     selectedApps = selectedApps,
-                    onToggle = { packageName ->
-                        selectedApps = selectedApps.toMutableSet().apply {
-                            if (!remove(packageName)) add(packageName)
-                        }.toSet()
-                        prefs.savePref(prefsKey, selectedApps)
-                    }
+                    onToggle = { toggle(it) },
+                    onReorder = { fromPkg, toPkg ->
+                        val from = selectedOrder.indexOf(fromPkg)
+                        val to = selectedOrder.indexOf(toPkg)
+                        if (from >= 0 && to >= 0) {
+                            selectedOrder = selectedOrder.toMutableList().apply { add(to, removeAt(from)) }
+                        }
+                    },
+                    onReorderFinished = { persistSelection() }
                 )
             }
         }
     }
+}
+
+private fun loadSelectedOrder(prefs: SharedPreferences): List<String> {
+    val json = runCatching { prefs.getString(PrefKeys.CUSTOM_APPS_ORDER, null) }.getOrNull()
+        ?: return emptyList()
+    return runCatching {
+        val arr = org.json.JSONArray(json)
+        (0 until arr.length()).map { arr.optString(it) }
+    }.getOrDefault(emptyList())
 }
 
 @Composable
@@ -175,13 +221,15 @@ private fun AppList(
     apps: List<AppItem>,
     showGroups: Boolean,
     selectedApps: Set<String>,
-    onToggle: (String) -> Unit
+    onToggle: (String) -> Unit,
+    onReorder: (fromPkg: String, toPkg: String) -> Unit,
+    onReorderFinished: () -> Unit
 ) {
     if (apps.isEmpty()) {
         MessageState(stringResource(R.string.no_apps_found))
         return
     }
-    // 已选优先分组：[已选 N] → 未选用户应用 → 系统应用
+    // 已选优先分组：[已选 N] → 未选用户应用 → 系统应用；已选组内可拖动排序
     val selectedCount = remember(apps, selectedApps) {
         apps.count { it.packageName in selectedApps }
     }
@@ -189,7 +237,16 @@ private fun AppList(
         apps.drop(selectedCount).indexOfFirst { it.isSystem }
             .let { if (it >= 0) it + selectedCount else -1 }
     }
+    val listState = rememberLazyListState()
+    val dragState = rememberDragReorderState(
+        listState = listState,
+        onMoveByKey = { fromKey, toKey ->
+            if (fromKey is String && toKey is String) onReorder(fromKey, toKey)
+        },
+        onDragFinished = onReorderFinished
+    )
     LazyColumn(
+        state = listState,
         modifier = Modifier
             .fillMaxSize()
             .overScrollVertical()
@@ -213,7 +270,9 @@ private fun AppList(
             AppSelectionRow(
                 app = app,
                 isChecked = app.packageName in selectedApps,
-                onToggle = { onToggle(app.packageName) }
+                onToggle = { onToggle(app.packageName) },
+                dragState = dragState,
+                modifier = Modifier.animateItem()
             )
         }
     }
@@ -223,7 +282,9 @@ private fun AppList(
 private fun AppSelectionRow(
     app: AppItem,
     isChecked: Boolean,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    dragState: DragReorderState,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val appInfo = remember(app.packageName, app.label) {
@@ -249,8 +310,21 @@ private fun AppSelectionRow(
                 state = if (isChecked) ToggleableState.On else ToggleableState.Off,
                 onClick = onToggle
             )
+            // 拖动排序手柄：仅已选项可拖（未选项顺序由分组规则决定）
+            if (isChecked) {
+                Icon(
+                    imageVector = MiuixIcons.Sort,
+                    contentDescription = stringResource(R.string.shortcut_drag_handle),
+                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .size(24.dp)
+                        .dragReorderHandle(dragState, app.packageName)
+                )
+            }
         },
-        onClick = onToggle
+        onClick = onToggle,
+        modifier = modifier.dragReorderItem(dragState, app.packageName)
     )
 }
 

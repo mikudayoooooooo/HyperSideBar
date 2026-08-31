@@ -55,7 +55,6 @@ internal fun SettingsPage(
     onThemeModeChange: (ThemeMode) -> Unit,
     onNavigateToAppSelection: () -> Unit,
     onNavigateToShortcutSelection: () -> Unit,
-    onNavigateToInteraction: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var enabled by remember(prefs, prefsRevision) {
@@ -196,19 +195,6 @@ internal fun SettingsPage(
                 }
             }
         }
-
-        item { SmallTitle(text = stringResource(R.string.interaction)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    ArrowPreference(
-                        title = stringResource(R.string.interaction_settings),
-                        summary = stringResource(R.string.interaction_settings_summary),
-                        onClick = onNavigateToInteraction
-                    )
-                }
-            }
-        }
     }
 
     // 布局编辑 sheet 常驻组合（show 控制显隐）；
@@ -224,50 +210,6 @@ internal fun SettingsPage(
             sheetOrientation = null
         }
     )
-}
-
-@Composable
-internal fun InteractionSettingsPage(
-    prefs: SharedPreferences,
-    prefsRevision: Int,
-    modifier: Modifier = Modifier
-) {
-    var deadZone by remember(prefs, prefsRevision) { mutableFloatStateOf(prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)) }
-    var vibrate by remember(prefs, prefsRevision) { mutableStateOf(prefs.getBoolean(PrefKeys.VIBRATE, LayoutDefaults.VIBRATE)) }
-
-    SettingsList(modifier = modifier) {
-        item { SmallTitle(text = stringResource(R.string.interaction_settings)) }
-        item {
-            // 触发区示意图（§2.3）：竖屏边缘中段 / 横屏顶部角条，以 hook 代码常量为准
-            TriggerZoneDiagramCard()
-        }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    // activeZone（灵敏度）参数已废弃（1B 定稿）：其唯一运行时用途是距离
-                    // 门控——正是"完全没有选中反馈"的根因，选中语义由死区+内外取消区派生
-                    SettingsSliderItem(
-                        title = stringResource(R.string.dead_zone),
-                        summary = stringResource(R.string.dead_zone_description, deadZone.toInt()),
-                        value = deadZone,
-                        valueRange = 4f..40f,
-                        steps = 8,
-                        onValueChange = { deadZone = it },
-                        onValueChangeFinished = { prefs.savePref(PrefKeys.DEAD_ZONE, deadZone) }
-                    )
-                    SwitchPreference(
-                        title = stringResource(R.string.vibrate_feedback),
-                        summary = stringResource(R.string.vibrate_feedback_summary),
-                        checked = vibrate,
-                        onCheckedChange = {
-                            vibrate = it
-                            prefs.savePref(PrefKeys.VIBRATE, it)
-                        }
-                    )
-                }
-            }
-        }
-    }
 }
 
 @Composable

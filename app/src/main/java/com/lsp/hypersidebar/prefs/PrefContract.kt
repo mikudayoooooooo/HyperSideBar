@@ -24,7 +24,6 @@ object PrefKeys {
     const val LANDSCAPE_OUTER_RADIUS = "landscapeOuterRadius"
 
     const val DEAD_ZONE = "deadZone"
-    const val VIBRATE = "vibrateEnabled"
     const val TRIGGER_DWELL_MS = "triggerDwellMs"
     const val TRIGGER_MIN_DISTANCE = "triggerMinDistance"
 
@@ -66,7 +65,6 @@ object LayoutDefaults {
     const val QUICK_ICON_SIZE = 36f
 
     const val DEAD_ZONE = 12f
-    const val VIBRATE = true
     const val TRIGGER_DWELL_MS = 250
     const val TRIGGER_MIN_DISTANCE_DP = 30f
 

@@ -27,9 +27,7 @@ data class FanConfig(
     val landscapeMaxAppsOuter: Int = 5,
     val landscapeMaxAppsInner: Int = 3,
     val landscapeInnerRadiusDp: Float = 110f,
-    val landscapeOuterRadiusDp: Float = 150f,
-    /** 触觉反馈（§2.3 收尾）：选中变化时轻震，App 侧 VIBRATE 开关控制 */
-    val vibrate: Boolean = true
+    val landscapeOuterRadiusDp: Float = 150f
 )
 
 data class FanThemeColors(

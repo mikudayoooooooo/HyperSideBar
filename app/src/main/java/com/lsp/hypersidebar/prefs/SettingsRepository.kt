@@ -74,7 +74,6 @@ class SettingsRepository(val prefs: SharedPreferences) {
     }
 
     fun deadZone(): Float = prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)
-    fun vibrate(): Boolean = prefs.getBoolean(PrefKeys.VIBRATE, LayoutDefaults.VIBRATE)
     fun triggerDwellMs(): Int = prefs.getInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
     fun triggerMinDistanceDp(): Float =
         prefs.getFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)

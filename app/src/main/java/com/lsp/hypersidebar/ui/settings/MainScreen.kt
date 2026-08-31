@@ -89,7 +89,6 @@ internal fun MainScreen(
         SettingsKey.ShortcutList, SettingsKey.ShortcutPicker ->
             stringResource(R.string.shortcuts_add_section)
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
-        SettingsKey.InteractionSettings -> stringResource(R.string.interaction_settings)
     }
 
     // 根 Tab 互切保持现网根 Tab 的淡入淡出；其余（详情推/弹）走 miuix HyperOS 横滑默认
@@ -161,9 +160,6 @@ internal fun MainScreen(
                                 },
                                 onNavigateToShortcutSelection = {
                                     settingsStack.add(SettingsKey.ShortcutList)
-                                },
-                                onNavigateToInteraction = {
-                                    settingsStack.add(SettingsKey.InteractionSettings)
                                 },
                                 modifier = Modifier.weight(1f)
                             )
@@ -264,14 +260,6 @@ internal fun MainScreen(
                                     settingsStack.removeLast()
                                 },
                                 onBack = { settingsStack.removeLast() }
-                            )
-                        }
-                    }
-                    SettingsKey.InteractionSettings -> NavEntry(key) {
-                        DetailPageContainer {
-                            InteractionSettingsPage(
-                                prefs = prefs,
-                                prefsRevision = prefsRevision
                             )
                         }
                     }

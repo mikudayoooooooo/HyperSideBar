@@ -91,6 +91,8 @@ dependencies {
     implementation(libs.miuix.icons)
     implementation(libs.miuix.blur)
     implementation(libs.miuix.navigation3.ui)
+    // miuix-navigation3-ui 只内嵌 ui/scene 包，runtime（NavKey/NavBackStack/NavEntry）需显式引入
+    implementation(libs.androidx.navigation3.runtime)
 
     // Xposed/LSPosed
     compileOnly(libs.libxposed.api)

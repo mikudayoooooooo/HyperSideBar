@@ -35,6 +35,7 @@ import com.lsp.hypersidebar.theme.ThemeMode
 import com.lsp.hypersidebar.theme.ThemeModes
 import com.lsp.hypersidebar.util.ShortcutStore
 import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SmallTitle
@@ -89,6 +90,13 @@ internal fun SettingsPage(
 
     // 布局编辑 BottomSheet：入口 = 布局预览卡双缩略点击（§2.2）
     var sheetOrientation by remember { mutableStateOf<LayoutOrientation?>(null) }
+    var sheetVisible by remember { mutableStateOf(false) }
+
+    fun openLayoutSheet(orientation: LayoutOrientation) {
+        repo.discardDraft() // 兜底清残留（上次关闭未走 onDismissFinished 的极端路径）
+        sheetOrientation = orientation
+        sheetVisible = true
+    }
 
     // 草稿守卫：sheet 关闭或页面离开组合（含切 Tab 丢 sheet 状态）时兜底丢弃，
     // 防止残留草稿持续泄漏进预览卡的草稿优先读（"没保存却生效"的观感来源）
@@ -141,8 +149,8 @@ internal fun SettingsPage(
         item {
             LayoutPreviewCard(
                 repo = repo,
-                onPortraitClick = { sheetOrientation = LayoutOrientation.PORTRAIT },
-                onLandscapeClick = { sheetOrientation = LayoutOrientation.LANDSCAPE }
+                onPortraitClick = { openLayoutSheet(LayoutOrientation.PORTRAIT) },
+                onLandscapeClick = { openLayoutSheet(LayoutOrientation.LANDSCAPE) }
             )
         }
 
@@ -203,12 +211,18 @@ internal fun SettingsPage(
         }
     }
 
-    // 布局编辑 sheet 常驻组合（show 控制显隐，保证退出动画）
+    // 布局编辑 sheet 常驻组合（show 控制显隐）；
+    // 关闭走两段：onDismiss 收 show（内容随 sheet 滑下）→ onDismissFinished 清理草稿与方向
     LayoutBottomSheet(
-        show = sheetOrientation != null,
+        show = sheetVisible,
         orientation = sheetOrientation ?: LayoutOrientation.PORTRAIT,
         repo = repo,
-        onDismiss = { sheetOrientation = null }
+        onDismiss = { sheetVisible = false },
+        onDismissFinished = {
+            // 保存路径 commit 已清空草稿，此处为无操作；取消/滑掉/返回=丢弃
+            repo.discardDraft()
+            sheetOrientation = null
+        }
     )
 }
 
@@ -305,17 +319,19 @@ private fun CircuitStatusComponent(onRetry: () -> Unit) {
 @Composable
 internal fun SettingsSliderItem(
     title: String,
-    summary: String,
+    summary: String? = null,
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
     steps: Int = 0,
-    sliderHorizontalPadding: Dp = 16.dp
+    sliderHorizontalPadding: Dp = 16.dp,
+    compact: Boolean = false
 ) {
     BasicComponent(
         title = title,
         summary = summary,
+        insideMargin = if (compact) SheetSliderInsideMargin else BasicComponentDefaults.InsideMargin,
         bottomAction = {
             Slider(
                 value = value,

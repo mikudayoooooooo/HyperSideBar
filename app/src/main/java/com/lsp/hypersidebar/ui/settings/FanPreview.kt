@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -163,17 +164,27 @@ internal fun buildPreviewConfig(repo: SettingsRepository): FanConfig = FanConfig
 internal fun FanStaticPreview(
     config: FanConfig,
     isLandscape: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    includeQuickBar: Boolean = true
 ) {
     val geometry = remember(config, isLandscape) {
         previewGeometry(
             config = config,
             width = if (isLandscape) LANDSCAPE_WIDTH else PORTRAIT_WIDTH,
             height = if (isLandscape) LANDSCAPE_HEIGHT else PORTRAIT_HEIGHT,
-            isLandscape = isLandscape
+            isLandscape = isLandscape,
+            quickApps = if (includeQuickBar) previewQuickApps else emptyList()
         )
     }
-    StaticFanPreview(geometry = geometry, modifier = modifier)
+    // 预览框按扇形内容宽高比收紧（居中放置），消除大片空白；快速栏不受布局滑条影响，
+    // sheet 内的预览不带快速栏
+    val viewport = remember(geometry) { previewViewport(geometry) }
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        StaticFanPreview(
+            geometry = geometry,
+            modifier = Modifier.aspectRatio(viewport.width / viewport.height)
+        )
+    }
 }
 
 @Composable
@@ -210,7 +221,8 @@ private fun previewGeometry(
     config: FanConfig,
     width: Float,
     height: Float,
-    isLandscape: Boolean
+    isLandscape: Boolean,
+    quickApps: List<FanAppInfo> = previewQuickApps
 ): FanGeometry {
     val appLimit = if (isLandscape) {
         config.landscapeMaxAppsOuter + config.landscapeMaxAppsInner
@@ -221,7 +233,7 @@ private fun previewGeometry(
         anchor = Offset(0f, height / 2f),
         screenSize = IntSize(width.toInt(), height.toInt()),
         apps = previewApps.take(appLimit.coerceIn(1, previewApps.size)),
-        quickApps = previewQuickApps,
+        quickApps = quickApps,
         config = config,
         density = PREVIEW_DENSITY,
         isLandscape = isLandscape
@@ -240,6 +252,7 @@ private fun StaticFanPreview(
 
     BoxWithConstraints(
         modifier = modifier
+            .clip(shape)
             .background(MiuixTheme.colorScheme.surfaceContainerHigh, shape)
             .border(1.dp, colors.outline.copy(alpha = 0.35f), shape)
     ) {
@@ -325,12 +338,14 @@ private fun StaticFanPreview(
             )
         }
 
-        PreviewQuickBar(
-            geometry = geometry,
-            scale = scale,
-            offsetX = offsetX,
-            offsetY = offsetY
-        )
+        if (geometry.quickApps.isNotEmpty()) {
+            PreviewQuickBar(
+                geometry = geometry,
+                scale = scale,
+                offsetX = offsetX,
+                offsetY = offsetY
+            )
+        }
     }
 }
 

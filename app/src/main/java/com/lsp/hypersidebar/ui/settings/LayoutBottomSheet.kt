@@ -2,10 +2,14 @@ package com.lsp.hypersidebar.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -20,9 +24,13 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.ui.fan.effectiveIconSizeDp
-import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.basic.Check
+import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -33,16 +41,17 @@ internal enum class LayoutOrientation { PORTRAIT, LANDSCAPE }
  *
  * 草稿/提交语义：滑条只写 [SettingsRepository.putDraft]（实时预览跟随 revision 通道），
  * 保存=commitDraft 单 editor 批量落盘（一次 revision 跳变、hook 侧一次 LSPosed 推送），
- * 取消/下滑/返回关闭=discardDraft 整体丢弃。竖屏与横屏各 5 项、完全独立（行为规则 6）。
+ * 取消/下滑/返回关闭=discardDraft 整体丢弃（丢弃推迟到 [onDismissFinished]——
+ * 退出动画期间内容保持组合，跟着 sheet 一起滑下）。竖/横屏各 5 项、完全独立（行为规则 6）。
  * 约束联动（行为规则 2）：内圈半径 ≤ 外圈×80%，调外圈时内圈上限同步、超限钳制并提示。
- * 保存/取消固定在标题栏（sheet 自身 insideMargin=24dp，内容不再叠横向 padding）。
  */
 @Composable
 internal fun LayoutBottomSheet(
     show: Boolean,
     orientation: LayoutOrientation,
     repo: SettingsRepository,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onDismissFinished: () -> Unit
 ) {
     val isPortrait = orientation == LayoutOrientation.PORTRAIT
 
@@ -52,32 +61,31 @@ internal fun LayoutBottomSheet(
             if (isPortrait) R.string.portrait_layout else R.string.landscape_layout
         ),
         startAction = {
-            TextButton(
-                text = stringResource(R.string.layout_sheet_cancel),
-                onClick = {
-                    repo.discardDraft()
-                    onDismiss()
-                }
-            )
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    imageVector = MiuixIcons.Close,
+                    contentDescription = stringResource(R.string.layout_sheet_cancel),
+                    tint = MiuixTheme.colorScheme.onSurface
+                )
+            }
         },
         endAction = {
-            TextButton(
-                text = stringResource(R.string.layout_sheet_save),
-                onClick = {
-                    repo.commitDraft()
-                    onDismiss()
-                }
-            )
-        },
-        onDismissRequest = {
-            // 返回键/点外部/下拉关闭与显式取消同语义：整体丢弃
-            repo.discardDraft()
-            onDismiss()
-        },
-        content = {
-            if (show) {
-                LayoutSheetContent(orientation = orientation, repo = repo)
+            IconButton(onClick = {
+                repo.commitDraft()
+                onDismiss()
+            }) {
+                Icon(
+                    imageVector = MiuixIcons.Basic.Check,
+                    contentDescription = stringResource(R.string.layout_sheet_save),
+                    tint = MiuixTheme.colorScheme.primary
+                )
             }
+        },
+        onDismissRequest = onDismiss,
+        onDismissFinished = onDismissFinished,
+        content = {
+            // 不设 if(show) 门：退出动画期间内容保持组合随 sheet 滑下
+            LayoutSheetContent(orientation = orientation, repo = repo)
         }
     )
 }
@@ -131,73 +139,85 @@ private fun LayoutSheetContent(
 
     val config = remember(repo.revision) { buildPreviewConfig(repo) }
 
-    Column(Modifier.fillMaxWidth()) {
-        // 实时预览（与卡片/实机 geometry 同源）
+    // 数值嵌入标题（省副标题行高）；仅图标超限需提示时给副标题
+    val iconSummary = if (effectiveIcon < iconSize) {
+        stringResource(R.string.icon_size_limited, iconSize.toInt(), effectiveIcon.toInt())
+    } else {
+        stringResource(R.string.icon_size_effective, iconSize.toInt(), effectiveIcon.toInt())
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(max = 430.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        // 实时预览：按内容宽高比收紧、无快捷栏（快捷栏不受这 5 个滑条影响）
         FanStaticPreview(
             config = config,
             isLandscape = !isPortrait,
+            includeQuickBar = false,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(100.dp)
+                .height(110.dp)
                 .padding(bottom = 4.dp)
         )
 
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column {
-                SettingsSliderItem(
-                    title = stringResource(R.string.icon_size),
-                    summary = if (effectiveIcon < iconSize) {
-                        stringResource(R.string.icon_size_limited, iconSize.toInt(), effectiveIcon.toInt())
-                    } else {
-                        stringResource(R.string.icon_size_effective, iconSize.toInt(), effectiveIcon.toInt())
-                    },
-                    value = iconSize,
-                    valueRange = 32f..80f,
-                    onValueChange = { putIcon(it) },
-                    onValueChangeFinished = {},
-                    sliderHorizontalPadding = 0.dp
-                )
-                SettingsSliderItem(
-                    title = stringResource(R.string.inner_radius),
-                    summary = stringResource(R.string.inner_radius_summary, innerRadius.toInt()),
-                    value = innerRadius,
-                    valueRange = 80f..160f,
-                    steps = 7,
-                    onValueChange = { putInnerWithClamp(it) },
-                    onValueChangeFinished = {},
-                    sliderHorizontalPadding = 0.dp
-                )
-                SettingsSliderItem(
-                    title = stringResource(R.string.outer_radius_max),
-                    summary = stringResource(R.string.outer_radius_summary, outerRadius.toInt()),
-                    value = outerRadius,
-                    valueRange = 110f..220f,
-                    steps = 10,
-                    onValueChange = { putOuterWithClamp(it) },
-                    onValueChangeFinished = {},
-                    sliderHorizontalPadding = 0.dp
-                )
-                SettingsSliderItem(
-                    title = stringResource(R.string.outer_apps_count),
-                    summary = stringResource(R.string.outer_apps_summary, outerCount),
-                    value = outerCount.toFloat(),
-                    valueRange = if (isPortrait) 4f..12f else 3f..8f,
-                    steps = if (isPortrait) 7 else 4,
-                    onValueChange = { putOuterCount(it.toInt()) },
-                    onValueChangeFinished = {},
-                    sliderHorizontalPadding = 0.dp
-                )
-                SettingsSliderItem(
-                    title = stringResource(R.string.inner_apps_count),
-                    summary = stringResource(R.string.inner_apps_summary, innerCount),
-                    value = innerCount.toFloat(),
-                    valueRange = if (isPortrait) 2f..8f else 0f..6f,
-                    steps = if (isPortrait) 5 else 5,
-                    onValueChange = { putInnerCount(it.toInt()) },
-                    onValueChangeFinished = {},
-                    sliderHorizontalPadding = 0.dp
-                )
-            }
+        Column {
+            SettingsSliderItem(
+                title = stringResource(R.string.icon_size),
+                summary = iconSummary,
+                value = iconSize,
+                valueRange = 32f..80f,
+                onValueChange = { putIcon(it) },
+                onValueChangeFinished = {},
+                sliderHorizontalPadding = 0.dp,
+                compact = true
+            )
+            SettingsSliderItem(
+                title = stringResource(R.string.inner_radius),
+                summary = stringResource(R.string.inner_radius_summary, innerRadius.toInt()),
+                value = innerRadius,
+                valueRange = 80f..160f,
+                steps = 7,
+                onValueChange = { putInnerWithClamp(it) },
+                onValueChangeFinished = {},
+                sliderHorizontalPadding = 0.dp,
+                compact = true
+            )
+            SettingsSliderItem(
+                title = stringResource(R.string.outer_radius_max),
+                summary = stringResource(R.string.outer_radius_summary, outerRadius.toInt()),
+                value = outerRadius,
+                valueRange = 110f..220f,
+                steps = 10,
+                onValueChange = { putOuterWithClamp(it) },
+                onValueChangeFinished = {},
+                sliderHorizontalPadding = 0.dp,
+                compact = true
+            )
+            SettingsSliderItem(
+                title = stringResource(R.string.outer_apps_count),
+                summary = stringResource(R.string.outer_apps_summary, outerCount),
+                value = outerCount.toFloat(),
+                valueRange = if (isPortrait) 4f..12f else 3f..8f,
+                steps = if (isPortrait) 7 else 4,
+                onValueChange = { putOuterCount(it.toInt()) },
+                onValueChangeFinished = {},
+                sliderHorizontalPadding = 0.dp,
+                compact = true
+            )
+            SettingsSliderItem(
+                title = stringResource(R.string.inner_apps_count),
+                summary = stringResource(R.string.inner_apps_summary, innerCount),
+                value = innerCount.toFloat(),
+                valueRange = if (isPortrait) 2f..8f else 0f..6f,
+                steps = if (isPortrait) 5 else 5,
+                onValueChange = { putInnerCount(it.toInt()) },
+                onValueChangeFinished = {},
+                sliderHorizontalPadding = 0.dp,
+                compact = true
+            )
         }
 
         if (clampedHint) {
@@ -212,7 +232,7 @@ private fun LayoutSheetContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 2.dp, bottom = 8.dp),
+                .padding(bottom = 8.dp),
             horizontalArrangement = Arrangement.End
         ) {
             TextButton(
@@ -230,3 +250,6 @@ private fun LayoutSheetContent(
         }
     }
 }
+
+/** sheet 紧凑滑条行：上下边距 16→4dp，约省 40% 行高。 */
+internal val SheetSliderInsideMargin = PaddingValues(horizontal = 16.dp, vertical = 4.dp)

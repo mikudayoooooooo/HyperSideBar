@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.theme.ThemeMode
@@ -87,6 +89,12 @@ internal fun SettingsPage(
 
     // 布局编辑 BottomSheet：入口 = 布局预览卡双缩略点击（§2.2）
     var sheetOrientation by remember { mutableStateOf<LayoutOrientation?>(null) }
+
+    // 草稿守卫：sheet 关闭或页面离开组合（含切 Tab 丢 sheet 状态）时兜底丢弃，
+    // 防止残留草稿持续泄漏进预览卡的草稿优先读（"没保存却生效"的观感来源）
+    DisposableEffect(sheetOrientation) {
+        onDispose { repo.discardDraft() }
+    }
 
     SettingsList(modifier = modifier) {
         item { SmallTitle(text = stringResource(R.string.module_section)) }
@@ -302,7 +310,8 @@ internal fun SettingsSliderItem(
     valueRange: ClosedFloatingPointRange<Float>,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
-    steps: Int = 0
+    steps: Int = 0,
+    sliderHorizontalPadding: Dp = 16.dp
 ) {
     BasicComponent(
         title = title,
@@ -316,7 +325,7 @@ internal fun SettingsSliderItem(
                 steps = steps,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
+                    .padding(horizontal = sliderHorizontalPadding)
             )
         }
     )

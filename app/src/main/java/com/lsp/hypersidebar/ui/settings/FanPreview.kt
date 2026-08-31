@@ -309,13 +309,12 @@ private fun StaticFanPreview(
             )
         }
 
-        geometry.items.forEachIndexed { index, item ->
+        geometry.items.forEach { item ->
             // 直接使用实机 layoutFanItems 的真实坐标（消除预览自算半径的漂移）
             val center = map(Offset(item.centerX, item.centerY))
             val iconSizePx = geometry.iconSize * PREVIEW_DENSITY * scale
             val iconSizeDp = with(density) { iconSizePx.toDp() }
             PreviewIcon(
-                index = index,
                 size = iconSizeDp.value,
                 modifier = Modifier.offset {
                     IntOffset(
@@ -384,34 +383,23 @@ private fun previewRingRadius(geometry: FanGeometry, isOuter: Boolean): Float {
 
 @Composable
 private fun PreviewIcon(
-    index: Int,
     size: Float,
     modifier: Modifier = Modifier
 ) {
+    // 占位图标：统一配色的圆角方块（不描摹真实应用图标，仅示意排布）
     val colors = currentFanThemeColors()
-
     Box(
         modifier = modifier
             .size(size.dp)
             .background(
-                color = placeholderColor(colors, index),
+                color = placeholderColor(colors),
                 shape = RoundedCornerShape((size * 0.24f).dp)
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        Box(
-            modifier = Modifier
-                .size((size * 0.52f).dp)
-                .clip(CircleShape)
-                .background(colors.surfaceContainerHigh.copy(alpha = 0.72f))
-        )
-    }
+            )
+    )
 }
 
-private fun placeholderColor(colors: FanThemeColors, index: Int): Color {
-    val base = if (index % 2 == 0) colors.primaryContainer else colors.surfaceContainerHigh
-    return base.copy(alpha = 0.5f + (index % 3) * 0.16f)
-}
+private fun placeholderColor(colors: FanThemeColors): Color =
+    colors.primaryContainer.copy(alpha = 0.55f)
 
 @Composable
 private fun PreviewQuickBar(
@@ -437,7 +425,7 @@ private fun PreviewQuickBar(
             .border(1.dp, colors.outline.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
             .padding(horizontal = 5.dp, vertical = 4.dp)
     ) {
-        geometry.quickApps.take(4).forEachIndexed { index, _ ->
+        geometry.quickApps.take(4).forEach { _ ->
             Box(
                 modifier = Modifier
                     .widthIn(min = (iconSizeDp.value + 4f).dp)
@@ -448,7 +436,7 @@ private fun PreviewQuickBar(
                     modifier = Modifier
                         .size(iconSizeDp.value.dp)
                         .clip(CircleShape)
-                        .background(placeholderColor(colors, index + geometry.items.size))
+                        .background(placeholderColor(colors))
                 )
             }
         }

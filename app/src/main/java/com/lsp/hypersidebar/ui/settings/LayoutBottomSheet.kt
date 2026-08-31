@@ -20,9 +20,9 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.ui.fan.effectiveIconSizeDp
-import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -35,6 +35,7 @@ internal enum class LayoutOrientation { PORTRAIT, LANDSCAPE }
  * 保存=commitDraft 单 editor 批量落盘（一次 revision 跳变、hook 侧一次 LSPosed 推送），
  * 取消/下滑/返回关闭=discardDraft 整体丢弃。竖屏与横屏各 5 项、完全独立（行为规则 6）。
  * 约束联动（行为规则 2）：内圈半径 ≤ 外圈×80%，调外圈时内圈上限同步、超限钳制并提示。
+ * 保存/取消固定在标题栏（sheet 自身 insideMargin=24dp，内容不再叠横向 padding）。
  */
 @Composable
 internal fun LayoutBottomSheet(
@@ -50,6 +51,24 @@ internal fun LayoutBottomSheet(
         title = stringResource(
             if (isPortrait) R.string.portrait_layout else R.string.landscape_layout
         ),
+        startAction = {
+            TextButton(
+                text = stringResource(R.string.layout_sheet_cancel),
+                onClick = {
+                    repo.discardDraft()
+                    onDismiss()
+                }
+            )
+        },
+        endAction = {
+            TextButton(
+                text = stringResource(R.string.layout_sheet_save),
+                onClick = {
+                    repo.commitDraft()
+                    onDismiss()
+                }
+            )
+        },
         onDismissRequest = {
             // 返回键/点外部/下拉关闭与显式取消同语义：整体丢弃
             repo.discardDraft()
@@ -57,7 +76,7 @@ internal fun LayoutBottomSheet(
         },
         content = {
             if (show) {
-                LayoutSheetContent(orientation = orientation, repo = repo, onDismiss = onDismiss)
+                LayoutSheetContent(orientation = orientation, repo = repo)
             }
         }
     )
@@ -66,8 +85,7 @@ internal fun LayoutBottomSheet(
 @Composable
 private fun LayoutSheetContent(
     orientation: LayoutOrientation,
-    repo: SettingsRepository,
-    onDismiss: () -> Unit
+    repo: SettingsRepository
 ) {
     val isPortrait = orientation == LayoutOrientation.PORTRAIT
 
@@ -113,19 +131,15 @@ private fun LayoutSheetContent(
 
     val config = remember(repo.revision) { buildPreviewConfig(repo) }
 
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-    ) {
+    Column(Modifier.fillMaxWidth()) {
         // 实时预览（与卡片/实机 geometry 同源）
         FanStaticPreview(
             config = config,
             isLandscape = !isPortrait,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(150.dp)
-                .padding(bottom = 8.dp)
+                .height(100.dp)
+                .padding(bottom = 4.dp)
         )
 
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -140,7 +154,8 @@ private fun LayoutSheetContent(
                     value = iconSize,
                     valueRange = 32f..80f,
                     onValueChange = { putIcon(it) },
-                    onValueChangeFinished = {}
+                    onValueChangeFinished = {},
+                    sliderHorizontalPadding = 0.dp
                 )
                 SettingsSliderItem(
                     title = stringResource(R.string.inner_radius),
@@ -149,7 +164,8 @@ private fun LayoutSheetContent(
                     valueRange = 80f..160f,
                     steps = 7,
                     onValueChange = { putInnerWithClamp(it) },
-                    onValueChangeFinished = {}
+                    onValueChangeFinished = {},
+                    sliderHorizontalPadding = 0.dp
                 )
                 SettingsSliderItem(
                     title = stringResource(R.string.outer_radius_max),
@@ -158,7 +174,8 @@ private fun LayoutSheetContent(
                     valueRange = 110f..220f,
                     steps = 10,
                     onValueChange = { putOuterWithClamp(it) },
-                    onValueChangeFinished = {}
+                    onValueChangeFinished = {},
+                    sliderHorizontalPadding = 0.dp
                 )
                 SettingsSliderItem(
                     title = stringResource(R.string.outer_apps_count),
@@ -167,7 +184,8 @@ private fun LayoutSheetContent(
                     valueRange = if (isPortrait) 4f..12f else 3f..8f,
                     steps = if (isPortrait) 7 else 4,
                     onValueChange = { putOuterCount(it.toInt()) },
-                    onValueChangeFinished = {}
+                    onValueChangeFinished = {},
+                    sliderHorizontalPadding = 0.dp
                 )
                 SettingsSliderItem(
                     title = stringResource(R.string.inner_apps_count),
@@ -176,7 +194,8 @@ private fun LayoutSheetContent(
                     valueRange = if (isPortrait) 2f..8f else 0f..6f,
                     steps = if (isPortrait) 5 else 5,
                     onValueChange = { putInnerCount(it.toInt()) },
-                    onValueChangeFinished = {}
+                    onValueChangeFinished = {},
+                    sliderHorizontalPadding = 0.dp
                 )
             }
         }
@@ -186,33 +205,18 @@ private fun LayoutSheetContent(
                 text = stringResource(R.string.layout_inner_clamped),
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 style = MiuixTheme.textStyles.footnote1,
-                modifier = Modifier.padding(top = 8.dp)
+                modifier = Modifier.padding(top = 6.dp)
             )
         }
-
-        Text(
-            text = stringResource(R.string.layout_preview_hint),
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            style = MiuixTheme.textStyles.footnote1,
-            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
-        )
 
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(top = 2.dp, bottom = 8.dp),
+            horizontalArrangement = Arrangement.End
         ) {
-            Button(
-                onClick = {
-                    repo.discardDraft()
-                    onDismiss()
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(stringResource(R.string.layout_sheet_cancel))
-            }
-            Button(
+            TextButton(
+                text = stringResource(R.string.layout_sheet_restore_default),
                 onClick = {
                     // 本方向 5 键写入草稿（恢复默认也走草稿，可取消）
                     putIcon(if (isPortrait) LayoutDefaults.ICON_SIZE else LayoutDefaults.LANDSCAPE_ICON_SIZE)
@@ -221,20 +225,8 @@ private fun LayoutSheetContent(
                     putOuterCount(if (isPortrait) LayoutDefaults.MAX_APPS_OUTER else LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER)
                     putInnerCount(if (isPortrait) LayoutDefaults.MAX_APPS_INNER else LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
                     clampedHint = false
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(stringResource(R.string.layout_sheet_restore_default))
-            }
-            Button(
-                onClick = {
-                    repo.commitDraft()
-                    onDismiss()
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(stringResource(R.string.layout_sheet_save))
-            }
+                }
+            )
         }
     }
 }

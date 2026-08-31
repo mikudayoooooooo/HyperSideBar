@@ -6,7 +6,9 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
+import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.FanLaunchStrategy
+import com.lsp.hypersidebar.util.FailureReason
 import com.lsp.hypersidebar.util.FreeformLauncher
 import com.lsp.hypersidebar.util.LaunchResult
 import com.lsp.hypersidebar.util.ShortcutAction
@@ -54,12 +56,47 @@ class DirectLaunchStrategy : FanLaunchStrategy {
     }
 
     override fun launchShortcut(context: Context, shortcut: ShortcutAction) {
+        // 非 exported 目标预检失败时直接转发模块 App 代发（§2.4 实测定案）：
+        // 本进程（system uid）startActivityAsUser 对启动不了的目标静默假成功
+        // （不抛异常、实际不启动，无法靠异常触发 root 回退），且本进程无 su 授权；
+        // 模块 App 进程持 root，其 validate→直试→ANF→su 链路已被编辑页测试验证。
+        if (shortcut.kind != ShortcutKind.SERVICE) {
+            val check = ShortcutLauncher.validate(context, shortcut)
+            if (check is LaunchResult.Failure &&
+                (check.reason == FailureReason.ACTIVITY_NOT_FOUND ||
+                    check.reason == FailureReason.NOT_EXPORTED)
+            ) {
+                if (relayLaunchToModule(context, shortcut)) return
+                Log.w(TAG, "relay launch to module app failed, falling back to local launch")
+            }
+        }
+
         val result = ShortcutLauncher.launch(context, shortcut, SystemLaunchStrategy())
         // service 拉起无界面反馈，toast 显式提醒（PRD §7.3.2）
         if (shortcut.kind == ShortcutKind.SERVICE && result is LaunchResult.Success) {
             runCatching {
                 Toast.makeText(context, "已拉起服务：${shortcut.label}", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    /** :ui → 模块 App root 代发：完整 ShortcutAction JSON 随广播携带（接收端无需读 prefs）。 */
+    private fun relayLaunchToModule(context: Context, shortcut: ShortcutAction): Boolean {
+        return runCatching {
+            val intent = Intent(PrefKeys.RELAY_LAUNCH_ACTION).apply {
+                setPackage(FreeformLauncher.MODULE_PACKAGE)
+                putExtra(
+                    PrefKeys.RELAY_LAUNCH_EXTRA_SHORTCUT,
+                    shortcut.toJson().toString()
+                )
+                putExtra(PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN, PrefKeys.RELAY_LAUNCH_TOKEN)
+            }
+            context.sendBroadcast(intent)
+            Log.i(TAG, "relay launch to module app sent: id=${shortcut.id} kind=${shortcut.kind}")
+            true
+        }.getOrElse {
+            Log.e(TAG, "relay launch to module app failed", it)
+            false
         }
     }
 }

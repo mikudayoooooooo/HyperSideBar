@@ -48,6 +48,12 @@
             android:excludeFromRecents="true"
             android:label="@string/all_apps_title" />
 
+        <!-- :ui → 模块 App 快捷方式 root 代发（§2.4）：非 exported 目标 :ui 静默假成功
+             且无 su；模块进程持 root 代发。令牌校验见 ShortcutRelayReceiver -->
+        <receiver
+            android:name=".ShortcutRelayReceiver"
+            android:exported="true" />
+
     </application>
 
 </manifest>

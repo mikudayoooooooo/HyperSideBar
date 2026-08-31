@@ -45,6 +45,17 @@ object PrefKeys {
 
     /** 调试开关：模拟 :ui 执行端失联（熔断链路验证用；:ui 自然死亡窗口太短无法实测） */
     const val DEBUG_RELAY_BLACKHOLE = "debugRelayBlackhole"
+
+    // ===== :ui → 模块 App 的快捷方式 root 代发通道（§2.4 实测定案） =====
+    // :ui（system uid）对非 exported 目标 startActivityAsUser 静默假成功且无 su 授权；
+    // 模块 App 进程持 root（su am start 可启动非导出组件，编辑页测试已验证）。
+    // :ui 预检失败时把完整 ShortcutAction JSON 广播给模块 App 代发。
+    const val RELAY_LAUNCH_ACTION = "com.lsp.hypersidebar.action.RELAY_LAUNCH_SHORTCUT"
+    const val RELAY_LAUNCH_EXTRA_SHORTCUT = "shortcut"
+    const val RELAY_LAUNCH_EXTRA_TOKEN = "token"
+
+    /** 代发通道防伪令牌（两侧同源代码共享；防任意 App 伪造广播借 root 启动任意组件） */
+    const val RELAY_LAUNCH_TOKEN = "hsRl-2026-08-31-x7k9q2m4"
 }
 
 // channelMode（EDGE/HANDLE）已废弃（1B：EDGE 为唯一产品形态，HANDLE 遗留调试通道代码

@@ -6,6 +6,7 @@ import android.graphics.PixelFormat
 import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
@@ -260,6 +261,10 @@ class ComposeFanHost(
                         val anySelected = fanSel != -1 || quickSel != -1
                         if (anySelected && (fanSel != prevFan || quickSel != prevQuick)) {
                             selectedSince = SystemClock.uptimeMillis()
+                            // 触觉反馈（§2.3 收尾，1A 移除后按 pref 恢复）：选中变化轻震
+                            if (config.vibrate) {
+                                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                            }
                         }
 
                         touchState.value = FanTouchState(x, y, 0, fanSel, quickSel)
@@ -581,7 +586,8 @@ class ComposeFanHost(
             landscapeMaxAppsOuter = readInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER),
             landscapeMaxAppsInner = readInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER),
             landscapeInnerRadiusDp = readFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS),
-            landscapeOuterRadiusDp = readFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
+            landscapeOuterRadiusDp = readFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS),
+            vibrate = readBoolean(PrefKeys.VIBRATE, LayoutDefaults.VIBRATE)
         )
     }
 
@@ -591,6 +597,10 @@ class ComposeFanHost(
 
     private fun readInt(key: String, default: Int): Int {
         return try { prefs.getInt(key, default) } catch (_: Exception) { default }
+    }
+
+    private fun readBoolean(key: String, default: Boolean): Boolean {
+        return try { prefs.getBoolean(key, default) } catch (_: Exception) { default }
     }
 
     @Composable

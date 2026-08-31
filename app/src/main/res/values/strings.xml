@@ -82,6 +82,9 @@
     <string name="dead_zone_description">%1$d dp，避免靠近锚点时误选</string>
     <string name="vibrate_feedback">触觉反馈</string>
     <string name="vibrate_feedback_summary">选中应用时轻微震动</string>
+    <string name="trigger_zone_portrait">竖屏 · 左右边缘中段</string>
+    <string name="trigger_zone_landscape">横屏 · 顶部左右角条</string>
+    <string name="trigger_zone_hint">从触发区向内滑入并停顿展开扇形；横屏触发面是隐藏的系统侧边栏条</string>
 
     <string name="landscape_icon_size">图标大小</string>
     <string name="landscape_icon_size_summary">%1$d dp</string>

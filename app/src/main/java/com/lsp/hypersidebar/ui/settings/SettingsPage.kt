@@ -238,6 +238,10 @@ internal fun InteractionSettingsPage(
     SettingsList(modifier = modifier) {
         item { SmallTitle(text = stringResource(R.string.interaction_settings)) }
         item {
+            // 触发区示意图（§2.3）：竖屏边缘中段 / 横屏顶部角条，以 hook 代码常量为准
+            TriggerZoneDiagramCard()
+        }
+        item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
                     // activeZone（灵敏度）参数已废弃（1B 定稿）：其唯一运行时用途是距离

@@ -172,10 +172,12 @@ object ShortcutLauncher {
         // 3-4. 解析并验证
         val validation = validateIntent(context, intent, action)
         if (validation is LaunchResult.Failure) {
-            // 兜底：validateIntent 对非 exported Activity 可能误判 ACTIVITY_NOT_FOUND，
-            // 若 packageName 存在且包名可解析，跳过验证直接尝试启动。
+            // 兜底：queryIntentActivities 会过滤其他包的非 exported Activity（API 30+），
+            // intent 里带 package=（URI 形式）或表单包名存在时，直试启动——
+            // ActivityNotFoundException 再落 root（shell 权限可启动非导出组件）
+            val targetPkg = action.packageName ?: intent.`package`
             if (validation.reason == FailureReason.ACTIVITY_NOT_FOUND &&
-                !action.packageName.isNullOrEmpty()
+                !targetPkg.isNullOrEmpty()
             ) {
                 Log.w(TAG, "launch: validateIntent refused (${validation.detail}), but package exists, trying direct launch")
                 return tryLaunchDirect(context, intent, strategy, action, allowRootFallback)
@@ -184,7 +186,7 @@ object ShortcutLauncher {
             if (allowRootFallback && isRootAvailable() &&
                 validation.reason == FailureReason.NOT_EXPORTED) {
                 Log.i(TAG, "launch: exported check failed, trying ROOT fallback")
-                return launchViaRoot(action)
+                return launchViaRoot(action, intent)
             }
             Log.w(TAG, "launch: validation failed: ${validation.reason}: ${validation.detail}")
             return validation
@@ -199,7 +201,7 @@ object ShortcutLauncher {
         } catch (e: SecurityException) {
             Log.w(TAG, "launch: SecurityException via ${strategy.name}, trying ROOT", e)
             if (allowRootFallback && isRootAvailable()) {
-                launchViaRoot(action)
+                launchViaRoot(action, intent)
             } else {
                 LaunchResult.Failure(FailureReason.SECURITY_EXCEPTION, e.message ?: "Permission denied")
             }
@@ -209,7 +211,7 @@ object ShortcutLauncher {
         } catch (e: Exception) {
             Log.e(TAG, "launch: exception via ${strategy.name}", e)
             if (allowRootFallback && isRootAvailable()) {
-                launchViaRoot(action)
+                launchViaRoot(action, intent)
             } else {
                 LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, e.message ?: "Unknown error")
             }
@@ -767,14 +769,22 @@ object ShortcutLauncher {
     /**
      * ROOT 启动：通过 su -c "am start ..." 绕过 exported 限制。
      */
-    private fun launchViaRoot(action: ShortcutAction): LaunchResult {
-        val cmdArgs = buildAmCommand(action) ?: return LaunchResult.Failure(
+    private fun launchViaRoot(action: ShortcutAction, intent: Intent? = null): LaunchResult {
+        // INTENT_URI 优先从已解析的 Intent 生成 am 旗标命令（-a/--es 形式）：
+        // 位置参数传 intent:// URI 会在 am 内部再走一次 parseUri（追加 BROWSABLE，
+        // 真机实测 shell 也解析失败）；buildAmCommand 的 URI 分支会因 ';' 直接拒绝。
+        val cmdArgs: List<String> = when (action.kind) {
+            ShortcutKind.INTENT_URI ->
+                intent?.let { intentToAmArgs(it) } ?: buildAmCommand(action)?.toList()
+            else -> buildAmCommand(action)?.toList()
+        } ?: return LaunchResult.Failure(
             FailureReason.INVALID_CONFIG,
             "Cannot build am command for kind=${action.kind}"
         )
 
-        // su -c expects a single command string, not individual arguments
-        val fullCmd = listOf("su", "-c", cmdArgs.joinToString(" "))
+        // su -c expects a single command string, not individual arguments；
+        // 参数值可能含 shell 元字符（intent URI 里的 # ; & 空格等），逐参单引号包裹
+        val fullCmd = listOf("su", "-c", cmdArgs.joinToString(" ") { shellQuote(it) })
         Log.i(TAG, "launchViaRoot: ${fullCmd.joinToString(" ")}")
 
         return try {
@@ -808,6 +818,39 @@ object ShortcutLauncher {
     }
 
     /**
+     * 把已解析的 Intent 转成 am start 旗标参数（root 路径用）。
+     * 基本类型 extras 逐项输出；am CLI 表达不了的类型（Bundle/Serializable 等）跳过。
+     */
+    private fun intentToAmArgs(intent: Intent): List<String> {
+        val args = mutableListOf("am", "start")
+        intent.action?.let { args += listOf("-a", it) }
+        intent.`package`?.let { args += listOf("-p", it) }
+        intent.component?.let { args += listOf("-n", it.flattenToShortString()) }
+        intent.categories?.filter { it != Intent.CATEGORY_BROWSABLE }?.forEach {
+            args += listOf("-c", it)
+        }
+        val extras = intent.extras
+        if (extras != null) {
+            for (key in extras.keySet()) {
+                when (val v: Any? = extras[key]) {
+                    null -> {}
+                    is String -> args += listOf("--es", key, v)
+                    is Int -> args += listOf("--ei", key, v.toString())
+                    is Long -> args += listOf("--el", key, v.toString())
+                    is Boolean -> args += listOf("--ez", key, v.toString())
+                    is Float -> args += listOf("--ef", key, v.toString())
+                    is Double -> args += listOf("--ef", key, v.toString())
+                    else -> Log.w(TAG, "intentToAmArgs: skip unsupported extra $key=${v::class.java.simpleName}")
+                }
+            }
+        }
+        return args
+    }
+
+    /** su -c 单命令串的参数安全引用（POSIX 单引号包裹，内部单引号转义）。 */
+    private fun shellQuote(arg: String): String = "'" + arg.replace("'", "'\\''") + "'"
+
+    /**
      * 兜底启动：跳过 validateIntent 的 exported/not-found 检查，直接 try-catch 启动。
      * 用于 validateIntent 误判非 exported Activity 的场景。
      */
@@ -826,7 +869,7 @@ object ShortcutLauncher {
         } catch (e: SecurityException) {
             Log.w(TAG, "tryLaunchDirect: SecurityException via ${strategy.name}, trying ROOT", e)
             if (allowRootFallback && isRootAvailable()) {
-                launchViaRoot(action)
+                launchViaRoot(action, intent)
             } else {
                 LaunchResult.Failure(FailureReason.SECURITY_EXCEPTION, e.message ?: "Permission denied")
             }
@@ -834,11 +877,12 @@ object ShortcutLauncher {
             // Android 对非 exported Activity 在 Instrumentation 层面抛 ANF 而非 SecurityException
             // 预检区分"包存在但 exported=false"（可 ROOT fallback）vs "真不存在"
             val comp = intent.component
-            if (comp != null && allowRootFallback) {
-                val pkgInstalled = runCatching { context.packageManager.getPackageInfo(comp.packageName, 0) }.isSuccess
+            val pkg = comp?.packageName ?: intent.`package`
+            if (pkg != null && allowRootFallback) {
+                val pkgInstalled = runCatching { context.packageManager.getPackageInfo(pkg, 0) }.isSuccess
                 if (pkgInstalled && isRootAvailable()) {
                     Log.w(TAG, "tryLaunchDirect: ActivityNotFoundException but package exists, trying ROOT fallback", e)
-                    return launchViaRoot(action)
+                    return launchViaRoot(action, intent)
                 }
             }
             Log.e(TAG, "tryLaunchDirect: ActivityNotFoundException via ${strategy.name}", e)
@@ -846,7 +890,7 @@ object ShortcutLauncher {
         } catch (e: Exception) {
             Log.e(TAG, "tryLaunchDirect: exception via ${strategy.name}", e)
             if (allowRootFallback && isRootAvailable()) {
-                launchViaRoot(action)
+                launchViaRoot(action, intent)
             } else {
                 LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, e.message ?: "Unknown error")
             }

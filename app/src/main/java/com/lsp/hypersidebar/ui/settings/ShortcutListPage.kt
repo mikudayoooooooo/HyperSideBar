@@ -8,9 +8,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -18,9 +21,15 @@ import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutStore
+import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.ExpandLess
+import top.yukonga.miuix.kmp.icon.extended.ExpandMore
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
@@ -32,12 +41,12 @@ internal fun ShortcutListPage(
     onAdd: (ShortcutKind) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // nav3 迁移后无 revision 通道：编辑页保存/删除即弹栈，返回列表必然重新组合、
-    // remember 重新执行即重新加载（等价旧 listRevision++ 强制刷新）
-    val shortcuts = remember(prefs) {
+    // 本页内排序变化即时刷新（保存/删除由弹栈重组合自然刷新，§2.1 迁移后无外部 revision）
+    var listRevision by remember { mutableIntStateOf(0) }
+    val shortcuts = remember(prefs, listRevision) {
         ShortcutStore.loadUserShortcuts(prefs)
     }
-    val isFull = shortcuts.size >= ShortcutStore.MAX_USER_SHORTCUTS
+    val enabledCount = shortcuts.count { it.enabled }
 
     LazyColumn(
         modifier = modifier
@@ -47,7 +56,11 @@ internal fun ShortcutListPage(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
-            SmallTitle(text = stringResource(R.string.shortcut_count_format, shortcuts.size, ShortcutStore.MAX_USER_SHORTCUTS))
+            SmallTitle(
+                text = stringResource(
+                    R.string.shortcut_count_format, shortcuts.size, enabledCount
+                )
+            )
         }
 
         if (shortcuts.isEmpty()) {
@@ -63,10 +76,10 @@ internal fun ShortcutListPage(
         }
 
         if (shortcuts.isNotEmpty()) {
-            items(shortcuts, key = { it.id }) { shortcut ->
+            itemsIndexed(shortcuts, key = { _, shortcut -> shortcut.id }) { index, shortcut ->
                 val iconPkg = shortcut.iconPackageName ?: shortcut.packageName
                 val status = if (shortcut.enabled) "" else stringResource(R.string.shortcut_disabled_tag)
-                ArrowPreference(
+                BasicComponent(
                     title = shortcut.label.ifEmpty { stringResource(R.string.shortcut_unnamed) },
                     summary = buildShortcutSummary(
                         shortcut,
@@ -76,6 +89,39 @@ internal fun ShortcutListPage(
                     startAction = if (iconPkg != null) {
                         { SettingsAppIcon(packageName = iconPkg, appName = shortcut.label, size = 32f) }
                     } else null,
+                    endActions = {
+                        // 排序（§2.4 解耦）：列表序=扇形展示序，上/下移即时写盘
+                        IconButton(
+                            onClick = {
+                                if (index > 0) {
+                                    ShortcutStore.moveShortcut(prefs, index, index - 1)
+                                    listRevision++
+                                }
+                            },
+                            enabled = index > 0
+                        ) {
+                            Icon(
+                                imageVector = MiuixIcons.ExpandLess,
+                                contentDescription = stringResource(R.string.shortcut_move_up),
+                                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                if (index < shortcuts.lastIndex) {
+                                    ShortcutStore.moveShortcut(prefs, index, index + 1)
+                                    listRevision++
+                                }
+                            },
+                            enabled = index < shortcuts.lastIndex
+                        ) {
+                            Icon(
+                                imageVector = MiuixIcons.ExpandMore,
+                                contentDescription = stringResource(R.string.shortcut_move_down),
+                                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            )
+                        }
+                    },
                     onClick = { onEdit(shortcut) }
                 )
             }
@@ -90,23 +136,24 @@ internal fun ShortcutListPage(
                     ArrowPreference(
                         title = stringResource(R.string.shortcuts_add_component),
                         summary = stringResource(R.string.shortcuts_add_component_summary),
-                        onClick = { onAdd(ShortcutKind.COMPONENT) },
-                        enabled = !isFull
+                        onClick = { onAdd(ShortcutKind.COMPONENT) }
                     )
                     ArrowPreference(
                         title = stringResource(R.string.shortcuts_add_intent_uri),
                         summary = stringResource(R.string.shortcuts_add_intent_uri_summary),
-                        onClick = { onAdd(ShortcutKind.INTENT_URI) },
-                        enabled = !isFull
+                        onClick = { onAdd(ShortcutKind.INTENT_URI) }
                     )
                 }
             }
         }
 
-        if (isFull) {
+        // 启用项超出扇形展示上限时提示（存储无上限，§2.4 解耦）
+        if (enabledCount > ShortcutStore.MAX_USER_SHORTCUTS) {
             item {
                 Text(
-                    text = stringResource(R.string.shortcuts_at_limit, ShortcutStore.MAX_USER_SHORTCUTS),
+                    text = stringResource(
+                        R.string.shortcut_display_overflow, enabledCount, ShortcutStore.MAX_USER_SHORTCUTS
+                    ),
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )

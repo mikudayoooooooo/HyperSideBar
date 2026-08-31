@@ -63,8 +63,9 @@ internal fun SettingsPage(
     val selectedApps = remember(prefs, prefsRevision) {
         prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty().size
     }
-    val shortcutCount = remember(prefs, prefsRevision) {
-        ShortcutStore.loadUserShortcuts(prefs).size
+    val shortcutStats = remember(prefs, prefsRevision) {
+        val all = ShortcutStore.loadUserShortcuts(prefs)
+        all.size to all.count { it.enabled }
     }
     val themeOptions = listOf(
         stringResource(R.string.theme_follow_system),
@@ -164,7 +165,9 @@ internal fun SettingsPage(
                     )
                     ArrowPreference(
                         title = stringResource(R.string.select_shortcut_apps),
-                        summary = stringResource(R.string.selected_apps_summary, shortcutCount),
+                        summary = stringResource(
+                            R.string.shortcut_entry_summary, shortcutStats.first, shortcutStats.second
+                        ),
                         onClick = onNavigateToShortcutSelection
                     )
                 }

@@ -32,6 +32,7 @@
     <string name="select_apps">扇形应用</string>
     <string name="select_shortcut_apps">快捷应用</string>
     <string name="selected_apps_summary">已选择 %1$d 个应用</string>
+    <string name="selected_apps_group">已选（%1$d）</string>
     <string name="selected_apps_count">已选择 %1$d 个</string>
     <string name="search_apps_hint">搜索应用…</string>
     <string name="user_apps">用户应用</string>
@@ -111,7 +112,11 @@
     <string name="debug_relay_blackhole_summary">所有执行广播按失联处理，用于验证熔断链路；测完务必关闭</string>
 
     <!-- Shortcut -->
-    <string name="shortcut_count_format">%1$d / %2$d</string>
+    <string name="shortcut_count_format">已添加 %1$d · 启用 %2$d</string>
+    <string name="shortcut_display_overflow">启用 %1$d 个已超扇形上限，快捷栏按排序取前 %2$d 个（含面板占位时再少 1）</string>
+    <string name="shortcut_move_up">上移</string>
+    <string name="shortcut_move_down">下移</string>
+    <string name="shortcut_entry_summary">已添加 %1$d · 启用 %2$d</string>
     <string name="shortcut_unnamed">未命名</string>
     <string name="shortcut_enabled">启用</string>
     <string name="shortcut_disabled_tag">（已禁用）</string>
@@ -152,7 +157,6 @@
     <string name="shortcuts_add_intent_uri">Intent URI</string>
     <string name="shortcuts_add_intent_uri_summary">通过 Intent URI 启动目标</string>
     <string name="shortcuts_empty_hint">暂无快捷方式，点击下方添加</string>
-    <string name="shortcuts_at_limit">已达上限（%d 个）</string>
     <string name="shortcut_uri_unset">（未设置 URI）</string>
     <string name="shortcut_component_count">%1$s · %2$d 个组件</string>
     <string name="shortcut_components_info">%1$d 个组件（%2$d 个非导出）</string>

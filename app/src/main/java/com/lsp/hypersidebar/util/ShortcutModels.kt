@@ -86,7 +86,8 @@ data class ShortcutAction(
 /**
  * 快捷方式持久化管理。
  * 使用 JSON 数组存储在 SharedPreferences 的单个 key 中。
- * 用户自定义项最多 5 个，TOOLBOX 内置项不计入配额。
+ * 存储不设上限（§2.4 解耦拍板）：扇形只展示 enabled 且按 order 排序的前
+ * MAX_USER_SHORTCUTS 个（占位在场少 1），用户通过启用开关与排序控制上栏项。
  */
 object ShortcutStore {
 
@@ -95,8 +96,8 @@ object ShortcutStore {
     private const val TOOLBOX_ID = "__toolbox__"
 
     /**
-     * 用户快捷方式存储上限（PRD §7.1：快捷栏上限 6 个**含占位**——占位在场时运行时
-     * 只取前 5 个用户项，占位隐藏时 6 个全上；存储上限取 6 才能不丢第 6 项）。
+     * 扇形快捷栏展示上限（PRD §7.1：6 个**含面板占位**——占位在场时运行时
+     * 只取前 5 个用户项，占位隐藏时 6 个全上）。仅约束展示，不约束存储。
      */
     const val MAX_USER_SHORTCUTS = 6
 
@@ -130,12 +131,11 @@ object ShortcutStore {
 
     /**
      * 保存用户快捷方式列表到 SharedPreferences。
-     * 自动截断到 MAX_USER_SHORTCUTS 个。
+     * 存储不截断（§2.4 解耦）；order 按当前列表序整体重排。
      */
     fun saveUserShortcuts(prefs: SharedPreferences, shortcuts: List<ShortcutAction>) {
         val userItems = shortcuts
             .filter { it.source == ShortcutSource.USER }
-            .take(MAX_USER_SHORTCUTS)
             .mapIndexed { index, item -> item.copy(order = index) }
 
         val arr = JSONArray()
@@ -149,12 +149,11 @@ object ShortcutStore {
     }
 
     /**
-     * 添加一个用户快捷方式。如果已达上限则返回 false。
+     * 添加一个用户快捷方式（存储无上限）。
      * NOTE: Must be called from main thread (not thread-safe).
      */
     fun addShortcut(prefs: SharedPreferences, shortcut: ShortcutAction): Boolean {
         val current = loadUserShortcuts(prefs).toMutableList()
-        if (current.size >= MAX_USER_SHORTCUTS) return false
         val newItem = shortcut.copy(
             source = ShortcutSource.USER,
             order = current.size

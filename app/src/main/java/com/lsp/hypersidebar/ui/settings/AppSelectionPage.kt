@@ -5,15 +5,11 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -33,6 +29,7 @@ import com.lsp.hypersidebar.ui.fan.FanAppInfo
 import com.lsp.hypersidebar.ui.fan.rememberAppIcon
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.InputField
@@ -119,8 +116,9 @@ internal fun AppSelectionPage(
             AppLoadState.Loading -> LoadingApps()
             AppLoadState.Failed -> MessageState(stringResource(R.string.apps_load_failed))
             is AppLoadState.Loaded -> {
-                val filteredApps = remember(searchQuery, state.apps) {
-                    if (searchQuery.isBlank()) {
+                // 已选优先（§2.4）：选中项置顶，其余保持 user→system 原排序；搜索结果同规则
+                val filteredApps = remember(searchQuery, state.apps, selectedApps) {
+                    val base = if (searchQuery.isBlank()) {
                         state.apps
                     } else {
                         state.apps.filter { app ->
@@ -128,6 +126,8 @@ internal fun AppSelectionPage(
                                 app.packageName.contains(searchQuery, ignoreCase = true)
                         }
                     }
+                    val (sel, rest) = base.partition { it.packageName in selectedApps }
+                    sel + rest
                 }
                 AppList(
                     apps = filteredApps,
@@ -181,7 +181,14 @@ private fun AppList(
         MessageState(stringResource(R.string.no_apps_found))
         return
     }
-    val firstSystemIndex = remember(apps) { apps.indexOfFirst { it.isSystem } }
+    // 已选优先分组：[已选 N] → 未选用户应用 → 系统应用
+    val selectedCount = remember(apps, selectedApps) {
+        apps.count { it.packageName in selectedApps }
+    }
+    val firstSystemUnselected = remember(apps, selectedApps) {
+        apps.drop(selectedCount).indexOfFirst { it.isSystem }
+            .let { if (it >= 0) it + selectedCount else -1 }
+    }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -190,10 +197,17 @@ private fun AppList(
         items(apps.size, key = { apps[it].packageName }) { index ->
             val app = apps[index]
             if (showGroups) {
-                if (index == 0 && !app.isSystem) {
-                    SmallTitle(text = stringResource(R.string.user_apps))
-                } else if (index == firstSystemIndex && app.isSystem) {
-                    SmallTitle(text = stringResource(R.string.system_apps))
+                when {
+                    index == 0 && selectedCount > 0 ->
+                        SmallTitle(text = stringResource(R.string.selected_apps_group, selectedCount))
+                    index == selectedCount ->
+                        SmallTitle(
+                            text = stringResource(
+                                if (app.isSystem) R.string.system_apps else R.string.user_apps
+                            )
+                        )
+                    index == firstSystemUnselected ->
+                        SmallTitle(text = stringResource(R.string.system_apps))
                 }
             }
             AppSelectionRow(
@@ -218,38 +232,26 @@ private fun AppSelectionRow(
     val (drawable, fallbackColor) = rememberAppIcon(context, appInfo)
     val colors = currentFanThemeColors()
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onToggle)
-            .padding(horizontal = 24.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        AppIconImage(
-            drawable = drawable,
-            fallbackColor = fallbackColor,
-            appName = app.label,
-            size = 36f,
-            colors = colors
-        )
-        Spacer(modifier = Modifier.width(16.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = app.label,
-                style = MiuixTheme.textStyles.body1,
-                color = MiuixTheme.colorScheme.onSurface
+    BasicComponent(
+        title = app.label,
+        summary = app.packageName,
+        startAction = {
+            AppIconImage(
+                drawable = drawable,
+                fallbackColor = fallbackColor,
+                appName = app.label,
+                size = 36f,
+                colors = colors
             )
-            Text(
-                text = app.packageName,
-                style = MiuixTheme.textStyles.footnote1,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+        },
+        endActions = {
+            Checkbox(
+                state = if (isChecked) ToggleableState.On else ToggleableState.Off,
+                onClick = onToggle
             )
-        }
-        Checkbox(
-            state = if (isChecked) ToggleableState.On else ToggleableState.Off,
-            onClick = onToggle
-        )
-    }
+        },
+        onClick = onToggle
+    )
 }
 
 private fun loadInstalledApps(context: Context): List<AppItem> {

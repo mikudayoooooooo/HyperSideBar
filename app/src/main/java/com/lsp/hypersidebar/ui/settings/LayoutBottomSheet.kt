@@ -16,6 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -146,10 +147,13 @@ private fun LayoutSheetContent(
         stringResource(R.string.icon_size_effective, iconSize.toInt(), effectiveIcon.toInt())
     }
 
+    // 内容区上限 = 屏高 3/4 − 标题栏（用户定值 2026-08-31：sheet 整体约 3/4 屏）
+    val contentMaxHeight = (LocalConfiguration.current.screenHeightDp * 3 / 4 - 56).dp
+
     Column(
         Modifier
             .fillMaxWidth()
-            .heightIn(max = 430.dp)
+            .heightIn(max = contentMaxHeight)
             .verticalScroll(rememberScrollState())
     ) {
         // 实时预览：按内容宽高比收紧、无快捷栏（快捷栏不受这 5 个滑条影响）

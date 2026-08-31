@@ -72,9 +72,13 @@ internal fun AppSelectionPage(
     var selectedApps by remember(prefs, prefsKey) {
         mutableStateOf(prefs.getStringSet(prefsKey, emptySet()).orEmpty().toSet())
     }
-    // 已选顺序（拖动排序，§2.4）：CUSTOM_APPS_ORDER JSON 数组为权威，新勾选追加尾部
+    // 已选顺序（拖动排序，§2.4）：CUSTOM_APPS_ORDER JSON 数组为权威；
+    // 顺序键缺失/不完整时（旧数据迁移——升级前勾选的应用不在键里）把缺失项
+    // 追加尾部，保证已选组完整可见，否则已选应用会在列表中整体消失
     var selectedOrder by remember(prefs, prefsKey) {
-        mutableStateOf(loadSelectedOrder(prefs))
+        val selected = prefs.getStringSet(prefsKey, emptySet()).orEmpty().toSet()
+        val stored = loadSelectedOrder(prefs)
+        mutableStateOf(stored.filter { it in selected } + (selected - stored.toSet()))
     }
 
     fun persistSelection() {

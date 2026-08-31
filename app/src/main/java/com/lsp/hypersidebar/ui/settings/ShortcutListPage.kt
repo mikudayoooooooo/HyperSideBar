@@ -271,17 +271,21 @@ internal fun ShortcutListPage(
     }
 }
 
-private fun buildShortcutSummary(shortcut: ShortcutAction, unsetUri: String, toolboxLabel: String) = when (shortcut.kind) {
-    ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> {
-        val pkg = shortcut.packageName ?: "?"
-        val act = shortcut.activityName ?: "?"
-        "$pkg/$act"
+/** 列表摘要：超长截断（组件名/intent URI 动辄上百字符，统一观感）。 */
+private fun buildShortcutSummary(shortcut: ShortcutAction, unsetUri: String, toolboxLabel: String): String {
+    val raw = when (shortcut.kind) {
+        ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> {
+            val pkg = shortcut.packageName ?: "?"
+            val act = shortcut.activityName ?: "?"
+            "$pkg/$act"
+        }
+        ShortcutKind.INTENT_URI -> shortcut.intentUri ?: unsetUri
+        ShortcutKind.TOOLBOX -> toolboxLabel
+        ShortcutKind.SERVICE -> {
+            val pkg = shortcut.packageName ?: "?"
+            val svc = shortcut.serviceName ?: "?"
+            "$pkg/$svc"
+        }
     }
-    ShortcutKind.INTENT_URI -> shortcut.intentUri ?: unsetUri
-    ShortcutKind.TOOLBOX -> toolboxLabel
-    ShortcutKind.SERVICE -> {
-        val pkg = shortcut.packageName ?: "?"
-        val svc = shortcut.serviceName ?: "?"
-        "$pkg/$svc"
-    }
+    return if (raw.length > 40) raw.take(38) + "…" else raw
 }

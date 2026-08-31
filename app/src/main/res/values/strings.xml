@@ -113,7 +113,7 @@
 
     <!-- Shortcut -->
     <string name="shortcut_count_format">已添加 %1$d · 启用 %2$d</string>
-    <string name="shortcut_display_overflow">启用 %1$d 个已超扇形上限，快捷栏按排序取前 %2$d 个（含面板占位时再少 1）</string>
+    <string name="shortcut_display_overflow">扇形快捷栏最多展示 %2$d 个（含面板占位时再少 1）；当前启用 %1$d 个，上栏按排序取前 %2$d，禁用至 %2$d 个以内可全部显示</string>
     <string name="shortcut_drag_handle">拖动排序</string>
     <string name="shortcut_selected_count">已选 %d 项</string>
     <string name="shortcut_batch_delete">删除（%d）</string>

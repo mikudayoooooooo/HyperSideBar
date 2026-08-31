@@ -80,11 +80,15 @@ class DirectLaunchStrategy : FanLaunchStrategy {
         }
     }
 
-    /** :ui → 模块 App root 代发：完整 ShortcutAction JSON 随广播携带（接收端无需读 prefs）。 */
+    /** :ui → 模块 App root 代发：完整 ShortcutAction JSON 随广播携带（接收端无需读 prefs）。
+     *  显式组件寻址（接收端无 intent-filter，action 寻址匹配不上会被静默丢弃）。 */
     private fun relayLaunchToModule(context: Context, shortcut: ShortcutAction): Boolean {
         return runCatching {
             val intent = Intent(PrefKeys.RELAY_LAUNCH_ACTION).apply {
-                setPackage(FreeformLauncher.MODULE_PACKAGE)
+                setClassName(
+                    FreeformLauncher.MODULE_PACKAGE,
+                    "com.lsp.hypersidebar.ShortcutRelayReceiver"
+                )
                 putExtra(
                     PrefKeys.RELAY_LAUNCH_EXTRA_SHORTCUT,
                     shortcut.toJson().toString()

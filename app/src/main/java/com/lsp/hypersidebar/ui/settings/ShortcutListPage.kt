@@ -28,12 +28,13 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 @Composable
 internal fun ShortcutListPage(
     prefs: SharedPreferences,
-    revision: Int,
     onEdit: (ShortcutAction) -> Unit,
     onAdd: (ShortcutKind) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val shortcuts = remember(prefs, revision) {
+    // nav3 迁移后无 revision 通道：编辑页保存/删除即弹栈，返回列表必然重新组合、
+    // remember 重新执行即重新加载（等价旧 listRevision++ 强制刷新）
+    val shortcuts = remember(prefs) {
         ShortcutStore.loadUserShortcuts(prefs)
     }
     val isFull = shortcuts.size >= ShortcutStore.MAX_USER_SHORTCUTS

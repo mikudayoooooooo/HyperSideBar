@@ -65,7 +65,6 @@ class MainActivity : ComponentActivity() {
 
             HyperSidebarTheme(colorMode = themeMode) {
                 MainScreen(
-                    activity = this,
                     prefs = activePrefs,
                     service = xposedService,
                     themeMode = themeMode,

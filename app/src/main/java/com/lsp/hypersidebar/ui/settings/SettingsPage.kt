@@ -5,13 +5,17 @@ import com.lsp.hypersidebar.ui.fan.effectiveIconSizeDp
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -21,6 +25,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -69,6 +74,18 @@ internal fun SettingsPage(
     val selectedThemeIndex = ThemeModes.BASE_MODES.indexOf(baseMode).coerceAtLeast(0)
     val useSystemColors = ThemeModes.usesSystemColors(currentThemeMode)
 
+    // 降级/熔断状态（1C：hook 侧写入 remotePrefs；迁自退役的 HomePage）。
+    // 熔断按进程分键（home/ui），任一端熔断即显示；显示优先级：熔断 > 降级
+    val passthroughDegraded = remember(prefs, prefsRevision) {
+        runCatching { prefs.getBoolean(PrefKeys.PASSTHROUGH_DEGRADED, false) }.getOrDefault(false)
+    }
+    val circuitOpen = remember(prefs, prefsRevision) {
+        runCatching {
+            prefs.getBoolean(PrefKeys.CIRCUIT_OPEN_HOME, false) ||
+                prefs.getBoolean(PrefKeys.CIRCUIT_OPEN_UI, false)
+        }.getOrDefault(false)
+    }
+
     SettingsList(modifier = modifier) {
         item { SmallTitle(text = stringResource(R.string.module_section)) }
         item {
@@ -86,6 +103,36 @@ internal fun SettingsPage(
                     )
                 }
             }
+        }
+
+        if (circuitOpen) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    CircuitStatusComponent(
+                        onRetry = {
+                            // 手动重试：写时间戳，hook 侧比较 resetAt > 本端熔断时刻即解除
+                            //（launcher=下次边缘呼出，:ui=2s 看门狗内）
+                            prefs.edit()
+                                .putLong(PrefKeys.CIRCUIT_RESET_AT, System.currentTimeMillis())
+                                .commit()
+                        }
+                    )
+                }
+            }
+        } else if (passthroughDegraded) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    DegradedStatusComponent()
+                }
+            }
+        }
+
+        item { SmallTitle(text = stringResource(R.string.effect_preview)) }
+        item {
+            FanPreviewCard(
+                prefs = prefs,
+                prefsRevision = prefsRevision
+            )
         }
 
         item { SmallTitle(text = stringResource(R.string.apps_section)) }
@@ -395,6 +442,41 @@ private fun SettingsList(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         content = content
+    )
+}
+
+@Composable
+private fun DegradedStatusComponent() {
+    BasicComponent(
+        title = stringResource(R.string.passthrough_degraded),
+        summary = stringResource(R.string.passthrough_degraded_summary),
+        startAction = {
+            Box(
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(MiuixTheme.colorScheme.error)
+            )
+        }
+    )
+}
+
+@Composable
+private fun CircuitStatusComponent(onRetry: () -> Unit) {
+    BasicComponent(
+        title = stringResource(R.string.circuit_open),
+        summary = stringResource(R.string.circuit_open_summary),
+        startAction = {
+            Box(
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(MiuixTheme.colorScheme.error)
+            )
+        },
+        onClick = onRetry
     )
 }
 

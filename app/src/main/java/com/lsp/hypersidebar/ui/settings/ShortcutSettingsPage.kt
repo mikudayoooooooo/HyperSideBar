@@ -1,15 +1,11 @@
 package com.lsp.hypersidebar.ui.settings
 
-import android.content.SharedPreferences
-import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,110 +19,14 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
-import com.lsp.hypersidebar.util.ShortcutAction
-import com.lsp.hypersidebar.util.ShortcutKind
-import com.lsp.hypersidebar.util.ShortcutStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import java.util.UUID
 
-@Composable
-internal fun ShortcutSettingsPage(
-    prefs: SharedPreferences,
-    modifier: Modifier = Modifier
-) {
-    var editingShortcut by remember { mutableStateOf<ShortcutAction?>(null) }
-    var isNewShortcut by remember { mutableStateOf(false) }
-    var showActivityPicker by remember { mutableStateOf(false) }
-    var listRevision by remember { mutableStateOf(0) }
-
-    val activity = LocalContext.current as? ComponentActivity
-
-    // 内部返回栈：编辑页按返回 → 回到列表。
-    // 选择器页（showActivityPicker）的返回由 ActivityPickerPage 自己的回调处理，
-    // 此处用 !showActivityPicker 避免重复拦截。列表层时回调禁用，放行给 MainScreen。
-    DisposableEffect(activity, editingShortcut, showActivityPicker) {
-        val callback = object : OnBackPressedCallback(editingShortcut != null && !showActivityPicker) {
-            override fun handleOnBackPressed() {
-                editingShortcut = null
-            }
-        }
-        activity?.onBackPressedDispatcher?.addCallback(callback)
-        onDispose { callback.remove() }
-    }
-
-        when {
-        showActivityPicker -> {
-            ActivityPickerPage(
-                onSelected = { pkg, act, label ->
-                    editingShortcut = editingShortcut?.copy(
-                        packageName = pkg,
-                        activityName = act,
-                        // 仅当当前名称为空时才用 Activity 标签自动填充，避免覆盖用户已输入的名称
-                        label = editingShortcut?.label?.ifEmpty { label } ?: label,
-                        iconPackageName = pkg
-                    )
-                    showActivityPicker = false
-                },
-                onBack = { showActivityPicker = false }
-            )
-        }
-        editingShortcut != null -> {
-            val derived = remember(editingShortcut?.packageName, editingShortcut?.activityName) {
-                SplitResult(
-                    pkg = editingShortcut?.packageName ?: "",
-                    act = editingShortcut?.activityName ?: ""
-                )
-            }
-            ShortcutEditPage(
-                shortcut = editingShortcut!!,
-                isNew = isNewShortcut,
-                prefs = prefs,
-                initialTargetSpec = derived,
-                onSave = { updated ->
-                    if (isNewShortcut) {
-                        ShortcutStore.addShortcut(prefs, updated)
-                    } else {
-                        ShortcutStore.updateShortcut(prefs, updated)
-                    }
-                    listRevision++
-                    editingShortcut = null
-                },
-                onDelete = if (isNewShortcut) null else {
-                    {
-                        ShortcutStore.removeShortcut(prefs, editingShortcut!!.id)
-                        listRevision++
-                        editingShortcut = null
-                    }
-                },
-                onPickActivity = { showActivityPicker = true },
-                onBack = { editingShortcut = null }
-            )
-        }
-        else -> {
-            ShortcutListPage(
-                prefs = prefs,
-                revision = listRevision,
-                onEdit = { shortcut ->
-                    isNewShortcut = false
-                    editingShortcut = shortcut
-                },
-                onAdd = { kind ->
-                    isNewShortcut = true
-                    editingShortcut = ShortcutAction(
-                        id = UUID.randomUUID().toString(),
-                        kind = kind,
-                        label = "",
-                        enabled = true
-                    )
-                },
-                modifier = modifier
-            )
-        }
-    }
-}
+// 快捷方式入口状态机已随 nav3 迁移（§2.1）解散进 SettingsKey 栈：
+// 列表（ShortcutList）/ 编辑-添加（ShortcutEdit）/ 选择器（ShortcutPicker）三级
+// 见 Screen.kt 与 MainScreen.kt 的 entryProvider。本文件只承载跨文件共享的图标组件。
 
 /**
  * 设置页专用的应用图标组件。

@@ -1,11 +1,6 @@
 package com.lsp.hypersidebar.ui.settings
 
-import com.lsp.hypersidebar.prefs.PrefKeys
-import com.lsp.hypersidebar.prefs.SettingsRepository
 import android.content.SharedPreferences
-import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -14,24 +9,33 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.navigation3.runtime.NavBackStack
+import androidx.navigation3.runtime.NavEntry
+import androidx.navigation3.ui.NavDisplay
+import androidx.navigation3.ui.defaultPopTransitionSpec
+import androidx.navigation3.ui.defaultTransitionSpec
 import com.lsp.hypersidebar.R
+import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.theme.ThemeMode
+import com.lsp.hypersidebar.util.ShortcutAction
+import com.lsp.hypersidebar.util.ShortcutKind
+import com.lsp.hypersidebar.util.ShortcutStore
 import io.github.libxposed.service.XposedService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -45,22 +49,19 @@ import top.yukonga.miuix.kmp.basic.NavigationBarItem
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.All
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import java.util.UUID
 
 @Composable
 internal fun MainScreen(
-    activity: ComponentActivity,
     prefs: SharedPreferences,
     service: XposedService?,
     themeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit
 ) {
-    var selectedTab by remember { mutableStateOf(RootTab.HOME) }
-    var detailScreen by remember { mutableStateOf<DetailScreen?>(null) }
     val settingsRepo = remember(prefs) { SettingsRepository(prefs) }
     val prefsRevision = settingsRepo.revision
     val moduleStatus by produceState<ModuleStatus>(
@@ -70,31 +71,31 @@ internal fun MainScreen(
         value = withContext(Dispatchers.IO) { moduleStatusOf(service) }
     }
 
-    val selectAppsTitle = stringResource(R.string.select_apps)
-    val currentTitle = when (val detail = detailScreen) {
-        is DetailScreen.AppSelection -> detail.title
-        DetailScreen.ShortcutSettings -> stringResource(R.string.shortcuts_add_section)
-        DetailScreen.LayoutSettings -> stringResource(R.string.layout_settings)
-        DetailScreen.InteractionSettings -> stringResource(R.string.interaction_settings)
-        null -> when (selectedTab) {
-            RootTab.HOME -> stringResource(R.string.app_name)
-            RootTab.SETTINGS -> stringResource(R.string.tab_settings)
-            RootTab.ABOUT -> stringResource(R.string.tab_about)
-        }
-    }
-
     DisposableEffect(settingsRepo) {
         onDispose { settingsRepo.dispose() }
     }
 
-    DisposableEffect(activity, detailScreen) {
-        val callback = object : OnBackPressedCallback(detailScreen != null) {
-            override fun handleOnBackPressed() {
-                detailScreen = null
-            }
-        }
-        activity.onBackPressedDispatcher.addCallback(callback)
-        onDispose { callback.remove() }
+    // 双根 Tab 各持独立栈：切 Tab = 换栈，旧栈整体保活（切回深度不丢，U0 实测）
+    val settingsStack = remember { NavBackStack<SettingsKey>(SettingsKey.TabSettings) }
+    val aboutStack = remember { NavBackStack<SettingsKey>(SettingsKey.TabAbout) }
+    var activeTab by rememberSaveable { mutableIntStateOf(0) }
+    val activeStack = if (activeTab == 0) settingsStack else aboutStack
+
+    val selectAppsTitle = stringResource(R.string.select_apps)
+    val currentTitle = when (val top = activeStack.last()) {
+        SettingsKey.TabSettings -> stringResource(R.string.tab_settings)
+        SettingsKey.TabAbout -> stringResource(R.string.tab_about)
+        is SettingsKey.AppSelection -> top.title
+        SettingsKey.ShortcutList, SettingsKey.ShortcutPicker ->
+            stringResource(R.string.shortcuts_add_section)
+        is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
+        SettingsKey.LayoutSettings -> stringResource(R.string.layout_settings)
+        SettingsKey.InteractionSettings -> stringResource(R.string.interaction_settings)
+    }
+
+    // 根 Tab 互切保持现网根 Tab 的淡入淡出；其余（详情推/弹）走 miuix HyperOS 横滑默认
+    val rootContentKeys = remember {
+        setOf(SettingsKey.TabSettings.toString(), SettingsKey.TabAbout.toString())
     }
 
     Scaffold(
@@ -103,7 +104,7 @@ internal fun MainScreen(
                 title = currentTitle,
                 navigationIcon = {
                     AnimatedVisibility(
-                        visible = detailScreen != null,
+                        visible = activeStack.size > 1,
                         enter = slideInHorizontally(
                             initialOffsetX = { -it },
                             animationSpec = tween(300, easing = DecelerateEasing(1.0f))
@@ -113,7 +114,7 @@ internal fun MainScreen(
                             animationSpec = tween(300, easing = AccelerateEasing(1.0f))
                         ) + fadeOut(animationSpec = tween(300, easing = AccelerateEasing(1.0f)))
                     ) {
-                        IconButton(onClick = { detailScreen = null }) {
+                        IconButton(onClick = { activeStack.removeLast() }) {
                             Icon(
                                 imageVector = MiuixIcons.Back,
                                 contentDescription = stringResource(R.string.back)
@@ -123,132 +124,163 @@ internal fun MainScreen(
                 }
             )
         }
-        // bottomBar 移到 content 内的 Column —— 避免子页面进出时 content 区域尺寸变化打断 slide 动画
     ) { padding ->
-        Box(
+        NavDisplay(
+            backStack = activeStack,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-        ) {
-            // 根内容：根Tab + 底部导航栏（一起作为常驻底层，被 overlay 覆盖时自然隐藏）
-            Column(modifier = Modifier.fillMaxSize()) {
-                // 根 Tab 常驻 —— 进出子页面都不销毁，FanPreviewCard 的 remember 缓存保住
-                AnimatedContent(
-                    targetState = selectedTab,
-                    modifier = Modifier.weight(1f),
-                    transitionSpec = {
-                        fadeIn(animationSpec = tween(300, easing = DecelerateEasing(1.0f))) togetherWith
-                            fadeOut(animationSpec = tween(300, easing = AccelerateEasing(1.0f)))
-                    },
-                    label = "root-tabs"
-                ) { tab ->
-                    when (tab) {
-                        RootTab.HOME -> HomePage(
-                            prefs = prefs,
-                            prefsRevision = prefsRevision,
-                            status = moduleStatus
-                        )
-                        RootTab.SETTINGS -> SettingsPage(
-                            prefs = prefs,
-                            prefsRevision = prefsRevision,
-                            status = moduleStatus,
-                            currentThemeMode = themeMode,
-                            onThemeModeChange = onThemeModeChange,
-                            onNavigateToAppSelection = {
-                                detailScreen = DetailScreen.AppSelection(PrefKeys.CUSTOM_APPS, selectAppsTitle)
-                            },
-                            onNavigateToShortcutSelection = {
-                                detailScreen = DetailScreen.ShortcutSettings
-                            },
-                            onNavigateToLayout = { detailScreen = DetailScreen.LayoutSettings },
-                            onNavigateToInteraction = { detailScreen = DetailScreen.InteractionSettings }
-                        )
-                        RootTab.ABOUT -> AboutPage(
-                            service = service,
-                            prefs = prefs,
-                            prefsRevision = prefsRevision
-                        )
-                    }
-                }
-
-                // 底部导航栏：常驻渲染。子页面 overlay 滑入时覆盖它、滑出时露出它，避免进入子页面时底栏突然消失、根内容突然拉伸
-                NavigationBar(
-                    mode = NavigationBarDisplayMode.IconAndText
-                ) {
-                    NavigationBarItem(
-                        selected = selectedTab == RootTab.HOME,
-                        onClick = { selectedTab = RootTab.HOME },
-                        icon = MiuixIcons.All,
-                        label = stringResource(R.string.tab_home)
-                    )
-                    NavigationBarItem(
-                        selected = selectedTab == RootTab.SETTINGS,
-                        onClick = { selectedTab = RootTab.SETTINGS },
-                        icon = MiuixIcons.Settings,
-                        label = stringResource(R.string.tab_settings)
-                    )
-                    NavigationBarItem(
-                        selected = selectedTab == RootTab.ABOUT,
-                        onClick = { selectedTab = RootTab.ABOUT },
-                        icon = MiuixIcons.Info,
-                        label = stringResource(R.string.tab_about)
-                    )
-                }
-            }
-
-            // 子页面浮层 —— detail != null 时盖在根内容上（含 bottomBar 区域）
-            AnimatedContent(
-                targetState = detailScreen,
-                transitionSpec = {
-                    val durationMillis = 300
-                    if (targetState != null) {
-                        // 进入：DecelerateEasing（快开始慢结束）—— HyperOS 设置页进入风格
-                        slideInHorizontally(
-                            initialOffsetX = { it },
-                            animationSpec = tween(durationMillis, easing = DecelerateEasing(1.0f))
-                        ) togetherWith slideOutHorizontally(
-                            targetOffsetX = { -it / 6 },
-                            animationSpec = tween(durationMillis, easing = DecelerateEasing(1.0f))
-                        )
-                    } else {
-                        // 退出：AccelerateEasing（慢开始快结束）—— HyperOS 设置页退出风格
-                        slideInHorizontally(
-                            initialOffsetX = { -it / 6 },
-                            animationSpec = tween(durationMillis, easing = AccelerateEasing(1.0f))
-                        ) togetherWith slideOutHorizontally(
-                            targetOffsetX = { it },
-                            animationSpec = tween(durationMillis, easing = AccelerateEasing(1.0f))
-                        )
-                    }
-                },
-                label = "detail-navigation"
-            ) { detail ->
-                if (detail == null) {
-                    Spacer(Modifier.fillMaxSize())
+                .padding(padding),
+            transitionSpec = {
+                val fromRoot = rootContentKeys.contains(initialState.entries.lastOrNull()?.contentKey)
+                val toRoot = rootContentKeys.contains(targetState.entries.lastOrNull()?.contentKey)
+                if (fromRoot && toRoot) {
+                    fadeIn(animationSpec = tween(300, easing = DecelerateEasing(1.0f))) togetherWith
+                        fadeOut(animationSpec = tween(300, easing = AccelerateEasing(1.0f)))
                 } else {
-                    val overlayInteractionSource = remember { MutableInteractionSource() }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MiuixTheme.colorScheme.background)
-                            .clickable(
-                                interactionSource = overlayInteractionSource,
-                                indication = null,
-                            ) {}
-                    ) {
-                        when (detail) {
-                            is DetailScreen.AppSelection -> AppSelectionPage(
+                    defaultTransitionSpec<SettingsKey>().invoke(this)
+                }
+            },
+            popTransitionSpec = { defaultPopTransitionSpec<SettingsKey>().invoke(this) },
+            entryProvider = { key ->
+                when (key) {
+                    SettingsKey.TabSettings -> NavEntry(key) {
+                        RootPageContainer(
+                            activeTab = activeTab,
+                            onSelectTab = { activeTab = it }
+                        ) {
+                            SettingsPage(
                                 prefs = prefs,
-                                prefsKey = detail.prefsKey
+                                prefsRevision = prefsRevision,
+                                status = moduleStatus,
+                                currentThemeMode = themeMode,
+                                onThemeModeChange = onThemeModeChange,
+                                onNavigateToAppSelection = {
+                                    settingsStack.add(
+                                        SettingsKey.AppSelection(PrefKeys.CUSTOM_APPS, selectAppsTitle)
+                                    )
+                                },
+                                onNavigateToShortcutSelection = {
+                                    settingsStack.add(SettingsKey.ShortcutList)
+                                },
+                                onNavigateToLayout = {
+                                    settingsStack.add(SettingsKey.LayoutSettings)
+                                },
+                                onNavigateToInteraction = {
+                                    settingsStack.add(SettingsKey.InteractionSettings)
+                                },
+                                modifier = Modifier.weight(1f)
                             )
-                            DetailScreen.ShortcutSettings -> ShortcutSettingsPage(
-                                prefs = prefs
+                        }
+                    }
+                    SettingsKey.TabAbout -> NavEntry(key) {
+                        RootPageContainer(
+                            activeTab = activeTab,
+                            onSelectTab = { activeTab = it }
+                        ) {
+                            AboutPage(
+                                service = service,
+                                prefs = prefs,
+                                prefsRevision = prefsRevision,
+                                modifier = Modifier.weight(1f)
                             )
-                            DetailScreen.LayoutSettings -> LayoutSettingsPage(
+                        }
+                    }
+                    is SettingsKey.AppSelection -> NavEntry(key) {
+                        DetailPageContainer {
+                            AppSelectionPage(
+                                prefs = prefs,
+                                prefsKey = key.prefsKey
+                            )
+                        }
+                    }
+                    SettingsKey.ShortcutList -> NavEntry(key) {
+                        DetailPageContainer {
+                            ShortcutListPage(
+                                prefs = prefs,
+                                onEdit = { shortcut ->
+                                    settingsStack.add(SettingsKey.ShortcutEdit(shortcut, isNew = false))
+                                },
+                                onAdd = { kind ->
+                                    settingsStack.add(
+                                        SettingsKey.ShortcutEdit(
+                                            ShortcutAction(
+                                                id = UUID.randomUUID().toString(),
+                                                kind = kind,
+                                                label = "",
+                                                enabled = true
+                                            ),
+                                            isNew = true
+                                        )
+                                    )
+                                }
+                            )
+                        }
+                    }
+                    is SettingsKey.ShortcutEdit -> NavEntry(key) {
+                        DetailPageContainer {
+                            ShortcutEditPage(
+                                shortcut = key.shortcut,
+                                isNew = key.isNew,
+                                prefs = prefs,
+                                initialTargetSpec = SplitResult(
+                                    pkg = key.shortcut.packageName ?: "",
+                                    act = key.shortcut.activityName ?: ""
+                                ),
+                                onSave = { updated ->
+                                    if (key.isNew) {
+                                        ShortcutStore.addShortcut(prefs, updated)
+                                    } else {
+                                        ShortcutStore.updateShortcut(prefs, updated)
+                                    }
+                                    settingsStack.removeLast()
+                                },
+                                onDelete = if (key.isNew) null else {
+                                    {
+                                        ShortcutStore.removeShortcut(prefs, key.shortcut.id)
+                                        settingsStack.removeLast()
+                                    }
+                                },
+                                onPickActivity = { settingsStack.add(SettingsKey.ShortcutPicker) },
+                                onBack = { settingsStack.removeLast() }
+                            )
+                        }
+                    }
+                    SettingsKey.ShortcutPicker -> NavEntry(key) {
+                        DetailPageContainer {
+                            ActivityPickerPage(
+                                onSelected = { pkg, act, label ->
+                                    // 选择器回填：原地替换栈中编辑键 + 弹出选择器（同帧），
+                                    // 编辑页从更新后的 shortcut 重建字段（等价旧 when() 销毁重建语义）
+                                    val idx = settingsStack.indexOfLast { it is SettingsKey.ShortcutEdit }
+                                    if (idx >= 0) {
+                                        val cur = settingsStack[idx] as SettingsKey.ShortcutEdit
+                                        settingsStack[idx] = cur.copy(
+                                            shortcut = cur.shortcut.copy(
+                                                packageName = pkg,
+                                                activityName = act,
+                                                // 仅当当前名称为空时才用 Activity 标签自动填充，避免覆盖用户已输入的名称
+                                                label = cur.shortcut.label.ifEmpty { label },
+                                                iconPackageName = pkg
+                                            )
+                                        )
+                                    }
+                                    settingsStack.removeLast()
+                                },
+                                onBack = { settingsStack.removeLast() }
+                            )
+                        }
+                    }
+                    SettingsKey.LayoutSettings -> NavEntry(key) {
+                        DetailPageContainer {
+                            LayoutSettingsPage(
                                 prefs = prefs,
                                 prefsRevision = prefsRevision
                             )
-                            DetailScreen.InteractionSettings -> InteractionSettingsPage(
+                        }
+                    }
+                    SettingsKey.InteractionSettings -> NavEntry(key) {
+                        DetailPageContainer {
+                            InteractionSettingsPage(
                                 prefs = prefs,
                                 prefsRevision = prefsRevision
                             )
@@ -256,7 +288,58 @@ internal fun MainScreen(
                     }
                 }
             }
-        }
+        )
+    }
+}
+
+/**
+ * 根 Tab 页容器：内容 + 常驻底部导航栏（详情页推入时整体作为旧场景滑出，底栏随行——
+ * 等价旧 detail overlay 覆盖底栏的观感；底栏在场景内也避免了底栏显隐导致的 content 尺寸变化）。
+ * 不透明背景 = U0 教训（过渡期新旧 scene 同组合，透明页面叠透成残影）。
+ */
+@Composable
+private fun RootPageContainer(
+    activeTab: Int,
+    onSelectTab: (Int) -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(MiuixTheme.colorScheme.background)
+    ) {
+        content()
+        RootTabBar(activeTab = activeTab, onSelect = onSelectTab)
+    }
+}
+
+@Composable
+private fun RootTabBar(activeTab: Int, onSelect: (Int) -> Unit) {
+    NavigationBar(mode = NavigationBarDisplayMode.IconAndText) {
+        NavigationBarItem(
+            selected = activeTab == 0,
+            onClick = { onSelect(0) },
+            icon = MiuixIcons.Settings,
+            label = stringResource(R.string.tab_settings)
+        )
+        NavigationBarItem(
+            selected = activeTab == 1,
+            onClick = { onSelect(1) },
+            icon = MiuixIcons.Info,
+            label = stringResource(R.string.tab_about)
+        )
+    }
+}
+
+@Composable
+private fun DetailPageContainer(content: @Composable () -> Unit) {
+    // U0 教训：NavDisplay 过渡期新旧 scene 同组合，页面必须带不透明背景
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(MiuixTheme.colorScheme.background)
+    ) {
+        content()
     }
 }
 

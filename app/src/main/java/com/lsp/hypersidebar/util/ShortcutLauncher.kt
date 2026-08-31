@@ -186,6 +186,7 @@ object ShortcutLauncher {
                 Log.i(TAG, "launch: exported check failed, trying ROOT fallback")
                 return launchViaRoot(action)
             }
+            Log.w(TAG, "launch: validation failed: ${validation.reason}: ${validation.detail}")
             return validation
         }
 
@@ -631,7 +632,12 @@ object ShortcutLauncher {
         return try {
             // 使用 URI_INTENT_SCHEME 解析（不支持 intent:// 以外的 scheme 时走 VIEW）
             val intent = if (uriStr.startsWith("intent://") || uriStr.startsWith("#Intent")) {
-                Intent.parseUri(uriStr, Intent.URI_INTENT_SCHEME)
+                val parsed = Intent.parseUri(uriStr, Intent.URI_INTENT_SCHEME)
+                // parseUri(URI_INTENT_SCHEME) 会自动追加 CATEGORY_BROWSABLE（浏览器链接语义），
+                // 导致只声明 DEFAULT 的目标（如微信快捷动作派发 Activity）resolveActivity 必然
+                // 落空——剥离该类别使解析行为与 am start 一致（2026-08-31 微信快捷方式实测定位）
+                parsed.removeCategory(Intent.CATEGORY_BROWSABLE)
+                parsed
             } else {
                 // 普通 URI (如 weixin://, alipays://) 走 ACTION_VIEW
                 Intent(Intent.ACTION_VIEW, Uri.parse(uriStr))
@@ -660,13 +666,14 @@ object ShortcutLauncher {
      * - 清除 FLAG_GRANT_* 权限位
      * - 剥离 selector
      * - 清除 grants
+     *
+     * extras 不清洗（2026-08-31 修订）：INTENT_URI 快捷方式的载荷（如微信快捷动作的
+     * LaunchType/digest/token）就在 extras 里，清空=目标收到空 intent 无动作；
+     * 本模块为个人自用配置，intent 内容即用户本人输入，非不可信来源。
      */
     private fun sanitizeIntent(intent: Intent) {
         intent.clipData = null
         intent.selector = null
-
-        // 清除所有 extras 防止恶意 payload
-        intent.extras?.clear()
 
         // 清除所有 grant 标志
         intent.flags = intent.flags and
@@ -702,10 +709,14 @@ object ShortcutLauncher {
         if (resolveInfo == null) {
             // resolveActivity 对非 exported Activity 返回 null，
             // 回退用 getActivityInfo 探测：如果 Activity 确实存在，放行让 launch() 去试。
-            val component = intent.component ?: return LaunchResult.Failure(
-                FailureReason.ACTIVITY_NOT_FOUND,
-                "No component set and resolveActivity returned null"
-            )
+            val component = intent.component ?: run {
+                Log.w(TAG, "validateIntent: resolveActivity null and no component: " +
+                    "action=${intent.action} pkg=${intent.`package`} categories=${intent.categories}")
+                return LaunchResult.Failure(
+                    FailureReason.ACTIVITY_NOT_FOUND,
+                    "No component set and resolveActivity returned null"
+                )
+            }
             // 第一层：直接 getActivityInfo（对 exported Activity 有效）
             try {
                 @Suppress("DEPRECATION")

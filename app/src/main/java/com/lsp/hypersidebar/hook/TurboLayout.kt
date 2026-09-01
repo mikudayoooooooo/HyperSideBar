@@ -93,14 +93,15 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 // 竖屏=吞掉漏到小白条的事件（穿透失效信号，防唤起原生侧边栏/
                 // 幽灵入口）；横屏=B 路线状态机接管（隐藏条即触发器）。
                 // 已降级（1C）：竖屏事件放行原生流（不吞不计数）；
+                // 数据源死亡（迭代四 §1.3）：两侧全放行原生流，不再呼出；
                 // 已熔断（1C 轮二）：两侧全放行，本进程停止一切侵入
                 if (!isLandscape(view)) {
-                    if (passthroughDegraded || breaker.open) return@createBeforeHook
+                    if (passthroughDegraded || breaker.open || DataDeadState.dead) return@createBeforeHook
                     if (event.actionMasked == MotionEvent.ACTION_DOWN) onCoverTouchLeak()
                     it.result = true
                     return@createBeforeHook
                 }
-                if (breaker.open) return@createBeforeHook
+                if (breaker.open || DataDeadState.dead) return@createBeforeHook
                 handleStripGesture(view, event)
                 it.result = true
             }
@@ -298,8 +299,18 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         HookProbeState.uiProvider = {
             when {
                 breaker.open -> PrefKeys.PROBE_CODE_CIRCUIT
+                DataDeadState.dead -> PrefKeys.PROBE_CODE_DATA_DEAD
                 passthroughDegraded -> PrefKeys.PROBE_CODE_DEGRADED
                 else -> PrefKeys.PROBE_CODE_OK
+            }
+        }
+        // 数据源死亡停摆（迭代四 §1.3）：恢复原生侧边栏（走降级动作）+ 条上不再呼出；
+        // DataLoader 已 toast 过原因，降级 toast 置空防重复打扰。恢复=重启手机
+        com.lsp.hypersidebar.util.DataLoader.onDataSourceDead = {
+            if (DataDeadState.mark()) {
+                Log.e(TAG, "data source dead: native sidebar restored, fan disabled until reboot")
+                if (fanController.isShowing) fanController.dismiss()
+                enterDegradedMode("推荐数据源死亡（连续失败≥5 且无缓存）", "")
             }
         }
         // 各 hook 独立容错：任一失败不中断其余（实测 hookDockLayoutVisibility 的
@@ -491,7 +502,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         runCatching {
             remotePrefs.edit().putBoolean(PrefKeys.PASSTHROUGH_DEGRADED, true).commit()
         }.onFailure { Log.w(TAG, "degrade status write failed: ${it.message}") }
-        toastOnMain(safeAppContext(), toast)
+        // toast 为空串=调用方已另行告知（数据源死亡时 DataLoader 先弹「推荐数据获取失败」）
+        if (toast.isNotEmpty()) toastOnMain(safeAppContext(), toast)
     }
 
     private fun purgeCoverRefs() {

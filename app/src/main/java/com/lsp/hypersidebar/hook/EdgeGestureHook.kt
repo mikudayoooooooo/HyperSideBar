@@ -13,6 +13,7 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import com.lsp.hypersidebar.ui.fan.FanMenuController
+import com.lsp.hypersidebar.util.DataLoader
 import io.github.kyuubiran.ezxhelper.core.ClassLoaderProvider
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.EzXposed
@@ -97,9 +98,22 @@ class EdgeGestureHook(
             )
             Log.e(TAG, "breaker tripped: $reason — 后续边缘触摸全透传")
         }
+        // 数据源死亡停摆（迭代四 §1.3，用户加强语义）：推荐获取连续失败≥5 且缓存含盘
+        // 仍空=ROM 不兼容信号 → 边缘手势全透传、扇形不再展示；恢复=重启手机
+        //（无自动恢复，同降级语义——盲恢复会反复横跳）
+        DataLoader.onDataSourceDead = {
+            if (DataDeadState.mark()) {
+                Log.e(TAG, "data source dead: edge gestures passthrough, fan disabled until reboot")
+                if (fanController.isShowing) fanController.dismiss()
+            }
+        }
         // 状态探针（§2.5.4）：provider 供接收器应答 + Application.attach 后注册接收器
         HookProbeState.homeProvider = {
-            if (breaker.open) PrefKeys.PROBE_CODE_CIRCUIT else PrefKeys.PROBE_CODE_OK
+            when {
+                DataDeadState.dead -> PrefKeys.PROBE_CODE_DATA_DEAD
+                breaker.open -> PrefKeys.PROBE_CODE_CIRCUIT
+                else -> PrefKeys.PROBE_CODE_OK
+            }
         }
         runCatching { hookProbeReceiver() }
             .onFailure { Log.e(TAG, "probe receiver hook FAILED: ${it.message}", it) }
@@ -226,6 +240,11 @@ class EdgeGestureHook(
     }
 
     private fun handleTouch(ev: MotionEvent, stub: View?): Boolean {
+        // 数据源死亡停摆（迭代四 §1.3）：整条透传原生（原生返回优先），不再呼出
+        if (DataDeadState.dead) {
+            if (fanController.isShowing) fanController.dismiss()
+            return false
+        }
         // fan 展示中：事件转发给 fan 并消费；UP/CANCEL 收起（未预选立即收起，PRD §7.1）
         if (fanController.isShowing) {
             if (!fanSeenThisGesture) {

@@ -21,22 +21,38 @@ import android.util.Log
  *   系统建议列表，5 分钟远超其真实变化速度；成本 ~1s 后台 binder/次，常驻进程可忽略。
  *   周期挂主线程 handler（仅 postDelayed 微秒级），刷新在后台 executor（[refreshing]
  *   标志防重入，fixed-rate 循环安全）。
+ * - 落盘持久层（迭代四 §1.2，修冷启动推荐竞态窗）：每次成功刷新把列表 JSON 写宿主进程
+ *   本地 prefs（hook 进程 remotePrefs 只读不适用；列表没变化不写、空列表不覆盖）；
+ *   首次刷新前先从盘同步灌缓存（后台线程，不设 lastFetchTime→TTL 视为过期必刷）。
+ *   进程重启后首呼出即显示上次会话的推荐，竞态窗（冷 binder ~3.5s）实际消失。
  */
 object DataLoader {
 
     private const val TAG = "DataLoader"
     private const val CACHE_TTL_MS = 30_000L
     private const val BACKSTOP_INTERVAL_MS = 5 * 60_000L
+    private const val DISK_PREFS_NAME = "hyperSidebar_data"
+    private const val DISK_KEY_SUGGESTIONS = "suggestions"
+
+    /**
+     * 数据源死亡回调（迭代四 §1.3，PRD §9.4 用户加强：获取失败→取消所有 hook、
+     * 扇形不再展示）：连续失败 ≥[DEAD_THRESHOLD] 次且缓存仍空（含盘）=ROM 不兼容信号。
+     * hook 进程 init 时注册（注册后恰触发一次）；模块进程不注册，无副作用。
+     */
+    @Volatile var onDataSourceDead: (() -> Unit)? = null
 
     @Volatile private var cachedResult: List<String>? = null
     @Volatile private var lastFetchTime = 0L
     @Volatile private var refreshing = false
     @Volatile private var backstopStarted = false
     @Volatile private var prewarmed = false
+    @Volatile private var hydrated = false
+    @Volatile private var lastPersistedJson: String? = null
 
     // 连续失败计数（1C，PRD §9.4"推荐数据获取失败→toast"）：数据源是系统 API，
     // 连续失败通常=ROM 更新后反射签名失效（模块与该 ROM 根本不兼容的信号）——
-    // 达 5 次且缓存仍为空时 toast 一次（进程生命周期内仅此一次，不重复打扰）
+    // 达 5 次且缓存仍为空（含盘，落盘层灌入也算"有过数据"）时 toast 一次并触发
+    // [onDataSourceDead]（进程生命周期内至多一次；成功即清零且缓存非空后不再触发）
     @Volatile private var consecutiveFailures = 0
     @Volatile private var failureToastShown = false
 
@@ -108,11 +124,13 @@ object DataLoader {
         refreshing = true
         executor.execute {
             try {
+                hydrateFromDisk(context)
                 val t0 = android.os.SystemClock.elapsedRealtime()
                 val suggestion = loadSuggestionApps(context)
                 cachedResult = suggestion
                 lastFetchTime = System.currentTimeMillis()
                 consecutiveFailures = 0
+                persistToDisk(context, suggestion)
                 // label 预热（1C P3）：扇形呼出主线程逐 pkg 调 AppMetaCache.label，miss 即
                 // PM binder（首呼出最多 14 次）——后台刷新顺带灌缓存，呼出路径恒命中
                 suggestion.forEach { AppMetaCache.label(context, it) }
@@ -120,7 +138,7 @@ object DataLoader {
             } catch (e: Throwable) {
                 Log.w(TAG, "refresh failed: ${e.message}")
                 consecutiveFailures++
-                if (!failureToastShown && cachedResult == null && consecutiveFailures >= 5) {
+                if (!failureToastShown && cachedResult == null && consecutiveFailures >= DEAD_THRESHOLD) {
                     failureToastShown = true
                     mainHandler.post {
                         runCatching {
@@ -130,12 +148,54 @@ object DataLoader {
                                 android.widget.Toast.LENGTH_LONG
                             ).show()
                         }
+                        onDataSourceDead?.invoke()
                     }
                 }
             } finally {
                 refreshing = false
             }
         }
+    }
+
+    /** 数据源死亡阈值（同机制熔断口径；缓存含盘灌入，"从未有过数据"才计） */
+    private const val DEAD_THRESHOLD = 5
+
+    /**
+     * 盘灌缓存（迭代四 §1.2）：首次刷新前从宿主本地 prefs 读上次会话的推荐列表。
+     * 只灌 cachedResult 不设 lastFetchTime——TTL 视为过期，本次/下次刷新照常拉新覆盖。
+     * executor 单线程调用，无并发。
+     */
+    private fun hydrateFromDisk(context: Context) {
+        if (hydrated) return
+        hydrated = true
+        if (cachedResult != null) return
+        runCatching {
+            val json = context.applicationContext
+                .getSharedPreferences(DISK_PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(DISK_KEY_SUGGESTIONS, null)
+            if (json != null) {
+                lastPersistedJson = json
+                val arr = org.json.JSONArray(json)
+                val list = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+                if (list.isNotEmpty()) {
+                    cachedResult = list
+                    Log.i(TAG, "hydrated ${list.size} suggestions from disk (stale, refresh pending)")
+                }
+            }
+        }.onFailure { Log.w(TAG, "hydrate failed: ${it.message}") }
+    }
+
+    /** 成功刷新落盘：列表没变不写（推荐列表日常稳定，实际写盘趋近于零）；空列表不覆盖。 */
+    private fun persistToDisk(context: Context, list: List<String>) {
+        if (list.isEmpty()) return
+        val json = org.json.JSONArray(list).toString()
+        if (json == lastPersistedJson) return
+        lastPersistedJson = json
+        runCatching {
+            context.applicationContext
+                .getSharedPreferences(DISK_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(DISK_KEY_SUGGESTIONS, json).apply()
+        }.onFailure { Log.w(TAG, "persist failed: ${it.message}") }
     }
 
     /** 反射失败直接抛（1C：失败计数/兜底 toast 需要区分"拉取失败"与"合法空列表"）。 */

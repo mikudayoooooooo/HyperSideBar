@@ -33,7 +33,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.theme.ThemeMode
 import com.lsp.hypersidebar.theme.ThemeModes
@@ -51,6 +50,7 @@ import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
+import top.yukonga.miuix.kmp.window.WindowDialog
 
 @Composable
 internal fun SettingsPage(
@@ -250,53 +250,38 @@ private fun ResetConfirmDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    if (!show) return
-    Dialog(onDismissRequest = onDismiss) {
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(
+    // miuix WindowDialog（窗口级）：自带居中 title/summary 与 insideMargin，content 只放按钮行
+    WindowDialog(
+        show = show,
+        title = stringResource(R.string.restore_defaults),
+        summary = stringResource(R.string.restore_defaults_confirm),
+        onDismissRequest = onDismiss,
+        content = {
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .padding(top = 12.dp),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                // 取消=灰文字按钮；确认=主题色（miuix 无 TextButton 颜色工厂，一灰一主手写）
                 Text(
-                    text = stringResource(R.string.restore_defaults),
-                    style = MiuixTheme.textStyles.title3,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = stringResource(R.string.restore_defaults_confirm),
-                    style = MiuixTheme.textStyles.body2,
+                    text = stringResource(R.string.layout_sheet_cancel),
+                    style = MiuixTheme.textStyles.body1,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = 10.dp)
-                )
-                Row(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 20.dp),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // 取消=灰文字按钮；确认=主题色（miuix 无 TextButton 颜色工厂，一灰一主手写）
-                    Text(
-                        text = stringResource(R.string.layout_sheet_cancel),
-                        style = MiuixTheme.textStyles.body1,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .clickable { onDismiss() }
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    )
-                    TextButton(
-                        text = stringResource(R.string.reset_confirm),
-                        onClick = onConfirm,
-                        modifier = Modifier.padding(start = 12.dp)
-                    )
-                }
+                        .clip(CircleShape)
+                        .clickable { onDismiss() }
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                )
+                TextButton(
+                    text = stringResource(R.string.reset_confirm),
+                    onClick = onConfirm,
+                    modifier = Modifier.padding(start = 12.dp)
+                )
             }
         }
-    }
+    )
 }
 
 @Composable

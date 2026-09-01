@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHook
@@ -52,6 +53,11 @@ class FreeformRelayHook : BaseHook() {
         try {
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(ctx: Context, intent: Intent) {
+                    // 设置页状态探针（§2.5.4）：短路在一切动作分支之前——只应答，不执行任何动作
+                    if (intent.getBooleanExtra(PrefKeys.PROBE_EXTRA, false)) {
+                        if (isOrderedBroadcast) resultCode = HookProbeState.uiCode()
+                        return
+                    }
                     // 有序广播存活探测标记（1C，PRD §9.4 ":ui 不存活→toast"）：launcher 发
                     // ordered broadcast，初始 code=0，本接收器置 1；最终回调读 0 = 本进程
                     // 已死或接收器未注册。普通 sendBroadcast（如 AllAppsActivity 面板内启动）

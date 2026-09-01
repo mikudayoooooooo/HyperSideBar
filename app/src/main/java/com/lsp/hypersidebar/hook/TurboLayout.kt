@@ -288,6 +288,14 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 "扇形连续失败，已熔断保护：恢复原生小白条，重启手机或在设置页重试"
             )
         }
+        // 状态探针注入（§2.5.4）：设置页 ping → FreeformRelayHook 接收器应答时读取本进程双态
+        HookProbeState.uiProvider = {
+            when {
+                breaker.open -> PrefKeys.PROBE_CODE_CIRCUIT
+                passthroughDegraded -> PrefKeys.PROBE_CODE_DEGRADED
+                else -> PrefKeys.PROBE_CODE_OK
+            }
+        }
         // 各 hook 独立容错：任一失败不中断其余（实测 hookDockLayoutVisibility 的
         // ClassNotFoundException 曾中断 init，导致排在其后的 hook 从未安装）
         listOf(

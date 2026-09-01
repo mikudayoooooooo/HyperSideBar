@@ -56,6 +56,21 @@ object PrefKeys {
 
     /** 代发通道防伪令牌（两侧同源代码共享；防任意 App 伪造广播借 root 启动任意组件） */
     const val RELAY_LAUNCH_TOKEN = "hsRl-2026-08-31-x7k9q2m4"
+
+    // ===== hook 状态探针（§2.5.4：设置页打开时有序 ping，hook 侧接收器回 resultCode） =====
+    // 背景（1C 实测实锤）：hook 进程的 remotePrefs 只读（写抛 "Read only implementation"），
+    // 熔断/降级状态经 prefs 回写设置页的旧通路是死路——改为接收器应答时直读进程内状态。
+    /** 触发端（com.miui.home）探针 action：EdgeGestureHook 经 Application.attach 注册的接收器应答 */
+    const val PROBE_ACTION_HOME = "com.lsp.hypersidebar.action.PROBE_HOME"
+    /** 探针标记 extra：:ui 侧 FreeformRelayHook 收到后短路在一切动作分支之前（只应答不执行） */
+    const val PROBE_EXTRA = "probe"
+
+    /** 探针 resultCode：无应答（进程死/接收器未注册/宿主 hook 未初始化） */
+    const val PROBE_CODE_DEAD = 0
+    const val PROBE_CODE_OK = 1
+    /** 仅 :ui（穿透失效自动降级） */
+    const val PROBE_CODE_DEGRADED = 2
+    const val PROBE_CODE_CIRCUIT = 3
 }
 
 // channelMode（EDGE/HANDLE）已废弃（1B：EDGE 为唯一产品形态，HANDLE 遗留调试通道代码

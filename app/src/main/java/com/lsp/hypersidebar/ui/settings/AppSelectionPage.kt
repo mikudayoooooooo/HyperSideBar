@@ -2,9 +2,7 @@ package com.lsp.hypersidebar.ui.settings
 
 import com.lsp.hypersidebar.prefs.savePref
 import android.content.Context
-import android.content.Intent
 import android.content.SharedPreferences
-import android.net.Uri
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import androidx.compose.foundation.layout.Box
@@ -16,9 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -26,13 +22,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.state.ToggleableState
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.AppIconImage
@@ -48,7 +40,6 @@ import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.SearchBar
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Sort
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -63,8 +54,6 @@ private data class AppItem(
 private sealed interface AppLoadState {
     data object Loading : AppLoadState
     data class Loaded(val apps: List<AppItem>) : AppLoadState
-    /** 空列表=「获取应用列表」权限被拒（HyperOS 拦截返回空而非抛异常），提示授权后返回自动刷新 */
-    data object PermissionDenied : AppLoadState
     data object Failed : AppLoadState
 }
 
@@ -112,12 +101,9 @@ internal fun AppSelectionPage(
         persistSelection()
     }
 
-    // 权限被拒后的重载通道：授权页返回（ON_RESUME）时若仍被拒则清缓存重查
-    var refreshTrigger by remember { mutableIntStateOf(0) }
-    val loadState = produceState<AppLoadState>(
+    val loadState by produceState<AppLoadState>(
         initialValue = cachedApps?.let(AppLoadState::Loaded) ?: AppLoadState.Loading,
-        key1 = context.applicationContext,
-        key2 = refreshTrigger
+        key1 = context.applicationContext
     ) {
         val cached = cachedApps
         if (cached != null) {
@@ -128,30 +114,11 @@ internal fun AppSelectionPage(
             withContext(Dispatchers.IO) { loadInstalledApps(context.applicationContext) }
         }.fold(
             onSuccess = { apps ->
-                if (apps.isEmpty()) {
-                    AppLoadState.PermissionDenied
-                } else {
-                    cachedApps = apps
-                    AppLoadState.Loaded(apps)
-                }
+                cachedApps = apps
+                AppLoadState.Loaded(apps)
             },
             onFailure = { AppLoadState.Failed }
         )
-    }
-
-    // 授权返回自动刷新：仅权限被拒状态响应 ON_RESUME（正常态 resume 不打断）
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME &&
-                loadState.value == AppLoadState.PermissionDenied
-            ) {
-                cachedApps = null
-                refreshTrigger++
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -180,11 +147,9 @@ internal fun AppSelectionPage(
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
         )
 
-        when (val state = loadState.value) {
+        when (val state = loadState) {
             AppLoadState.Loading -> LoadingApps()
             AppLoadState.Failed -> MessageState(stringResource(R.string.apps_load_failed))
-            AppLoadState.PermissionDenied ->
-                PermissionDeniedState(onGrant = { openAppDetailsSettings(context) })
             is AppLoadState.Loaded -> {
                 // 已选优先（§2.4）：选中项按 CUSTOM_APPS_ORDER 置顶成组，
                 // 未选保持 user→system 原排序；搜索结果同规则
@@ -251,42 +216,6 @@ private fun MessageState(message: String) {
             text = message,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             modifier = Modifier.padding(24.dp)
-        )
-    }
-}
-
-@Composable
-private fun PermissionDeniedState(onGrant: () -> Unit) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = stringResource(R.string.apps_permission_denied),
-                style = MiuixTheme.textStyles.title3,
-                color = MiuixTheme.colorScheme.onSurface
-            )
-            Text(
-                text = stringResource(R.string.apps_permission_denied_summary),
-                style = MiuixTheme.textStyles.body2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 6.dp, start = 32.dp, end = 32.dp)
-            )
-            TextButton(
-                text = stringResource(R.string.apps_grant_permission),
-                onClick = onGrant,
-                modifier = Modifier.padding(top = 16.dp)
-            )
-        }
-    }
-}
-
-private fun openAppDetailsSettings(context: Context) {
-    runCatching {
-        context.startActivity(
-            Intent(
-                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                Uri.fromParts("package", context.packageName, null)
-            )
         )
     }
 }

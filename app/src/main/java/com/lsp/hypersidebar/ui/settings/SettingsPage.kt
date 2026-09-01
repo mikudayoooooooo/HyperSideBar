@@ -6,9 +6,12 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
 import android.widget.Toast
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -21,11 +24,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.theme.ThemeMode
 import com.lsp.hypersidebar.theme.ThemeModes
@@ -35,15 +43,10 @@ import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.basic.Check
-import top.yukonga.miuix.kmp.icon.extended.Close
-import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -225,8 +228,8 @@ internal fun SettingsPage(
         }
     )
 
-    // 一键重置确认 sheet（反馈轮：先确认后执行）
-    ResetConfirmSheet(
+    // 一键重置确认 dialog（反馈轮二：弃 sheet 用 dialog）
+    ResetConfirmDialog(
         show = showResetConfirm,
         onConfirm = {
             repo.restoreAllDefaults()
@@ -242,42 +245,58 @@ internal fun SettingsPage(
 }
 
 @Composable
-private fun ResetConfirmSheet(
+private fun ResetConfirmDialog(
     show: Boolean,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    OverlayBottomSheet(
-        show = show,
-        title = stringResource(R.string.restore_defaults),
-        startAction = {
-            IconButton(onClick = onDismiss) {
-                Icon(
-                    imageVector = MiuixIcons.Close,
-                    contentDescription = stringResource(R.string.layout_sheet_cancel),
-                    tint = MiuixTheme.colorScheme.onSurface
+    if (!show) return
+    Dialog(onDismissRequest = onDismiss) {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = stringResource(R.string.restore_defaults),
+                    style = MiuixTheme.textStyles.title3,
+                    fontWeight = FontWeight.Bold
                 )
-            }
-        },
-        endAction = {
-            IconButton(onClick = onConfirm) {
-                Icon(
-                    imageVector = MiuixIcons.Basic.Check,
-                    contentDescription = stringResource(R.string.reset_confirm),
-                    tint = MiuixTheme.colorScheme.primary
+                Text(
+                    text = stringResource(R.string.restore_defaults_confirm),
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 10.dp)
                 )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 20.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 取消=灰文字按钮；确认=主题色（miuix 无 TextButton 颜色工厂，一灰一主手写）
+                    Text(
+                        text = stringResource(R.string.layout_sheet_cancel),
+                        style = MiuixTheme.textStyles.body1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .clickable { onDismiss() }
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                    TextButton(
+                        text = stringResource(R.string.reset_confirm),
+                        onClick = onConfirm,
+                        modifier = Modifier.padding(start = 12.dp)
+                    )
+                }
             }
-        },
-        onDismissRequest = onDismiss,
-        content = {
-            Text(
-                text = stringResource(R.string.restore_defaults_confirm),
-                style = MiuixTheme.textStyles.body2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-            )
         }
-    )
+    }
 }
 
 @Composable

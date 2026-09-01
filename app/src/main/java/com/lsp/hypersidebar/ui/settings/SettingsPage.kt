@@ -5,6 +5,7 @@ import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
@@ -194,6 +195,25 @@ internal fun SettingsPage(
                         }
                     )
                 }
+            }
+        }
+
+        // 一键重置（§2.5.3，PRD"默认值且可重置"）：全部布局/交互参数，不动应用与快捷方式
+        item { SmallTitle(text = stringResource(R.string.defaults_section)) }
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                BasicComponent(
+                    title = stringResource(R.string.restore_defaults),
+                    summary = stringResource(R.string.restore_defaults_summary),
+                    onClick = {
+                        repo.restoreAllDefaults()
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.restore_defaults_done),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                )
             }
         }
     }

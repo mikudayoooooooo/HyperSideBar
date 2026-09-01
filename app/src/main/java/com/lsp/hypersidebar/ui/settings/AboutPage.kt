@@ -2,7 +2,10 @@ package com.lsp.hypersidebar.ui.settings
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Intent
 import android.content.SharedPreferences
+import android.net.Uri
+import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -42,6 +45,7 @@ import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
@@ -64,6 +68,8 @@ internal fun AboutPage(
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
         }.getOrNull() ?: context.getString(R.string.unknown)
     }
+    val deviceModel = remember { Build.MODEL.ifEmpty { Build.DEVICE } }
+    val systemVersion = remember { "Android ${Build.VERSION.RELEASE}（API ${Build.VERSION.SDK_INT}）" }
     val frameworkName by produceState(
         initialValue = context.getString(R.string.unknown),
         key1 = service
@@ -172,6 +178,14 @@ internal fun AboutPage(
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
                     BasicComponent(
+                        title = stringResource(R.string.device_model),
+                        summary = deviceModel
+                    )
+                    BasicComponent(
+                        title = stringResource(R.string.system_version),
+                        summary = systemVersion
+                    )
+                    BasicComponent(
                         title = stringResource(R.string.framework_name),
                         summary = frameworkName
                     )
@@ -182,6 +196,24 @@ internal fun AboutPage(
                     BasicComponent(
                         title = stringResource(R.string.api_version),
                         summary = apiVersion
+                    )
+                }
+            }
+        }
+
+        item { SmallTitle(text = stringResource(R.string.about_links)) }
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    ArrowPreference(
+                        title = stringResource(R.string.about_author),
+                        summary = AUTHOR_HANDLE,
+                        onClick = { openExternalUrl(context, AUTHOR_URL) }
+                    )
+                    ArrowPreference(
+                        title = stringResource(R.string.about_project_url),
+                        summary = PROJECT_URL.removePrefix("https://"),
+                        onClick = { openExternalUrl(context, PROJECT_URL) }
                     )
                 }
             }
@@ -201,5 +233,18 @@ internal fun AboutPage(
                 )
             }
         }
+    }
+}
+
+// 项目地址取自仓库 origin（github.com/mikudayoooooooo/HyperSideBar）——改仓库时同步改这里
+private const val AUTHOR_HANDLE = "mikudayoooooooo"
+private const val AUTHOR_URL = "https://github.com/mikudayoooooooo"
+private const val PROJECT_URL = "https://github.com/mikudayoooooooo/HyperSideBar"
+
+private fun openExternalUrl(context: android.content.Context, url: String) {
+    runCatching {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    }.onFailure {
+        Toast.makeText(context, context.getString(R.string.open_link_failed), Toast.LENGTH_SHORT).show()
     }
 }

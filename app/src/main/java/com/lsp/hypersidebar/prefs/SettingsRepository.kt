@@ -132,7 +132,11 @@ class SettingsRepository(val prefs: SharedPreferences) {
 
     fun save(key: String, value: Any) = prefs.savePref(key, value)
 
-    fun restoreLayoutDefaults() {
+    /**
+     * 一键恢复默认（§2.5.3，PRD"默认值且可重置"）：全部布局（10）+ 交互（3）参数写回默认值。
+     * 写盘即经 LSPosed 推送同步 hook 侧，下次呼出生效（无需重启）。不动用户数据（应用/快捷方式）。
+     */
+    fun restoreAllDefaults() {
         prefs.edit().apply {
             putFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE)
             putFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS)
@@ -144,6 +148,9 @@ class SettingsRepository(val prefs: SharedPreferences) {
             putInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
             putFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS)
             putFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
+            putFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)
+            putInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
+            putFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
         }.apply()
     }
 }

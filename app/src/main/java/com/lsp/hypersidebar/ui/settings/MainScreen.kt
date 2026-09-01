@@ -41,15 +41,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.anim.AccelerateEasing
 import top.yukonga.miuix.kmp.anim.DecelerateEasing
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.NavigationBar
 import top.yukonga.miuix.kmp.basic.NavigationBarDisplayMode
 import top.yukonga.miuix.kmp.basic.NavigationBarItem
 import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -91,6 +94,11 @@ internal fun MainScreen(
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
     }
 
+    // 批量选择顶栏桥（ShortcutListPage 写 / 本处顶栏读）：HyperOS 批量模式=顶栏变形
+    val shortcutSelectionBar = remember { ShortcutSelectionBar() }
+    val inBatchSelection = activeStack.lastOrNull() == SettingsKey.ShortcutList &&
+        shortcutSelectionBar.active
+
     // 根 Tab 互切保持现网根 Tab 的淡入淡出；其余（详情推/弹）走 miuix HyperOS 横滑默认
     val rootContentKeys = remember {
         setOf(SettingsKey.TabSettings.toString(), SettingsKey.TabAbout.toString())
@@ -99,25 +107,56 @@ internal fun MainScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = currentTitle,
+                title = if (inBatchSelection) {
+                    stringResource(R.string.shortcut_selected_count, shortcutSelectionBar.count)
+                } else {
+                    currentTitle
+                },
                 navigationIcon = {
-                    AnimatedVisibility(
-                        visible = activeStack.size > 1,
-                        enter = slideInHorizontally(
-                            initialOffsetX = { -it },
-                            animationSpec = tween(300, easing = DecelerateEasing(1.0f))
-                        ) + fadeIn(animationSpec = tween(300, easing = DecelerateEasing(1.0f))),
-                        exit = slideOutHorizontally(
-                            targetOffsetX = { -it },
-                            animationSpec = tween(300, easing = AccelerateEasing(1.0f))
-                        ) + fadeOut(animationSpec = tween(300, easing = AccelerateEasing(1.0f)))
-                    ) {
-                        IconButton(onClick = { activeStack.removeLast() }) {
+                    if (inBatchSelection) {
+                        // 批量模式：返回箭头 → ✕ 退出选择（HyperOS 批量惯例）
+                        IconButton(onClick = { shortcutSelectionBar.onExit?.invoke() }) {
                             Icon(
-                                imageVector = MiuixIcons.Back,
-                                contentDescription = stringResource(R.string.back)
+                                imageVector = MiuixIcons.Close,
+                                contentDescription = stringResource(R.string.layout_sheet_cancel)
                             )
                         }
+                    } else {
+                        AnimatedVisibility(
+                            visible = activeStack.size > 1,
+                            enter = slideInHorizontally(
+                                initialOffsetX = { -it },
+                                animationSpec = tween(300, easing = DecelerateEasing(1.0f))
+                            ) + fadeIn(animationSpec = tween(300, easing = DecelerateEasing(1.0f))),
+                            exit = slideOutHorizontally(
+                                targetOffsetX = { -it },
+                                animationSpec = tween(300, easing = AccelerateEasing(1.0f))
+                            ) + fadeOut(animationSpec = tween(300, easing = AccelerateEasing(1.0f)))
+                        ) {
+                            IconButton(onClick = { activeStack.removeLast() }) {
+                                Icon(
+                                    imageVector = MiuixIcons.Back,
+                                    contentDescription = stringResource(R.string.back)
+                                )
+                            }
+                        }
+                    }
+                },
+                actions = {
+                    if (inBatchSelection) {
+                        // 标签恒"全选"，行为=全选/取消全选切换（MIUI 批量惯例）
+                        TextButton(
+                            text = stringResource(R.string.shortcut_select_all),
+                            onClick = { shortcutSelectionBar.onToggleAll?.invoke() }
+                        )
+                        TextButton(
+                            text = stringResource(R.string.shortcut_delete),
+                            onClick = { shortcutSelectionBar.onRequestDelete?.invoke() },
+                            enabled = shortcutSelectionBar.count > 0,
+                            colors = ButtonDefaults.textButtonColors(
+                                color = MiuixTheme.colorScheme.error
+                            )
+                        )
                     }
                 }
             )
@@ -190,6 +229,7 @@ internal fun MainScreen(
                         DetailPageContainer {
                             ShortcutListPage(
                                 prefs = prefs,
+                                bar = shortcutSelectionBar,
                                 onEdit = { shortcut ->
                                     settingsStack.add(SettingsKey.ShortcutEdit(shortcut, isNew = false))
                                 },

@@ -10,16 +10,16 @@
     <string name="module_section">模块</string>
     <string name="module_enabled">启用超级侧边栏</string>
     <string name="module_enabled_summary">替换原生侧边栏为扇形菜单</string>
-    <string name="module_active">已激活</string>
-    <string name="module_active_summary">模块作用域已正确配置</string>
+    <string name="status_running">模块运行中</string>
+    <string name="status_normal_summary">手势与执行通道工作正常</string>
+    <string name="status_abnormal">模块通道异常</string>
     <string name="module_inactive">未激活</string>
     <string name="deactivation_hint">请在 LSPosed Manager 中启用模块并勾选作用域</string>
     <string name="checking_module">正在检测</string>
     <string name="checking_module_summary">正在连接 LSPosed 服务</string>
     <string name="lsposed_not_found">未找到 LSPosed Manager</string>
-    <string name="probe_end_home">边缘手势（系统桌面）</string>
-    <string name="probe_end_ui">执行通道（安全中心）</string>
-    <string name="probe_state_pending">检测中…</string>
+    <string name="probe_end_home">边缘手势</string>
+    <string name="probe_end_ui">执行通道</string>
     <string name="probe_state_ok">正常</string>
     <string name="probe_state_circuit">已熔断 · 点按重试，或重启手机</string>
     <string name="probe_state_degraded">已降级 · 重启手机或重启模块后恢复</string>
@@ -42,6 +42,9 @@
     <string name="system_apps">系统应用</string>
     <string name="loading_apps">正在加载应用</string>
     <string name="apps_load_failed">应用列表加载失败</string>
+    <string name="apps_permission_denied">无法读取应用列表</string>
+    <string name="apps_permission_denied_summary">请在系统设置中授予「获取应用列表」权限，返回后自动刷新</string>
+    <string name="apps_grant_permission">去授权</string>
     <string name="no_apps_found">未找到匹配的应用</string>
 
     <string name="appearance">外观</string>
@@ -54,7 +57,9 @@
     <string name="defaults_section">重置</string>
     <string name="restore_defaults">恢复默认值</string>
     <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，立即生效</string>
+    <string name="restore_defaults_confirm">将全部布局与交互参数恢复为默认值，应用选择与快捷方式不受影响。</string>
     <string name="restore_defaults_done">已恢复默认布局与参数</string>
+    <string name="reset_confirm">确认</string>
     <string name="portrait_layout">竖屏布局</string>
     <string name="landscape_layout">横屏布局</string>
     <string name="layout_sheet_cancel">取消</string>

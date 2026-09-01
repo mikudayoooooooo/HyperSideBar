@@ -6,16 +6,12 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
 import android.widget.Toast
-import androidx.compose.foundation.background
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -26,13 +22,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
-import com.lsp.hypersidebar.theme.LocalSemanticColors
 import com.lsp.hypersidebar.theme.ThemeMode
 import com.lsp.hypersidebar.theme.ThemeModes
 import com.lsp.hypersidebar.util.ShortcutStore
@@ -117,30 +111,25 @@ internal fun SettingsPage(
     SettingsList(modifier = modifier) {
         item { SmallTitle(text = stringResource(R.string.module_section)) }
         item {
+            // 大色块状态卡（§2.5 反馈轮）：绿=正常 / 黄=通道异常（明细拼进卡内，熔断可点重试）
+            // / 红=未激活；探针两端行不常显，异常才有存在感
+            ModuleStatusComponent(
+                status = status,
+                probe = probe.state,
+                onRetry = { manualRetry() }
+            )
+        }
+        item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    ModuleStatusComponent(status = status)
-                    // 两端探针行：据 resultCode 实时渲染（§2.5.4）；熔断行可点=手动重试
-                    ProbeEndComponent(
-                        title = stringResource(R.string.probe_end_home),
-                        code = probe.state.launcher,
-                        onRetry = { manualRetry() }
-                    )
-                    ProbeEndComponent(
-                        title = stringResource(R.string.probe_end_ui),
-                        code = probe.state.executor,
-                        onRetry = { manualRetry() }
-                    )
-                    SwitchPreference(
-                        title = stringResource(R.string.module_enabled),
-                        summary = stringResource(R.string.module_enabled_summary),
-                        checked = enabled,
-                        onCheckedChange = {
-                            enabled = it
-                            prefs.savePref(PrefKeys.ENABLED, it)
-                        }
-                    )
-                }
+                SwitchPreference(
+                    title = stringResource(R.string.module_enabled),
+                    summary = stringResource(R.string.module_enabled_summary),
+                    checked = enabled,
+                    onCheckedChange = {
+                        enabled = it
+                        prefs.savePref(PrefKeys.ENABLED, it)
+                    }
+                )
             }
         }
 
@@ -245,36 +234,6 @@ private fun SettingsList(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         content = content
-    )
-}
-
-@Composable
-private fun ProbeEndComponent(title: String, code: Int?, onRetry: () -> Unit) {
-    val semantic = LocalSemanticColors.current
-    val (accent, text) = when (code) {
-        PrefKeys.PROBE_CODE_OK -> semantic.success to stringResource(R.string.probe_state_ok)
-        PrefKeys.PROBE_CODE_CIRCUIT ->
-            MiuixTheme.colorScheme.error to stringResource(R.string.probe_state_circuit)
-        PrefKeys.PROBE_CODE_DEGRADED ->
-            semantic.warning to stringResource(R.string.probe_state_degraded)
-        PrefKeys.PROBE_CODE_DEAD ->
-            MiuixTheme.colorScheme.error to stringResource(R.string.probe_state_dead)
-        else -> MiuixTheme.colorScheme.onSurfaceVariantSummary to
-                stringResource(R.string.probe_state_pending)
-    }
-    BasicComponent(
-        title = title,
-        summary = text,
-        startAction = {
-            Box(
-                modifier = Modifier
-                    .padding(end = 8.dp)
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(accent)
-            )
-        },
-        onClick = if (code == PrefKeys.PROBE_CODE_CIRCUIT) onRetry else null
     )
 }
 

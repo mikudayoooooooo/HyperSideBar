@@ -1,16 +1,17 @@
 package com.lsp.hypersidebar.ui.settings
 
 import com.lsp.hypersidebar.prefs.LayoutDefaults
-import com.lsp.hypersidebar.prefs.PrefKeys
-import android.content.SharedPreferences
+import com.lsp.hypersidebar.prefs.SettingsRepository
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -91,27 +92,15 @@ private val previewQuickApps = listOf(
 )
 
 @Composable
-internal fun FanPreviewCard(
-    prefs: SharedPreferences,
-    prefsRevision: Int,
+internal fun LayoutPreviewCard(
+    repo: SettingsRepository,
+    onPortraitClick: () -> Unit,
+    onLandscapeClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val config = remember(prefs, prefsRevision) {
-        FanConfig(
-            iconSizeDp = prefs.getFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE),
-            quickIconSizeDp = LayoutDefaults.QUICK_ICON_SIZE,
-            innerRadiusDp = prefs.getFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS),
-            outerRadiusDp = prefs.getFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX),
-            deadZoneDp = prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE),
-            maxAppsOuter = prefs.getInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER),
-            maxAppsInner = prefs.getInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER),
-            landscapeIconSizeDp = prefs.getFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE),
-            landscapeMaxAppsOuter = prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER),
-            landscapeMaxAppsInner = prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER),
-            landscapeInnerRadiusDp = prefs.getFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS),
-            landscapeOuterRadiusDp = prefs.getFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
-        )
-    }
+    // 草稿优先读：BottomSheet 编辑期滑条变化实时反映到本卡（revision 通道驱动重组）
+    val rev = repo.revision
+    val config = remember(rev) { buildPreviewConfig(repo) }
 
     val portraitGeometry = remember(config) {
         previewGeometry(
@@ -142,14 +131,58 @@ internal fun FanPreviewCard(
             PreviewPane(
                 title = stringResource(R.string.portrait_preview),
                 geometry = portraitGeometry,
+                onClick = onPortraitClick,
                 modifier = Modifier.weight(1f)
             )
             PreviewPane(
                 title = stringResource(R.string.landscape_preview),
                 geometry = landscapeGeometry,
+                onClick = onLandscapeClick,
                 modifier = Modifier.weight(1f)
             )
         }
+    }
+}
+
+internal fun buildPreviewConfig(repo: SettingsRepository): FanConfig = FanConfig(
+    iconSizeDp = repo.iconSize(),
+    quickIconSizeDp = LayoutDefaults.QUICK_ICON_SIZE,
+    innerRadiusDp = repo.innerRadius(),
+    outerRadiusDp = repo.outerRadiusMax(),
+    deadZoneDp = repo.deadZone(),
+    maxAppsOuter = repo.maxAppsOuter(),
+    maxAppsInner = repo.maxAppsInner(),
+    landscapeIconSizeDp = repo.landscapeIconSize(),
+    landscapeMaxAppsOuter = repo.landscapeMaxAppsOuter(),
+    landscapeMaxAppsInner = repo.landscapeMaxAppsInner(),
+    landscapeInnerRadiusDp = repo.landscapeInnerRadius(),
+    landscapeOuterRadiusDp = repo.landscapeOuterRadius()
+)
+
+/** 单方向静态扇形预览（BottomSheet 内实时预览复用；geometry 与实机 computeFanGeometry 同源）。 */
+@Composable
+internal fun FanStaticPreview(
+    config: FanConfig,
+    isLandscape: Boolean,
+    modifier: Modifier = Modifier,
+    includeQuickBar: Boolean = true
+) {
+    val geometry = remember(config, isLandscape) {
+        previewGeometry(
+            config = config,
+            width = if (isLandscape) LANDSCAPE_WIDTH else PORTRAIT_WIDTH,
+            height = if (isLandscape) LANDSCAPE_HEIGHT else PORTRAIT_HEIGHT,
+            isLandscape = isLandscape,
+            quickApps = if (includeQuickBar) previewQuickApps else emptyList()
+        )
+    }
+    // 固定宽高比预览框（竖屏 3:4 / 横屏 4:3）：滑条拖动时框形稳定不抖，
+    // 扇形按内容适配缩放居中；sheet 内预览不带快捷栏（不受布局滑条影响）
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        StaticFanPreview(
+            geometry = geometry,
+            modifier = Modifier.aspectRatio(if (isLandscape) 4f / 3f else 3f / 4f)
+        )
     }
 }
 
@@ -157,11 +190,14 @@ internal fun FanPreviewCard(
 private fun PreviewPane(
     title: String,
     geometry: FanGeometry,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier
             .fillMaxHeight()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -184,7 +220,8 @@ private fun previewGeometry(
     config: FanConfig,
     width: Float,
     height: Float,
-    isLandscape: Boolean
+    isLandscape: Boolean,
+    quickApps: List<FanAppInfo> = previewQuickApps
 ): FanGeometry {
     val appLimit = if (isLandscape) {
         config.landscapeMaxAppsOuter + config.landscapeMaxAppsInner
@@ -195,7 +232,7 @@ private fun previewGeometry(
         anchor = Offset(0f, height / 2f),
         screenSize = IntSize(width.toInt(), height.toInt()),
         apps = previewApps.take(appLimit.coerceIn(1, previewApps.size)),
-        quickApps = previewQuickApps,
+        quickApps = quickApps,
         config = config,
         density = PREVIEW_DENSITY,
         isLandscape = isLandscape
@@ -214,6 +251,7 @@ private fun StaticFanPreview(
 
     BoxWithConstraints(
         modifier = modifier
+            .clip(shape)
             .background(MiuixTheme.colorScheme.surfaceContainerHigh, shape)
             .border(1.dp, colors.outline.copy(alpha = 0.35f), shape)
     ) {
@@ -283,13 +321,12 @@ private fun StaticFanPreview(
             )
         }
 
-        geometry.items.forEachIndexed { index, item ->
+        geometry.items.forEach { item ->
             // 直接使用实机 layoutFanItems 的真实坐标（消除预览自算半径的漂移）
             val center = map(Offset(item.centerX, item.centerY))
             val iconSizePx = geometry.iconSize * PREVIEW_DENSITY * scale
             val iconSizeDp = with(density) { iconSizePx.toDp() }
             PreviewIcon(
-                index = index,
                 size = iconSizeDp.value,
                 modifier = Modifier.offset {
                     IntOffset(
@@ -300,12 +337,14 @@ private fun StaticFanPreview(
             )
         }
 
-        PreviewQuickBar(
-            geometry = geometry,
-            scale = scale,
-            offsetX = offsetX,
-            offsetY = offsetY
-        )
+        if (geometry.quickApps.isNotEmpty()) {
+            PreviewQuickBar(
+                geometry = geometry,
+                scale = scale,
+                offsetX = offsetX,
+                offsetY = offsetY
+            )
+        }
     }
 }
 
@@ -358,34 +397,23 @@ private fun previewRingRadius(geometry: FanGeometry, isOuter: Boolean): Float {
 
 @Composable
 private fun PreviewIcon(
-    index: Int,
     size: Float,
     modifier: Modifier = Modifier
 ) {
+    // 占位图标：统一配色的圆角方块（不描摹真实应用图标，仅示意排布）
     val colors = currentFanThemeColors()
-
     Box(
         modifier = modifier
             .size(size.dp)
             .background(
-                color = placeholderColor(colors, index),
+                color = placeholderColor(colors),
                 shape = RoundedCornerShape((size * 0.24f).dp)
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        Box(
-            modifier = Modifier
-                .size((size * 0.52f).dp)
-                .clip(CircleShape)
-                .background(colors.surfaceContainerHigh.copy(alpha = 0.72f))
-        )
-    }
+            )
+    )
 }
 
-private fun placeholderColor(colors: FanThemeColors, index: Int): Color {
-    val base = if (index % 2 == 0) colors.primaryContainer else colors.surfaceContainerHigh
-    return base.copy(alpha = 0.5f + (index % 3) * 0.16f)
-}
+private fun placeholderColor(colors: FanThemeColors): Color =
+    colors.primaryContainer.copy(alpha = 0.55f)
 
 @Composable
 private fun PreviewQuickBar(
@@ -411,7 +439,7 @@ private fun PreviewQuickBar(
             .border(1.dp, colors.outline.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
             .padding(horizontal = 5.dp, vertical = 4.dp)
     ) {
-        geometry.quickApps.take(4).forEachIndexed { index, _ ->
+        geometry.quickApps.take(4).forEach { _ ->
             Box(
                 modifier = Modifier
                     .widthIn(min = (iconSizeDp.value + 4f).dp)
@@ -422,7 +450,7 @@ private fun PreviewQuickBar(
                     modifier = Modifier
                         .size(iconSizeDp.value.dp)
                         .clip(CircleShape)
-                        .background(placeholderColor(colors, index + geometry.items.size))
+                        .background(placeholderColor(colors))
                 )
             }
         }

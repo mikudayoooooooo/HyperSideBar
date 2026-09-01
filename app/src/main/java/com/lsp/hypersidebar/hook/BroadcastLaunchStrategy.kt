@@ -85,9 +85,10 @@ class BroadcastLaunchStrategy(
     private fun handleRelayDead(context: Context, what: String) {
         onRelayResult?.invoke(false, what)
         runCatching {
+            // PRD §9.4 字面措辞
             Toast.makeText(
                 context,
-                "扇形执行端不可用：请检查系统侧边栏开关",
+                "服务不可用，请检查侧边栏开关",
                 Toast.LENGTH_LONG
             ).show()
         }

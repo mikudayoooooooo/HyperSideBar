@@ -194,16 +194,22 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 }
 
                 if (!sSwipeConfirmed) {
-                    // PRD §9.5：内滑距离 ≥40px 且与内滑轴夹角 ≤60°（atan2 点积/叉积形式）
+                    // PRD §9.5：内滑距离 ≥40px 且与内滑轴夹角 ≤60°（atan2 点积/叉积形式）。
+                    // 距离项用锥内位移幅值而非对角线投影——投影对纯水平/竖直内滑只有
+                    // 0.707 倍（实际要滑 57px 才确认），是实测"横屏响应不如竖屏"的主因
+                    // （竖屏轴=水平方向，40px 即确认，无此衰减）
                     val angle = Math.toDegrees(
                         Math.atan2(perp.toDouble(), inward.toDouble())
                     ).toFloat()
-                    if (inward >= GestureThresholds.SWIPE_CONFIRM_PX && angle <= GestureThresholds.MAX_SWIPE_ANGLE_DEG) {
+                    val travel = hypot(dx, dy)
+                    if (travel >= GestureThresholds.SWIPE_CONFIRM_PX && inward > 0f &&
+                        angle <= GestureThresholds.MAX_SWIPE_ANGLE_DEG
+                    ) {
                         sSwipeConfirmed = true
                         sAnchorX = ev.rawX
                         sAnchorY = ev.rawY
                         sAnchorT = ev.eventTime
-                        Log.i(TAG, "s#$sGestureSeq swipe confirmed: inward=${inward.toInt()}px (>= ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()}) angle=${angle.toInt()}")
+                        Log.i(TAG, "s#$sGestureSeq swipe confirmed: travel=${travel.toInt()}px (>= ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()}) angle=${angle.toInt()}")
                     }
                 }
 
@@ -287,6 +293,14 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 "熔断：$reason",
                 "扇形连续失败，已熔断保护：恢复原生小白条，重启手机或在设置页重试"
             )
+        }
+        // 状态探针注入（§2.5.4）：设置页 ping → FreeformRelayHook 接收器应答时读取本进程双态
+        HookProbeState.uiProvider = {
+            when {
+                breaker.open -> PrefKeys.PROBE_CODE_CIRCUIT
+                passthroughDegraded -> PrefKeys.PROBE_CODE_DEGRADED
+                else -> PrefKeys.PROBE_CODE_OK
+            }
         }
         // 各 hook 独立容错：任一失败不中断其余（实测 hookDockLayoutVisibility 的
         // ClassNotFoundException 曾中断 init，导致排在其后的 hook 从未安装）

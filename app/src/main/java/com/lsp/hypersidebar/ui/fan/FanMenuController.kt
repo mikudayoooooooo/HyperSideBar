@@ -108,10 +108,20 @@ class FanMenuController(
             }
 
             val customApps = readStringSetPref(PrefKeys.CUSTOM_APPS, emptySet())
+            // 已选固定应用的用户排序（§2.4 拖动排序）：CUSTOM_APPS_ORDER 为权威，
+            // 缺失项（旧数据/未排序）排在有序项之后
+            val customOrder = readCustomAppsOrder()
+            val orderedCustom = if (customOrder.isEmpty()) {
+                customApps
+            } else {
+                customApps.sortedBy { pkg ->
+                    customOrder.indexOf(pkg).let { if (it >= 0) it else Int.MAX_VALUE }
+                }
+            }
 
             val allSystemApps = DataLoader.loadApps(context)
             val merged = LinkedHashSet<String>()
-            merged.addAll(customApps)
+            merged.addAll(orderedCustom)
             merged.addAll(allSystemApps)
             // 圈内末位常驻"全部应用"入口（PRD §7.3.2）：合并列表截到（总数-1）留出末位，
             // 哨兵项计入 7+4 参与正常环布局；合并列表为空时扇形单独承载哨兵（不再中止呼出）
@@ -283,5 +293,16 @@ class FanMenuController(
 
     private fun readStringSetPref(key: String, default: Set<String>): Set<String> {
         return try { prefs.getStringSet(key, default) ?: default } catch (_: Exception) { default }
+    }
+
+    /** 已选固定应用顺序（JSON 数组字符串，设置页拖动排序写入）。 */
+    private fun readCustomAppsOrder(): List<String> {
+        val json = try {
+            prefs.getString(PrefKeys.CUSTOM_APPS_ORDER, null)
+        } catch (_: Exception) { null } ?: return emptyList()
+        return try {
+            val arr = org.json.JSONArray(json)
+            (0 until arr.length()).map { arr.optString(it) }
+        } catch (_: Exception) { emptyList() }
     }
 }

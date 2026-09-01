@@ -1,54 +1,64 @@
 package com.lsp.hypersidebar.ui.settings
 
 import com.lsp.hypersidebar.prefs.savePref
-import com.lsp.hypersidebar.ui.fan.effectiveIconSizeDp
+import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
-import androidx.compose.foundation.clickable
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.theme.ThemeMode
 import com.lsp.hypersidebar.theme.ThemeModes
 import com.lsp.hypersidebar.util.ShortcutStore
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
+import top.yukonga.miuix.kmp.window.WindowDialog
 
 @Composable
 internal fun SettingsPage(
     prefs: SharedPreferences,
+    repo: SettingsRepository,
     prefsRevision: Int,
     status: ModuleStatus,
     currentThemeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit,
     onNavigateToAppSelection: () -> Unit,
     onNavigateToShortcutSelection: () -> Unit,
-    onNavigateToLayout: () -> Unit,
-    onNavigateToInteraction: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var enabled by remember(prefs, prefsRevision) {
@@ -57,8 +67,9 @@ internal fun SettingsPage(
     val selectedApps = remember(prefs, prefsRevision) {
         prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty().size
     }
-    val shortcutCount = remember(prefs, prefsRevision) {
-        ShortcutStore.loadUserShortcuts(prefs).size
+    val shortcutStats = remember(prefs, prefsRevision) {
+        val all = ShortcutStore.loadUserShortcuts(prefs)
+        all.size to all.count { it.enabled }
     }
     val themeOptions = listOf(
         stringResource(R.string.theme_follow_system),
@@ -69,23 +80,76 @@ internal fun SettingsPage(
     val selectedThemeIndex = ThemeModes.BASE_MODES.indexOf(baseMode).coerceAtLeast(0)
     val useSystemColors = ThemeModes.usesSystemColors(currentThemeMode)
 
+    // hook 状态探针（§2.5.4）：设置页组合进入时双路 ping（切 Tab 返回会重新组合=顺带刷新）。
+    // 旧通路（hook→app 经 remotePrefs 回写熔断/降级）在 LSPosed 下是死路：hook 进程 prefs 只读
+    val context = LocalContext.current
+    val probe = remember { ModuleProbe(context) }
+    val probeScope = rememberCoroutineScope()
+    LaunchedEffect(probe) { probe.probe() }
+
+    fun manualRetry() {
+        // 手动重试：写时间戳，hook 侧比较 resetAt > 本端熔断时刻即解除
+        //（launcher=下次边缘呼出，:ui=2s 看门狗内）；3s 后复测刷新状态行
+        prefs.edit()
+            .putLong(PrefKeys.CIRCUIT_RESET_AT, System.currentTimeMillis())
+            .commit()
+        probeScope.launch {
+            delay(3000)
+            probe.probe()
+        }
+    }
+
+    // 布局编辑 BottomSheet：入口 = 布局预览卡双缩略点击（§2.2）
+    var sheetOrientation by remember { mutableStateOf<LayoutOrientation?>(null) }
+    var sheetVisible by remember { mutableStateOf(false) }
+
+    // 一键重置确认 sheet（反馈轮：先确认后执行）
+    var showResetConfirm by remember { mutableStateOf(false) }
+
+    fun openLayoutSheet(orientation: LayoutOrientation) {
+        repo.discardDraft() // 兜底清残留（上次关闭未走 onDismissFinished 的极端路径）
+        sheetOrientation = orientation
+        sheetVisible = true
+    }
+
+    // 草稿守卫：sheet 关闭或页面离开组合（含切 Tab 丢 sheet 状态）时兜底丢弃，
+    // 防止残留草稿持续泄漏进预览卡的草稿优先读（"没保存却生效"的观感来源）
+    DisposableEffect(sheetOrientation) {
+        onDispose { repo.discardDraft() }
+    }
+
     SettingsList(modifier = modifier) {
         item { SmallTitle(text = stringResource(R.string.module_section)) }
         item {
+            // 大色块状态卡（§2.5 反馈轮）：绿=正常 / 黄=通道异常（明细拼进卡内，熔断可点重试）
+            // / 红=未激活；探针两端行不常显，异常才有存在感
+            ModuleStatusComponent(
+                status = status,
+                probe = probe.state,
+                onRetry = { manualRetry() }
+            )
+        }
+        item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    ModuleStatusComponent(status = status)
-                    SwitchPreference(
-                        title = stringResource(R.string.module_enabled),
-                        summary = stringResource(R.string.module_enabled_summary),
-                        checked = enabled,
-                        onCheckedChange = {
-                            enabled = it
-                            prefs.savePref(PrefKeys.ENABLED, it)
-                        }
-                    )
-                }
+                SwitchPreference(
+                    title = stringResource(R.string.module_enabled),
+                    summary = stringResource(R.string.module_enabled_summary),
+                    checked = enabled,
+                    onCheckedChange = {
+                        enabled = it
+                        prefs.savePref(PrefKeys.ENABLED, it)
+                    }
+                )
             }
+        }
+
+        item { SmallTitle(text = stringResource(R.string.effect_preview)) }
+        item {
+            LayoutPreviewCard(
+                repo = repo,
+                onPortraitClick = { openLayoutSheet(LayoutOrientation.PORTRAIT) },
+                onLandscapeClick = { openLayoutSheet(LayoutOrientation.LANDSCAPE) }
+            )
         }
 
         item { SmallTitle(text = stringResource(R.string.apps_section)) }
@@ -99,7 +163,9 @@ internal fun SettingsPage(
                     )
                     ArrowPreference(
                         title = stringResource(R.string.select_shortcut_apps),
-                        summary = stringResource(R.string.selected_apps_summary, shortcutCount),
+                        summary = stringResource(
+                            R.string.shortcut_entry_summary, shortcutStats.first, shortcutStats.second
+                        ),
                         onClick = onNavigateToShortcutSelection
                     )
                 }
@@ -127,260 +193,84 @@ internal fun SettingsPage(
                             onThemeModeChange(ThemeModes.compose(baseMode, enabled))
                         }
                     )
-                    ArrowPreference(
-                        title = stringResource(R.string.layout_settings),
-                        summary = stringResource(R.string.layout_settings_summary),
-                        onClick = onNavigateToLayout
-                    )
                 }
             }
         }
 
-        item { SmallTitle(text = stringResource(R.string.interaction)) }
+        // 一键重置（§2.5.3，PRD"默认值且可重置"）：全部布局/交互参数，不动应用与快捷方式；
+        // 先确认后执行（反馈轮拍板），确认 sheet 与布局 sheet 同款图标按钮
+        item { SmallTitle(text = stringResource(R.string.defaults_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    ArrowPreference(
-                        title = stringResource(R.string.interaction_settings),
-                        summary = stringResource(R.string.interaction_settings_summary),
-                        onClick = onNavigateToInteraction
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun LayoutSettingsPage(
-    prefs: SharedPreferences,
-    prefsRevision: Int,
-    modifier: Modifier = Modifier
-) {
-    var iconSize by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE))
-    }
-    var innerRadius by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS))
-    }
-    var outerRadius by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX))
-    }
-    var outerCount by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER).toFloat())
-    }
-    var innerCount by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER).toFloat())
-    }
-    var landscapeIconSize by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE))
-    }
-    var landscapeOuterCount by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER).toFloat())
-    }
-    var landscapeInnerCount by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER).toFloat())
-    }
-    var landscapeInnerRadius by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS))
-    }
-    var landscapeOuterRadius by remember(prefs, prefsRevision) {
-        mutableFloatStateOf(prefs.getFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS))
-    }
-
-    // 行为规则 1：设置页显示弦长收缩后的实际生效图标尺寸，超限时提示
-    val density = LocalDensity.current.density
-    val effectiveIcon = effectiveIconSizeDp(
-        outerCount.toInt(), innerCount.toInt(), 150f,
-        outerRadius, innerRadius, iconSize, density
-    )
-    val effectiveLandscapeIcon = effectiveIconSizeDp(
-        landscapeOuterCount.toInt(), landscapeInnerCount.toInt(), 75f,
-        landscapeOuterRadius, landscapeInnerRadius, landscapeIconSize, density
-    )
-
-    SettingsList(modifier = modifier) {
-        item { SmallTitle(text = stringResource(R.string.portrait_layout)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    SettingsSliderItem(
-                        title = stringResource(R.string.icon_size),
-                        summary = if (effectiveIcon < iconSize) {
-                            stringResource(R.string.icon_size_limited, iconSize.toInt(), effectiveIcon.toInt())
-                        } else {
-                            stringResource(R.string.icon_size_effective, iconSize.toInt(), effectiveIcon.toInt())
-                        },
-                        value = iconSize,
-                        valueRange = 32f..80f,
-                        onValueChange = { iconSize = it },
-                        onValueChangeFinished = { prefs.savePref(PrefKeys.ICON_SIZE, iconSize) }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.inner_radius),
-                        summary = stringResource(R.string.inner_radius_summary, innerRadius.toInt()),
-                        value = innerRadius,
-                        valueRange = 80f..160f,
-                        steps = 7,
-                        onValueChange = { innerRadius = it },
-                        onValueChangeFinished = { prefs.savePref(PrefKeys.INNER_RADIUS, innerRadius) }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.outer_radius_max),
-                        summary = stringResource(R.string.outer_radius_summary, outerRadius.toInt()),
-                        value = outerRadius,
-                        valueRange = 110f..220f,
-                        steps = 10,
-                        onValueChange = { outerRadius = it },
-                        onValueChangeFinished = { prefs.savePref(PrefKeys.OUTER_RADIUS_MAX, outerRadius) }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.outer_apps_count),
-                        summary = stringResource(R.string.outer_apps_summary, outerCount.toInt()),
-                        value = outerCount,
-                        valueRange = 4f..12f,
-                        steps = 7,
-                        onValueChange = { outerCount = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.MAX_APPS_OUTER, outerCount.toInt())
-                        }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.inner_apps_count),
-                        summary = stringResource(R.string.inner_apps_summary, innerCount.toInt()),
-                        value = innerCount,
-                        valueRange = 2f..8f,
-                        steps = 5,
-                        onValueChange = { innerCount = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.MAX_APPS_INNER, innerCount.toInt())
-                        }
-                    )
-                }
-            }
-        }
-
-        item { SmallTitle(text = stringResource(R.string.landscape_layout)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    SettingsSliderItem(
-                        title = stringResource(R.string.landscape_icon_size),
-                        summary = if (effectiveLandscapeIcon < landscapeIconSize) {
-                            stringResource(R.string.landscape_icon_size_limited, landscapeIconSize.toInt(), effectiveLandscapeIcon.toInt())
-                        } else {
-                            stringResource(R.string.landscape_icon_size_effective, landscapeIconSize.toInt(), effectiveLandscapeIcon.toInt())
-                        },
-                        value = landscapeIconSize,
-                        valueRange = 32f..80f,
-                        onValueChange = { landscapeIconSize = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.LANDSCAPE_ICON_SIZE, landscapeIconSize)
-                        }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.landscape_outer_apps_count),
-                        summary = stringResource(R.string.landscape_outer_apps_summary, landscapeOuterCount.toInt()),
-                        value = landscapeOuterCount,
-                        valueRange = 3f..8f,
-                        steps = 4,
-                        onValueChange = { landscapeOuterCount = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, landscapeOuterCount.toInt())
-                        }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.landscape_inner_apps_count),
-                        summary = stringResource(R.string.landscape_inner_apps_summary, landscapeInnerCount.toInt()),
-                        value = landscapeInnerCount,
-                        valueRange = 0f..6f,
-                        steps = 5,
-                        onValueChange = { landscapeInnerCount = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.LANDSCAPE_MAX_APPS_INNER, landscapeInnerCount.toInt())
-                        }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.landscape_inner_radius),
-                        summary = stringResource(R.string.landscape_inner_radius_summary, landscapeInnerRadius.toInt()),
-                        value = landscapeInnerRadius,
-                        valueRange = 80f..160f,
-                        steps = 7,
-                        onValueChange = { landscapeInnerRadius = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.LANDSCAPE_INNER_RADIUS, landscapeInnerRadius)
-                        }
-                    )
-                    SettingsSliderItem(
-                        title = stringResource(R.string.landscape_outer_radius),
-                        summary = stringResource(R.string.landscape_outer_radius_summary, landscapeOuterRadius.toInt()),
-                        value = landscapeOuterRadius,
-                        valueRange = 110f..220f,
-                        steps = 10,
-                        onValueChange = { landscapeOuterRadius = it },
-                        onValueChangeFinished = {
-                            prefs.savePref(PrefKeys.LANDSCAPE_OUTER_RADIUS, landscapeOuterRadius)
-                        }
-                    )
-                }
-            }
-        }
-
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = stringResource(R.string.restore_defaults),
-                    color = MiuixTheme.colorScheme.error,
-                    style = MiuixTheme.textStyles.body1,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = { restoreLayoutDefaults(prefs) })
-                        .padding(vertical = 12.dp),
-                    textAlign = TextAlign.Center
+                BasicComponent(
+                    title = stringResource(R.string.restore_defaults),
+                    summary = stringResource(R.string.restore_defaults_summary),
+                    onClick = { showResetConfirm = true }
                 )
             }
         }
     }
+
+    // 布局编辑 sheet 常驻组合（show 控制显隐）；
+    // 关闭走两段：onDismiss 收 show（内容随 sheet 滑下）→ onDismissFinished 清理草稿与方向
+    LayoutBottomSheet(
+        show = sheetVisible,
+        orientation = sheetOrientation ?: LayoutOrientation.PORTRAIT,
+        repo = repo,
+        onDismiss = { sheetVisible = false },
+        onDismissFinished = {
+            // 保存路径 commit 已清空草稿，此处为无操作；取消/滑掉/返回=丢弃
+            repo.discardDraft()
+            sheetOrientation = null
+        }
+    )
+
+    // 一键重置确认 dialog（反馈轮二：弃 sheet 用 dialog）
+    ResetConfirmDialog(
+        show = showResetConfirm,
+        onConfirm = {
+            repo.restoreAllDefaults()
+            showResetConfirm = false
+            Toast.makeText(
+                context,
+                context.getString(R.string.restore_defaults_done),
+                Toast.LENGTH_SHORT
+            ).show()
+        },
+        onDismiss = { showResetConfirm = false }
+    )
 }
 
 @Composable
-internal fun InteractionSettingsPage(
-    prefs: SharedPreferences,
-    prefsRevision: Int,
-    modifier: Modifier = Modifier
+private fun ResetConfirmDialog(
+    show: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
 ) {
-    var deadZone by remember(prefs, prefsRevision) { mutableFloatStateOf(prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)) }
-    var vibrate by remember(prefs, prefsRevision) { mutableStateOf(prefs.getBoolean(PrefKeys.VIBRATE, LayoutDefaults.VIBRATE)) }
-
-    SettingsList(modifier = modifier) {
-        item { SmallTitle(text = stringResource(R.string.interaction_settings)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    // activeZone（灵敏度）参数已废弃（1B 定稿）：其唯一运行时用途是距离
-                    // 门控——正是"完全没有选中反馈"的根因，选中语义由死区+内外取消区派生
-                    SettingsSliderItem(
-                        title = stringResource(R.string.dead_zone),
-                        summary = stringResource(R.string.dead_zone_description, deadZone.toInt()),
-                        value = deadZone,
-                        valueRange = 4f..40f,
-                        steps = 8,
-                        onValueChange = { deadZone = it },
-                        onValueChangeFinished = { prefs.savePref(PrefKeys.DEAD_ZONE, deadZone) }
-                    )
-                    SwitchPreference(
-                        title = stringResource(R.string.vibrate_feedback),
-                        summary = stringResource(R.string.vibrate_feedback_summary),
-                        checked = vibrate,
-                        onCheckedChange = {
-                            vibrate = it
-                            prefs.savePref(PrefKeys.VIBRATE, it)
-                        }
-                    )
-                }
+    // miuix WindowDialog（窗口级）：自带居中 title/summary 与 insideMargin；
+    // 按钮行照官方 DialogSection 模式——两等宽 TextButton 两端分布，确认染主色
+    WindowDialog(
+        show = show,
+        title = stringResource(R.string.restore_defaults),
+        summary = stringResource(R.string.restore_defaults_confirm),
+        onDismissRequest = onDismiss,
+        content = {
+            Row(horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(
+                    text = stringResource(R.string.layout_sheet_cancel),
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(20.dp))
+                TextButton(
+                    text = stringResource(R.string.reset_confirm),
+                    onClick = onConfirm,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary()
+                )
             }
         }
-    }
+    )
 }
 
 @Composable
@@ -399,18 +289,21 @@ private fun SettingsList(
 }
 
 @Composable
-private fun SettingsSliderItem(
+internal fun SettingsSliderItem(
     title: String,
-    summary: String,
+    summary: String? = null,
     value: Float,
     valueRange: ClosedFloatingPointRange<Float>,
     onValueChange: (Float) -> Unit,
     onValueChangeFinished: () -> Unit,
-    steps: Int = 0
+    steps: Int = 0,
+    sliderHorizontalPadding: Dp = 16.dp,
+    compact: Boolean = false
 ) {
     BasicComponent(
         title = title,
         summary = summary,
+        insideMargin = if (compact) SheetSliderInsideMargin else BasicComponentDefaults.InsideMargin,
         bottomAction = {
             Slider(
                 value = value,
@@ -420,24 +313,8 @@ private fun SettingsSliderItem(
                 steps = steps,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
+                    .padding(horizontal = sliderHorizontalPadding)
             )
         }
     )
-}
-
-private fun restoreLayoutDefaults(prefs: SharedPreferences) {
-    // 单 editor 批量落盘：1 次 binder 写 + 1 次监听器回调 + 1 轮重组（原逐 key 写 = 10 轮）
-    prefs.edit().apply {
-        putFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE)
-        putFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS)
-        putFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX)
-        putInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER)
-        putInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER)
-        putFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE)
-        putInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER)
-        putInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
-        putFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS)
-        putFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
-    }.apply()
 }

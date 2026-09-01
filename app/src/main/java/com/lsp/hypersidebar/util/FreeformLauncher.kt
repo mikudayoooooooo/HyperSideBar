@@ -77,7 +77,8 @@ object FreeformLauncher {
             val cls = Class.forName("android.util.MiuiMultiWindowUtils")
             val options = getActivityOptions(cls, context, packageName) ?: run {
                 Log.w(TAG, "MiuiMultiWindow: getActivityOptions returned null")
-                toastOnMain(context, "小窗启动失败：$packageName（无小窗资格）")
+                // PRD §9.4 字面措辞（展示与启动之间资格变化的兜底）
+                toastOnMain(context, "该应用不支持小窗")
                 return
             }
             val intent = Intent(Intent.ACTION_MAIN).apply {

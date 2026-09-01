@@ -1,5 +1,9 @@
 package com.lsp.hypersidebar.hook
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.util.DisplayMetrics
 import android.util.Log
@@ -12,6 +16,7 @@ import com.lsp.hypersidebar.ui.fan.FanMenuController
 import io.github.kyuubiran.ezxhelper.core.ClassLoaderProvider
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.EzXposed
+import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHook
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createBeforeHook
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -80,6 +85,7 @@ class EdgeGestureHook(
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingShow: Runnable? = null
     private var fanSeenThisGesture = false
+    private var probeRegistered = false
 
     override fun init() {
         Log.i(TAG, "=== EdgeGestureHook init, pid=${android.os.Process.myPid()} ===")
@@ -91,6 +97,12 @@ class EdgeGestureHook(
             )
             Log.e(TAG, "breaker tripped: $reason — 后续边缘触摸全透传")
         }
+        // 状态探针（§2.5.4）：provider 供接收器应答 + Application.attach 后注册接收器
+        HookProbeState.homeProvider = {
+            if (breaker.open) PrefKeys.PROBE_CODE_CIRCUIT else PrefKeys.PROBE_CODE_OK
+        }
+        runCatching { hookProbeReceiver() }
+            .onFailure { Log.e(TAG, "probe receiver hook FAILED: ${it.message}", it) }
         val okTouch = runCatching { hookOnTouchEvent() }
             .onFailure { Log.e(TAG, "A FAILED hookOnTouchEvent: ${it.message}", it) }
             .getOrDefault(false)
@@ -106,6 +118,40 @@ class EdgeGestureHook(
         com.lsp.hypersidebar.util.DataLoader.prewarmWithRetry(
             provider = { runCatching { EzXposed.appContext }.getOrNull() }
         )
+    }
+
+    /**
+     * 状态探针接收器（§2.5.4）：设置页对 home 进程发有序 ping（PROBE_ACTION_HOME），
+     * 应答 resultCode（熔断态）。注册时机与 FreeformRelayHook 同款——hook Application.attach
+     * 之后立即注册（init 时 appContext 可能尚未就绪，prewarm 同坑）。
+     */
+    private fun hookProbeReceiver() {
+        val hooked = MethodFinder.fromClass("android.app.Application")
+            .filterByName("attach")
+            .filterByParamTypes(Context::class.java)
+            .firstOrNull()
+            ?.createAfterHook {
+                val ctx = it.args[0] as? Context ?: return@createAfterHook
+                if (probeRegistered) return@createAfterHook
+                probeRegistered = true
+                try {
+                    val receiver = object : BroadcastReceiver() {
+                        override fun onReceive(c: Context, intent: Intent) {
+                            // 仅应答状态，无任何动作分支；非有序广播无 resultCode 可写
+                            if (isOrderedBroadcast) resultCode = HookProbeState.homeCode()
+                        }
+                    }
+                    ctx.registerReceiver(
+                        receiver, IntentFilter(PrefKeys.PROBE_ACTION_HOME), Context.RECEIVER_EXPORTED
+                    )
+                    Log.i(TAG, "probe receiver registered (via Application.attach)")
+                } catch (e: Throwable) {
+                    Log.e(TAG, "probe receiver registration failed: ${e.message}", e)
+                }
+            }
+        if (hooked == null) {
+            Log.e(TAG, "Application.attach hook failed（状态探针不可用，设置页将显示无应答）")
+        }
     }
 
     /** 记录层：触摸流入口，BeforeHook。返回 true = 消费（拦截原生处理）。 */

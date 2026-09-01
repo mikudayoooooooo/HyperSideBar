@@ -24,11 +24,13 @@ object PrefKeys {
     const val LANDSCAPE_OUTER_RADIUS = "landscapeOuterRadius"
 
     const val DEAD_ZONE = "deadZone"
-    const val VIBRATE = "vibrateEnabled"
     const val TRIGGER_DWELL_MS = "triggerDwellMs"
     const val TRIGGER_MIN_DISTANCE = "triggerMinDistance"
 
     const val CUSTOM_APPS = "customApps"
+    // 已选固定应用的拖动排序（JSON 数组字符串，仅含已选包名；StringSet 不保序，
+    // 扇形/面板按此键排序，缺失项排尾部）
+    const val CUSTOM_APPS_ORDER = "customAppsOrder"
     const val SHORTCUT_ACTIONS = "shortcut_actions"   // 用户快捷方式 JSON（权威 key）
 
     /** 穿透失效自动降级状态（1C：:ui 写入，设置页读出标注；非用户设置） */
@@ -43,6 +45,32 @@ object PrefKeys {
 
     /** 调试开关：模拟 :ui 执行端失联（熔断链路验证用；:ui 自然死亡窗口太短无法实测） */
     const val DEBUG_RELAY_BLACKHOLE = "debugRelayBlackhole"
+
+    // ===== :ui → 模块 App 的快捷方式 root 代发通道（§2.4 实测定案） =====
+    // :ui（system uid）对非 exported 目标 startActivityAsUser 静默假成功且无 su 授权；
+    // 模块 App 进程持 root（su am start 可启动非导出组件，编辑页测试已验证）。
+    // :ui 预检失败时把完整 ShortcutAction JSON 广播给模块 App 代发。
+    const val RELAY_LAUNCH_ACTION = "com.lsp.hypersidebar.action.RELAY_LAUNCH_SHORTCUT"
+    const val RELAY_LAUNCH_EXTRA_SHORTCUT = "shortcut"
+    const val RELAY_LAUNCH_EXTRA_TOKEN = "token"
+
+    /** 代发通道防伪令牌（两侧同源代码共享；防任意 App 伪造广播借 root 启动任意组件） */
+    const val RELAY_LAUNCH_TOKEN = "hsRl-2026-08-31-x7k9q2m4"
+
+    // ===== hook 状态探针（§2.5.4：设置页打开时有序 ping，hook 侧接收器回 resultCode） =====
+    // 背景（1C 实测实锤）：hook 进程的 remotePrefs 只读（写抛 "Read only implementation"），
+    // 熔断/降级状态经 prefs 回写设置页的旧通路是死路——改为接收器应答时直读进程内状态。
+    /** 触发端（com.miui.home）探针 action：EdgeGestureHook 经 Application.attach 注册的接收器应答 */
+    const val PROBE_ACTION_HOME = "com.lsp.hypersidebar.action.PROBE_HOME"
+    /** 探针标记 extra：:ui 侧 FreeformRelayHook 收到后短路在一切动作分支之前（只应答不执行） */
+    const val PROBE_EXTRA = "probe"
+
+    /** 探针 resultCode：无应答（进程死/接收器未注册/宿主 hook 未初始化） */
+    const val PROBE_CODE_DEAD = 0
+    const val PROBE_CODE_OK = 1
+    /** 仅 :ui（穿透失效自动降级） */
+    const val PROBE_CODE_DEGRADED = 2
+    const val PROBE_CODE_CIRCUIT = 3
 }
 
 // channelMode（EDGE/HANDLE）已废弃（1B：EDGE 为唯一产品形态，HANDLE 遗留调试通道代码
@@ -66,7 +94,6 @@ object LayoutDefaults {
     const val QUICK_ICON_SIZE = 36f
 
     const val DEAD_ZONE = 12f
-    const val VIBRATE = true
     const val TRIGGER_DWELL_MS = 250
     const val TRIGGER_MIN_DISTANCE_DP = 30f
 

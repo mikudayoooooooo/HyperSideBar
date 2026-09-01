@@ -33,26 +33,47 @@ class SettingsRepository(val prefs: SharedPreferences) {
     }
 
     // ===== typed getters（默认值一律取自 LayoutDefaults / 契约） =====
+    // 布局 10 键走草稿优先读法：BottomSheet 编辑期只改草稿（实时预览跟随），
+    // 取消=discard 整体丢弃、保存=commit 批量落盘；非编辑期草稿为空=直读落盘值。
 
     fun enabled(): Boolean = prefs.getBoolean(PrefKeys.ENABLED, true)
 
     fun themeMode(): String =
         prefs.getString(PrefKeys.THEME_MODE, "MONET_SYSTEM") ?: "MONET_SYSTEM"
 
-    fun iconSize(): Float = prefs.getFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE)
-    fun innerRadius(): Float = prefs.getFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS)
-    fun outerRadiusMax(): Float = prefs.getFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX)
-    fun maxAppsOuter(): Int = prefs.getInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER)
-    fun maxAppsInner(): Int = prefs.getInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER)
+    fun iconSize(): Float = getDraft(PrefKeys.ICON_SIZE) {
+        prefs.getFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE)
+    }
+    fun innerRadius(): Float = getDraft(PrefKeys.INNER_RADIUS) {
+        prefs.getFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS)
+    }
+    fun outerRadiusMax(): Float = getDraft(PrefKeys.OUTER_RADIUS_MAX) {
+        prefs.getFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX)
+    }
+    fun maxAppsOuter(): Int = getDraft(PrefKeys.MAX_APPS_OUTER) {
+        prefs.getInt(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER)
+    }
+    fun maxAppsInner(): Int = getDraft(PrefKeys.MAX_APPS_INNER) {
+        prefs.getInt(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER)
+    }
 
-    fun landscapeIconSize(): Float = prefs.getFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE)
-    fun landscapeMaxAppsOuter(): Int = prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER)
-    fun landscapeMaxAppsInner(): Int = prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
-    fun landscapeInnerRadius(): Float = prefs.getFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS)
-    fun landscapeOuterRadius(): Float = prefs.getFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
+    fun landscapeIconSize(): Float = getDraft(PrefKeys.LANDSCAPE_ICON_SIZE) {
+        prefs.getFloat(PrefKeys.LANDSCAPE_ICON_SIZE, LayoutDefaults.LANDSCAPE_ICON_SIZE)
+    }
+    fun landscapeMaxAppsOuter(): Int = getDraft(PrefKeys.LANDSCAPE_MAX_APPS_OUTER) {
+        prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER)
+    }
+    fun landscapeMaxAppsInner(): Int = getDraft(PrefKeys.LANDSCAPE_MAX_APPS_INNER) {
+        prefs.getInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
+    }
+    fun landscapeInnerRadius(): Float = getDraft(PrefKeys.LANDSCAPE_INNER_RADIUS) {
+        prefs.getFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS)
+    }
+    fun landscapeOuterRadius(): Float = getDraft(PrefKeys.LANDSCAPE_OUTER_RADIUS) {
+        prefs.getFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
+    }
 
     fun deadZone(): Float = prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)
-    fun vibrate(): Boolean = prefs.getBoolean(PrefKeys.VIBRATE, LayoutDefaults.VIBRATE)
     fun triggerDwellMs(): Int = prefs.getInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
     fun triggerMinDistanceDp(): Float =
         prefs.getFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
@@ -111,7 +132,11 @@ class SettingsRepository(val prefs: SharedPreferences) {
 
     fun save(key: String, value: Any) = prefs.savePref(key, value)
 
-    fun restoreLayoutDefaults() {
+    /**
+     * 一键恢复默认（§2.5.3，PRD"默认值且可重置"）：全部布局（10）+ 交互（3）参数写回默认值。
+     * 写盘即经 LSPosed 推送同步 hook 侧，下次呼出生效（无需重启）。不动用户数据（应用/快捷方式）。
+     */
+    fun restoreAllDefaults() {
         prefs.edit().apply {
             putFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE)
             putFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS)
@@ -123,6 +148,9 @@ class SettingsRepository(val prefs: SharedPreferences) {
             putInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
             putFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS)
             putFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
+            putFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)
+            putInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
+            putFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
         }.apply()
     }
 }

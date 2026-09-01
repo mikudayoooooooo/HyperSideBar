@@ -126,7 +126,7 @@ object DataLoader {
                         runCatching {
                             android.widget.Toast.makeText(
                                 context,
-                                "扇形侧边栏：推荐数据获取失败，ROM 可能不兼容",
+                                "推荐数据获取失败",
                                 android.widget.Toast.LENGTH_LONG
                             ).show()
                         }

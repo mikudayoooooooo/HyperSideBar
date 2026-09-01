@@ -94,7 +94,7 @@ private fun QuickAppIcon(
     onClick: () -> Unit
 ) {
     val (drawable, fallbackColor) = rememberAppIcon(context, app)
-    val targetScale = if (isSelected) 1.2f else 1f
+    val targetScale = if (isSelected) SELECTED_ICON_SCALE else 1f
     val targetAlpha = if (isSelected) 1f else 0.75f
     val iconScale by animateFloatAsState(targetValue = targetScale, animationSpec = tween(100))
     val iconAlpha by animateFloatAsState(targetValue = targetAlpha, animationSpec = tween(100))

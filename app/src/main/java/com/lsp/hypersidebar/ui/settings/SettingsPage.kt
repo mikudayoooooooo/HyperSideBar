@@ -6,12 +6,12 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
 import android.widget.Toast
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -24,9 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -41,14 +39,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.window.WindowDialog
 
@@ -250,34 +247,26 @@ private fun ResetConfirmDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    // miuix WindowDialog（窗口级）：自带居中 title/summary 与 insideMargin，content 只放按钮行
+    // miuix WindowDialog（窗口级）：自带居中 title/summary 与 insideMargin；
+    // 按钮行照官方 DialogSection 模式——两等宽 TextButton 两端分布，确认染主色
     WindowDialog(
         show = show,
         title = stringResource(R.string.restore_defaults),
         summary = stringResource(R.string.restore_defaults_confirm),
         onDismissRequest = onDismiss,
         content = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // 取消=灰文字按钮；确认=主题色（miuix 无 TextButton 颜色工厂，一灰一主手写）
-                Text(
+            Row(horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(
                     text = stringResource(R.string.layout_sheet_cancel),
-                    style = MiuixTheme.textStyles.body1,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    modifier = Modifier
-                        .clip(CircleShape)
-                        .clickable { onDismiss() }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f)
                 )
+                Spacer(modifier = Modifier.width(20.dp))
                 TextButton(
                     text = stringResource(R.string.reset_confirm),
                     onClick = onConfirm,
-                    modifier = Modifier.padding(start = 12.dp)
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary()
                 )
             }
         }

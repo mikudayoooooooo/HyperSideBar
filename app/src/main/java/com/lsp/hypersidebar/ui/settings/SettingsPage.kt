@@ -35,8 +35,15 @@ import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.basic.Check
+import top.yukonga.miuix.kmp.icon.extended.Close
+import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -95,6 +102,9 @@ internal fun SettingsPage(
     // 布局编辑 BottomSheet：入口 = 布局预览卡双缩略点击（§2.2）
     var sheetOrientation by remember { mutableStateOf<LayoutOrientation?>(null) }
     var sheetVisible by remember { mutableStateOf(false) }
+
+    // 一键重置确认 sheet（反馈轮：先确认后执行）
+    var showResetConfirm by remember { mutableStateOf(false) }
 
     fun openLayoutSheet(orientation: LayoutOrientation) {
         repo.discardDraft() // 兜底清残留（上次关闭未走 onDismissFinished 的极端路径）
@@ -187,21 +197,15 @@ internal fun SettingsPage(
             }
         }
 
-        // 一键重置（§2.5.3，PRD"默认值且可重置"）：全部布局/交互参数，不动应用与快捷方式
+        // 一键重置（§2.5.3，PRD"默认值且可重置"）：全部布局/交互参数，不动应用与快捷方式；
+        // 先确认后执行（反馈轮拍板），确认 sheet 与布局 sheet 同款图标按钮
         item { SmallTitle(text = stringResource(R.string.defaults_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 BasicComponent(
                     title = stringResource(R.string.restore_defaults),
                     summary = stringResource(R.string.restore_defaults_summary),
-                    onClick = {
-                        repo.restoreAllDefaults()
-                        Toast.makeText(
-                            context,
-                            context.getString(R.string.restore_defaults_done),
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
+                    onClick = { showResetConfirm = true }
                 )
             }
         }
@@ -218,6 +222,60 @@ internal fun SettingsPage(
             // 保存路径 commit 已清空草稿，此处为无操作；取消/滑掉/返回=丢弃
             repo.discardDraft()
             sheetOrientation = null
+        }
+    )
+
+    // 一键重置确认 sheet（反馈轮：先确认后执行）
+    ResetConfirmSheet(
+        show = showResetConfirm,
+        onConfirm = {
+            repo.restoreAllDefaults()
+            showResetConfirm = false
+            Toast.makeText(
+                context,
+                context.getString(R.string.restore_defaults_done),
+                Toast.LENGTH_SHORT
+            ).show()
+        },
+        onDismiss = { showResetConfirm = false }
+    )
+}
+
+@Composable
+private fun ResetConfirmSheet(
+    show: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    OverlayBottomSheet(
+        show = show,
+        title = stringResource(R.string.restore_defaults),
+        startAction = {
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    imageVector = MiuixIcons.Close,
+                    contentDescription = stringResource(R.string.layout_sheet_cancel),
+                    tint = MiuixTheme.colorScheme.onSurface
+                )
+            }
+        },
+        endAction = {
+            IconButton(onClick = onConfirm) {
+                Icon(
+                    imageVector = MiuixIcons.Basic.Check,
+                    contentDescription = stringResource(R.string.reset_confirm),
+                    tint = MiuixTheme.colorScheme.primary
+                )
+            }
+        },
+        onDismissRequest = onDismiss,
+        content = {
+            Text(
+                text = stringResource(R.string.restore_defaults_confirm),
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            )
         }
     )
 }

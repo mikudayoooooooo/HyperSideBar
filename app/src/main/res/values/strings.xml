@@ -17,10 +17,13 @@
     <string name="checking_module">正在检测</string>
     <string name="checking_module_summary">正在连接 LSPosed 服务</string>
     <string name="lsposed_not_found">未找到 LSPosed Manager</string>
-    <string name="passthrough_degraded">扇形通道已自动降级</string>
-    <string name="passthrough_degraded_summary">边缘穿透持续失效，已恢复原生小白条；重启手机或重启模块后恢复扇形</string>
-    <string name="circuit_open">扇形通道已熔断</string>
-    <string name="circuit_open_summary">连续失败已触发保护，原生返回不受影响。点按重试（下次呼出时生效），或重启手机</string>
+    <string name="probe_end_home">边缘手势（系统桌面）</string>
+    <string name="probe_end_ui">执行通道（安全中心）</string>
+    <string name="probe_state_pending">检测中…</string>
+    <string name="probe_state_ok">正常</string>
+    <string name="probe_state_circuit">已熔断 · 点按重试，或重启手机</string>
+    <string name="probe_state_degraded">已降级 · 重启手机或重启模块后恢复</string>
+    <string name="probe_state_dead">无应答 · 请检查 LSPosed 作用域或重启手机</string>
 
     <string name="effect_preview">效果预览</string>
     <string name="portrait_preview">竖屏</string>

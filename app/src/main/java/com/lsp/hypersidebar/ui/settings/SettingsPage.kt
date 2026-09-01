@@ -6,7 +6,6 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,27 +18,30 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
+import com.lsp.hypersidebar.theme.LocalSemanticColors
 import com.lsp.hypersidebar.theme.ThemeMode
 import com.lsp.hypersidebar.theme.ThemeModes
 import com.lsp.hypersidebar.util.ShortcutStore
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -76,16 +78,23 @@ internal fun SettingsPage(
     val selectedThemeIndex = ThemeModes.BASE_MODES.indexOf(baseMode).coerceAtLeast(0)
     val useSystemColors = ThemeModes.usesSystemColors(currentThemeMode)
 
-    // 降级/熔断状态（1C：hook 侧写入 remotePrefs；迁自退役的 HomePage）。
-    // 熔断按进程分键（home/ui），任一端熔断即显示；显示优先级：熔断 > 降级
-    val passthroughDegraded = remember(prefs, prefsRevision) {
-        runCatching { prefs.getBoolean(PrefKeys.PASSTHROUGH_DEGRADED, false) }.getOrDefault(false)
-    }
-    val circuitOpen = remember(prefs, prefsRevision) {
-        runCatching {
-            prefs.getBoolean(PrefKeys.CIRCUIT_OPEN_HOME, false) ||
-                prefs.getBoolean(PrefKeys.CIRCUIT_OPEN_UI, false)
-        }.getOrDefault(false)
+    // hook 状态探针（§2.5.4）：设置页组合进入时双路 ping（切 Tab 返回会重新组合=顺带刷新）。
+    // 旧通路（hook→app 经 remotePrefs 回写熔断/降级）在 LSPosed 下是死路：hook 进程 prefs 只读
+    val context = LocalContext.current
+    val probe = remember { ModuleProbe(context) }
+    val probeScope = rememberCoroutineScope()
+    LaunchedEffect(probe) { probe.probe() }
+
+    fun manualRetry() {
+        // 手动重试：写时间戳，hook 侧比较 resetAt > 本端熔断时刻即解除
+        //（launcher=下次边缘呼出，:ui=2s 看门狗内）；3s 后复测刷新状态行
+        prefs.edit()
+            .putLong(PrefKeys.CIRCUIT_RESET_AT, System.currentTimeMillis())
+            .commit()
+        probeScope.launch {
+            delay(3000)
+            probe.probe()
+        }
     }
 
     // 布局编辑 BottomSheet：入口 = 布局预览卡双缩略点击（§2.2）
@@ -110,6 +119,17 @@ internal fun SettingsPage(
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
                     ModuleStatusComponent(status = status)
+                    // 两端探针行：据 resultCode 实时渲染（§2.5.4）；熔断行可点=手动重试
+                    ProbeEndComponent(
+                        title = stringResource(R.string.probe_end_home),
+                        code = probe.state.launcher,
+                        onRetry = { manualRetry() }
+                    )
+                    ProbeEndComponent(
+                        title = stringResource(R.string.probe_end_ui),
+                        code = probe.state.executor,
+                        onRetry = { manualRetry() }
+                    )
                     SwitchPreference(
                         title = stringResource(R.string.module_enabled),
                         summary = stringResource(R.string.module_enabled_summary),
@@ -119,28 +139,6 @@ internal fun SettingsPage(
                             prefs.savePref(PrefKeys.ENABLED, it)
                         }
                     )
-                }
-            }
-        }
-
-        if (circuitOpen) {
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    CircuitStatusComponent(
-                        onRetry = {
-                            // 手动重试：写时间戳，hook 侧比较 resetAt > 本端熔断时刻即解除
-                            //（launcher=下次边缘呼出，:ui=2s 看门狗内）
-                            prefs.edit()
-                                .putLong(PrefKeys.CIRCUIT_RESET_AT, System.currentTimeMillis())
-                                .commit()
-                        }
-                    )
-                }
-            }
-        } else if (passthroughDegraded) {
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    DegradedStatusComponent()
                 }
             }
         }
@@ -231,37 +229,32 @@ private fun SettingsList(
 }
 
 @Composable
-private fun DegradedStatusComponent() {
+private fun ProbeEndComponent(title: String, code: Int?, onRetry: () -> Unit) {
+    val semantic = LocalSemanticColors.current
+    val (accent, text) = when (code) {
+        PrefKeys.PROBE_CODE_OK -> semantic.success to stringResource(R.string.probe_state_ok)
+        PrefKeys.PROBE_CODE_CIRCUIT ->
+            MiuixTheme.colorScheme.error to stringResource(R.string.probe_state_circuit)
+        PrefKeys.PROBE_CODE_DEGRADED ->
+            semantic.warning to stringResource(R.string.probe_state_degraded)
+        PrefKeys.PROBE_CODE_DEAD ->
+            MiuixTheme.colorScheme.error to stringResource(R.string.probe_state_dead)
+        else -> MiuixTheme.colorScheme.onSurfaceVariantSummary to
+                stringResource(R.string.probe_state_pending)
+    }
     BasicComponent(
-        title = stringResource(R.string.passthrough_degraded),
-        summary = stringResource(R.string.passthrough_degraded_summary),
+        title = title,
+        summary = text,
         startAction = {
             Box(
                 modifier = Modifier
                     .padding(end = 8.dp)
                     .size(10.dp)
                     .clip(CircleShape)
-                    .background(MiuixTheme.colorScheme.error)
-            )
-        }
-    )
-}
-
-@Composable
-private fun CircuitStatusComponent(onRetry: () -> Unit) {
-    BasicComponent(
-        title = stringResource(R.string.circuit_open),
-        summary = stringResource(R.string.circuit_open_summary),
-        startAction = {
-            Box(
-                modifier = Modifier
-                    .padding(end = 8.dp)
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(MiuixTheme.colorScheme.error)
+                    .background(accent)
             )
         },
-        onClick = onRetry
+        onClick = if (code == PrefKeys.PROBE_CODE_CIRCUIT) onRetry else null
     )
 }
 

@@ -77,6 +77,11 @@ class DirectLaunchStrategy : FanLaunchStrategy {
             runCatching {
                 Toast.makeText(context, "已拉起服务：${shortcut.label}", Toast.LENGTH_SHORT).show()
             }
+        } else if (result is LaunchResult.Failure) {
+            // PRD §9.4：非编辑页场景启动失败 toast 兜底（编辑页测试启动自带原因展示）
+            runCatching {
+                Toast.makeText(context, "activity/Service无法正常启动", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 

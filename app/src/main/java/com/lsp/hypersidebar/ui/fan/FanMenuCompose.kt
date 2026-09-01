@@ -27,12 +27,17 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.runtime.MutableState
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+/** 选中态图标放大倍数（PRD §7.3.2"图标放大1.25倍"）；SelectedLabel 避让计算同源。 */
+internal const val SELECTED_ICON_SCALE = 1.25f
 
 @Composable
 fun FanMenuCompose(
@@ -168,7 +173,7 @@ private fun FanAppIcon(
     val (drawable, fallbackColor) = rememberAppIcon(context, item.app)
     val density = LocalDensity.current.density
     val pxIconSize = iconSize * density
-    val targetScale = if (isSelected) 1.15f else 1f
+    val targetScale = if (isSelected) SELECTED_ICON_SCALE else 1f
     val targetAlpha = if (isSelected) 1f else 0.75f
     val iconScale by animateFloatAsState(targetValue = targetScale, animationSpec = tween(100))
     val iconAlpha by animateFloatAsState(targetValue = targetAlpha, animationSpec = tween(100))
@@ -220,14 +225,21 @@ private fun SelectedLabel(
 ) {
     val density = LocalDensity.current.density
     val pxIconSize = iconSize * density
+    // 实测量标签尺寸再定位：水平以图标圆心真居中（硬编码偏移在长应用名下会偏出圆心），
+    // 垂直贴"放大后图标顶边"再留 10dp——此前按估算高度写死偏移，图标被弦长钳制到
+    // 最小生效尺寸且选中放大 1.25 后，标签底边会压住图标顶边
+    var labelSize by remember { mutableStateOf(IntSize.Zero) }
     Box(
         modifier = Modifier
             .offset {
                 IntOffset(
-                    (item.centerX - 60f).toInt(),
-                    (item.centerY - pxIconSize * 0.9f - 28f).toInt()
+                    (item.centerX - labelSize.width / 2f).toInt(),
+                    (item.centerY - pxIconSize * SELECTED_ICON_SCALE / 2f -
+                        labelSize.height - 10.dp.roundToPx()).toInt()
                 )
             }
+            .alpha(if (labelSize == IntSize.Zero) 0f else 1f)
+            .onSizeChanged { labelSize = it }
             .clip(RoundedCornerShape(12.dp))
             .background(colors.surfaceContainerHigh.copy(alpha = 0.95f))
             .padding(horizontal = 10.dp, vertical = 4.dp),

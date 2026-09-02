@@ -128,8 +128,10 @@ class AllAppsActivity : ComponentActivity() {
                         }.onFailure {
                             Toast.makeText(this, "启动失败：$pkg", Toast.LENGTH_SHORT).show()
                         }
-                        // PRD：从"全部应用"打开目标小窗后，列表小窗自动关闭
-                        finish()
+                        // PRD：从"全部应用"打开目标小窗后，列表小窗自动关闭。
+                        // finishAndRemoveTask 兜底：面板已配独立 taskAffinity（正常 finish
+                        // 即任务空、窗口即收），此处确保任务无条件移除，防异常归置残留
+                        finishAndRemoveTask()
                     }
                 )
             }

@@ -37,9 +37,13 @@
         </activity>
 
         <!-- 全部应用面板（fan 圈内末位入口）：:ui/launcher 经 FreeformLauncher 启动，
-             freeform 小窗形态（PRD §7.3.2）；exported 供 :ui（system uid）跨进程拉起 -->
+             freeform 小窗形态（PRD §7.3.2）；exported 供 :ui（system uid）跨进程拉起。
+             taskAffinity 独立=修"打开目标后小窗不关"：默认 affinity 会命中设置主任务
+             （NEW_TASK 按 affinity 归任务），finish() 后主任务顶上是 MainActivity、
+             任务非空窗口不收；独立 affinity 保证面板任务只有自己，finish 即空即关 -->
         <activity
             android:name=".ui.allapps.AllAppsActivity"
+            android:taskAffinity="com.lsp.hypersidebar.allapps_panel"
             android:exported="true"
             android:resizeableActivity="true"
             android:launchMode="singleTask"

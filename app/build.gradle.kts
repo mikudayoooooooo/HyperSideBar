@@ -18,6 +18,13 @@ val dailySeq = if (lastCode / 100 == todayPrefix.toInt()) {
 }
 val computedVersionCode = todayPrefix.toInt() * 100 + dailySeq
 
+// release 签名（迭代四收尾）：keystore.properties 不入库（.gitignore），缺失时
+// release 保持未签名（assembleRelease 产 app-release-unsigned.apk）
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -32,7 +39,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = computedVersionCode
-        versionName = "0.1"
+        versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -41,13 +48,27 @@ android {
         buildConfigField("String", "EZXHELPER_VERSION", "\"3.2.0-preview1\"")
     }
 
+    signingConfigs {
+        create("release") {
+            if (keystorePropsFile.exists()) {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 混淆+压缩+资源收缩（Xposed 入口类经 proguard-rules.pro 必保）
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

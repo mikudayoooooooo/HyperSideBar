@@ -73,6 +73,18 @@ object PrefKeys {
     const val PROBE_CODE_CIRCUIT = 3
     /** 双端（推荐数据源死亡停摆，迭代四 §1.3）：扇形已停用、hook 让位原生，重启恢复 */
     const val PROBE_CODE_DATA_DEAD = 4
+
+    // ===== 固定应用选择页准入列表（设置页 ← :ui，探针同款有序广播信道） =====
+    // 背景：选择页此前走 PM 全列表，违反 PRD §7.3.3"无小窗资格的应用在数据源层面
+    // 即不展示"；而 getFreeformSuggestionList 在模块进程被 hidden API blocklist 拒绝
+    // （AllAppsActivity 同款坑），只能向 :ui（system uid）要。模块侧自建落库缓存，
+    // :ui 死时读"之前的"，首次且无应答才回退 PM 全列表。
+    /** 设置页 → :ui 的准入列表请求 action（有序广播，resultExtras 回带） */
+    const val ACTION_REQUEST_SUGGESTIONS = "com.lsp.hypersidebar.action.REQUEST_SUGGESTIONS"
+    /** 回带 extra：StringArrayList 包名（与 AllAppsActivity.EXTRA_SUGGESTIONS 同语义） */
+    const val EXTRA_SUGGESTION_LIST = "suggestions"
+    /** 模块本地准入列表缓存键（设置页 prefs，JSON 数组，与 DataLoader 落盘同格式） */
+    const val CACHED_SUGGESTIONS = "cachedSuggestions"
 }
 
 // channelMode（EDGE/HANDLE）已废弃（1B：EDGE 为唯一产品形态，HANDLE 遗留调试通道代码

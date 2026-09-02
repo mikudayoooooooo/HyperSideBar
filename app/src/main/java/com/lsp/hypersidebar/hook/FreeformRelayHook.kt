@@ -58,6 +58,23 @@ class FreeformRelayHook : BaseHook() {
                         if (isOrderedBroadcast) resultCode = HookProbeState.uiCode()
                         return
                     }
+                    // 固定应用选择页准入列表请求（设置页 ← :ui，探针同款有序广播信道）：
+                    // resultExtras 回带 DataLoader 缓存（同步读，陈旧即触发后台刷新，不阻塞
+                    // 应答）。模块进程被 blocklist 拒绝调 getFreeformSuggestionList，只能
+                    // 向本进程（system uid）要；空列表也照答（模块侧空判定自行兜底）
+                    if (intent.action == PrefKeys.ACTION_REQUEST_SUGGESTIONS) {
+                        if (isOrderedBroadcast) {
+                            resultCode = 1
+                            resultData = null
+                            setResultExtras(android.os.Bundle().apply {
+                                putStringArrayList(
+                                    PrefKeys.EXTRA_SUGGESTION_LIST,
+                                    ArrayList(com.lsp.hypersidebar.util.DataLoader.loadApps(ctx))
+                                )
+                            })
+                        }
+                        return
+                    }
                     // 有序广播存活探测标记（1C，PRD §9.4 ":ui 不存活→toast"）：launcher 发
                     // ordered broadcast，初始 code=0，本接收器置 1；最终回调读 0 = 本进程
                     // 已死或接收器未注册。普通 sendBroadcast（如 AllAppsActivity 面板内启动）
@@ -88,8 +105,15 @@ class FreeformRelayHook : BaseHook() {
                     }
                 }
             }
-            context.registerReceiver(receiver, IntentFilter(ACTION_FAN_LAUNCH), Context.RECEIVER_EXPORTED)
-            Log.i(TAG, "ACTION_FAN_LAUNCH receiver registered (via Application.attach)")
+            context.registerReceiver(
+                receiver,
+                IntentFilter().apply {
+                    addAction(ACTION_FAN_LAUNCH)
+                    addAction(PrefKeys.ACTION_REQUEST_SUGGESTIONS)
+                },
+                Context.RECEIVER_EXPORTED
+            )
+            Log.i(TAG, "ACTION_FAN_LAUNCH/REQUEST_SUGGESTIONS receiver registered (via Application.attach)")
         } catch (e: Throwable) {
             Log.e(TAG, "receiver registration failed: ${e.message}", e)
         }

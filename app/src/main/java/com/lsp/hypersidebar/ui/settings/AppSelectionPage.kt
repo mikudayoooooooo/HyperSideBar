@@ -1,10 +1,14 @@
 package com.lsp.hypersidebar.ui.settings
 
 import com.lsp.hypersidebar.prefs.savePref
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,6 +36,8 @@ import com.lsp.hypersidebar.ui.fan.FanAppInfo
 import com.lsp.hypersidebar.ui.fan.rememberAppIcon
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
@@ -105,13 +111,40 @@ internal fun AppSelectionPage(
         initialValue = cachedApps?.let(AppLoadState::Loaded) ?: AppLoadState.Loading,
         key1 = context.applicationContext
     ) {
-        val cached = cachedApps
-        if (cached != null) {
-            value = AppLoadState.Loaded(cached)
+        if (cachedApps != null) return@produceState  // 会话缓存已随 initialValue 命中
+        val appContext = context.applicationContext
+
+        // ① 读"之前的"：模块本地准入列表缓存（:ui 上次回带后落库），秒开且不依赖 :ui 存活。
+        // 准入数据源（PRD §7.3.3"无小窗资格的应用在数据源层面即不展示"）取代原 PM 全列表
+        val cached = readCachedSuggestions(prefs)
+        if (cached.isNotEmpty()) {
+            val items = withContext(Dispatchers.IO) {
+                withMissingPinned(appContext, prefs, prefsKey, loadAdmissionItems(appContext, cached))
+            }
+            cachedApps = items
+            value = AppLoadState.Loaded(items)
+        }
+
+        // ② 有序广播向 :ui 刷新（探针同款信道，PRD 准入列表权威源）：应答非空且与缓存
+        // 不同才重排 + 落库，页面无感更新
+        val fresh: List<String>? = suspendCoroutine { cont ->
+            requestSuggestionsFromUi(appContext) { cont.resume(it) }
+        }
+        if (fresh != null && fresh != cached) {
+            val items = withContext(Dispatchers.IO) {
+                withMissingPinned(appContext, prefs, prefsKey, loadAdmissionItems(appContext, fresh))
+            }
+            persistCachedSuggestions(prefs, fresh)
+            cachedApps = items
+            value = AppLoadState.Loaded(items)
             return@produceState
         }
+        if (cached.isNotEmpty()) return@produceState
+
+        // ③ 兜底：无缓存且 :ui 无应答/空缓存 → PM 全列表（模块进程被 blocklist 拒绝调
+        // 准入 API，原现状路径；此时扇形端也必然无准入数据，此处固定项不会被消费）
         value = runCatching {
-            withContext(Dispatchers.IO) { loadInstalledApps(context.applicationContext) }
+            withContext(Dispatchers.IO) { loadInstalledApps(appContext) }
         }.fold(
             onSuccess = { apps ->
                 cachedApps = apps
@@ -352,4 +385,81 @@ private fun loadInstalledApps(context: Context): List<AppItem> {
         }
         .sortedWith(compareBy({ it.isSystem }, { it.label.lowercase() }))
         .toList()
+}
+
+/** 读模块本地准入列表缓存（"读之前的"主路径）；缺失/损坏返回空 */
+private fun readCachedSuggestions(prefs: SharedPreferences): List<String> =
+    runCatching {
+        prefs.getString(PrefKeys.CACHED_SUGGESTIONS, null)?.let { json ->
+            val arr = org.json.JSONArray(json)
+            (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+        }
+    }.getOrNull().orEmpty()
+
+/** 准入列表落库（:ui 上次回带结果；与 DataLoader 落盘同格式），空列表不覆盖 */
+private fun persistCachedSuggestions(prefs: SharedPreferences, pkgs: List<String>) {
+    if (pkgs.isEmpty()) return
+    runCatching { prefs.savePref(PrefKeys.CACHED_SUGGESTIONS, org.json.JSONArray(pkgs).toString()) }
+}
+
+/** 准入包名 → AppItem（label 走 PM；已卸载的剔除，其固定引用由 withMissingPinned 保住） */
+private fun loadAdmissionItems(context: Context, pkgs: List<String>): List<AppItem> {
+    val packageManager = context.packageManager
+    return pkgs.mapNotNull { pkg ->
+        runCatching {
+            val info = packageManager.getApplicationInfo(pkg, 0)
+            AppItem(
+                label = packageManager.getApplicationLabel(info).toString(),
+                packageName = pkg,
+                isSystem = info.flags and ApplicationInfo.FLAG_SYSTEM != 0
+            )
+        }.getOrNull()
+    }.sortedWith(compareBy({ it.isSystem }, { it.label.lowercase() }))
+}
+
+/** 已固定但不在准入列表里的项仍要可见（用户资产；资格变化只影响启动，PRD §9.4 toast 兜底） */
+private fun withMissingPinned(
+    context: Context,
+    prefs: SharedPreferences,
+    prefsKey: String,
+    items: List<AppItem>
+): List<AppItem> {
+    val missing = prefs.getStringSet(prefsKey, emptySet()).orEmpty() -
+        items.map { it.packageName }.toSet()
+    if (missing.isEmpty()) return items
+    val packageManager = context.packageManager
+    val extras = missing.map { pkg ->
+        runCatching {
+            val info = packageManager.getApplicationInfo(pkg, 0)
+            AppItem(
+                label = packageManager.getApplicationLabel(info).toString(),
+                packageName = pkg,
+                isSystem = info.flags and ApplicationInfo.FLAG_SYSTEM != 0
+            )
+        }.getOrNull() ?: AppItem(label = pkg, packageName = pkg, isSystem = true)
+    }
+    return items + extras  // 已选置顶由 UI 层 selectedOrder 排序处理，这里只保证存在
+}
+
+/** 有序广播向 :ui 请求准入列表（探针同款信道）；null = 无应答（:ui 死/未激活）或空缓存 */
+private fun requestSuggestionsFromUi(context: Context, onResult: (List<String>?) -> Unit) {
+    val intent = Intent(PrefKeys.ACTION_REQUEST_SUGGESTIONS).apply {
+        setPackage("com.miui.securitycenter")
+    }
+    runCatching {
+        context.sendOrderedBroadcast(
+            intent,
+            null,
+            object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    val list = runCatching {
+                        getResultExtras(true).getStringArrayList(PrefKeys.EXTRA_SUGGESTION_LIST)
+                    }.getOrNull().orEmpty()
+                    onResult(list.ifEmpty { null })
+                }
+            },
+            Handler(Looper.getMainLooper()),
+            0, null, null
+        )
+    }.onFailure { onResult(null) }
 }

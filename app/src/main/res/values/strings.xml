@@ -22,6 +22,7 @@
     <string name="probe_end_ui">执行通道</string>
     <string name="probe_state_ok">正常</string>
     <string name="probe_state_circuit">已熔断 · 点按重试，或重启手机</string>
+    <string name="probe_state_data_dead">推荐数据源不可用 · 已停用扇形并恢复原生侧边栏，重启手机恢复</string>
     <string name="probe_state_degraded">已降级 · 重启手机或重启模块后恢复</string>
     <string name="probe_state_dead">无应答 · 请检查 LSPosed 作用域或重启手机</string>
 

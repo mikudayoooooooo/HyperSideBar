@@ -157,6 +157,7 @@ internal fun ModuleStatusComponent(
 @Composable
 private fun probeStateText(code: Int): String = when (code) {
     PrefKeys.PROBE_CODE_CIRCUIT -> stringResource(R.string.probe_state_circuit)
+    PrefKeys.PROBE_CODE_DATA_DEAD -> stringResource(R.string.probe_state_data_dead)
     PrefKeys.PROBE_CODE_DEGRADED -> stringResource(R.string.probe_state_degraded)
     else -> stringResource(R.string.probe_state_dead)
 }

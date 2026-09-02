@@ -71,6 +71,8 @@ object PrefKeys {
     /** 仅 :ui（穿透失效自动降级） */
     const val PROBE_CODE_DEGRADED = 2
     const val PROBE_CODE_CIRCUIT = 3
+    /** 双端（推荐数据源死亡停摆，迭代四 §1.3）：扇形已停用、hook 让位原生，重启恢复 */
+    const val PROBE_CODE_DATA_DEAD = 4
 }
 
 // channelMode（EDGE/HANDLE）已废弃（1B：EDGE 为唯一产品形态，HANDLE 遗留调试通道代码

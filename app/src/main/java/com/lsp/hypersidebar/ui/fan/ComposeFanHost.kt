@@ -240,7 +240,12 @@ class ComposeFanHost(
                         val prevFan = lastSelectedFanIndex
                         val prevQuick = lastSelectedQuickIndex
 
-                        val inCancelZone = dist < innerCancelPx || dist > outerCancelPx
+                        // 外取消豁免（迭代四 §1.1）：快捷栏在锚点 712px 外本就落在外取消
+                        // 半径之外，栏上滑动会被 CLEAR/重命中振荡清掉 dwell 致点按不启动
+                        // （1C 实测）。命中圈(0.8 图标距)覆盖栏间隙，栏外空白仍正常取消；
+                        // 内取消（滑回锚点）不豁免
+                        val inCancelZone = dist < innerCancelPx ||
+                            (dist > outerCancelPx && calcQuickAppCandidate(x, y, geometry) == -1)
                         if (inCancelZone && (prevFan != -1 || prevQuick != -1)) {
                             lastSelectedFanIndex = -1
                             lastSelectedQuickIndex = -1

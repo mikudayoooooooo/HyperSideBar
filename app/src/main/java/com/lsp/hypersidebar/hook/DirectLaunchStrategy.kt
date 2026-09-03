@@ -2,15 +2,18 @@ package com.lsp.hypersidebar.hook
 
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
+import com.lsp.hypersidebar.ShortcutRelayReceiver
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.FanLaunchStrategy
 import com.lsp.hypersidebar.util.FailureReason
 import com.lsp.hypersidebar.util.FreeformLauncher
 import com.lsp.hypersidebar.util.LaunchResult
+import com.lsp.hypersidebar.util.RelayToken
 import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutLauncher
@@ -22,7 +25,10 @@ private const val TAG = "FanLaunch"
  * securitycenter:ui 进程的直调策略。
  * 打开原生面板时经 PanelHideState 短暂隐藏 dock（hookDockLayoutVisibility 消费），5s 后恢复。
  */
-class DirectLaunchStrategy : FanLaunchStrategy {
+class DirectLaunchStrategy(
+    /** :ui 的 remotePrefs（只读）：取模块下发的跨进程防伪令牌 */
+    private val remotePrefs: SharedPreferences
+) : FanLaunchStrategy {
 
     override fun launchFreeform(context: Context, pkg: String) {
         FreeformLauncher.launch(context, pkg)
@@ -90,15 +96,18 @@ class DirectLaunchStrategy : FanLaunchStrategy {
     private fun relayLaunchToModule(context: Context, shortcut: ShortcutAction): Boolean {
         return runCatching {
             val intent = Intent(PrefKeys.RELAY_LAUNCH_ACTION).apply {
+                // 包名=applicationId（迭代五已迁 io.github.mikudayoooooooo.hypersidebar），
+                // 类路径=源码 namespace（未随 applicationId 迁移），两者分别取常量/类引用，
+                // 杜绝再出现拼死字符串导致的寻址漂移
                 setClassName(
                     FreeformLauncher.MODULE_PACKAGE,
-                    "com.lsp.hypersidebar.ShortcutRelayReceiver"
+                    ShortcutRelayReceiver::class.java.name
                 )
                 putExtra(
                     PrefKeys.RELAY_LAUNCH_EXTRA_SHORTCUT,
                     shortcut.toJson().toString()
                 )
-                putExtra(PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN, PrefKeys.RELAY_LAUNCH_TOKEN)
+                RelayToken.attach(this, RelayToken.read(remotePrefs))
             }
             context.sendBroadcast(intent)
             Log.i(TAG, "relay launch to module app sent: id=${shortcut.id} kind=${shortcut.kind}")

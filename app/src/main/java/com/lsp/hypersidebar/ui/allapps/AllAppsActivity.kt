@@ -49,6 +49,7 @@ import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import com.lsp.hypersidebar.util.AppIconCache
 import com.lsp.hypersidebar.util.AppMetaCache
 import com.lsp.hypersidebar.util.DataLoader
+import com.lsp.hypersidebar.util.RelayToken
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import kotlinx.coroutines.Dispatchers
@@ -102,6 +103,9 @@ class AllAppsActivity : ComponentActivity() {
                     runCatching { service.getRemotePreferences("hyperSidebar") }
                         .onSuccess { prefs ->
                             cachedRemotePrefs = prefs
+                            // 令牌同步（模块进程可写端）：面板进程可能是全新进程，
+                            // 未同步过则 :ui 侧 ShortcutRelayReceiver 无法完成 root 代发校验
+                            RelayToken.sync(prefs)
                             runOnUiThread { remotePrefs = prefs }
                         }
                 }.start()
@@ -124,6 +128,8 @@ class AllAppsActivity : ComponentActivity() {
                             Intent(ACTION_FAN_LAUNCH).apply {
                                 setPackage("com.miui.securitycenter")
                                 putExtra("pkg", pkg)
+                                // 跨进程防伪令牌（:ui 侧 FreeformRelayHook 校验）
+                                RelayToken.attach(this, RelayToken.current())
                             }.let { applicationContext.sendBroadcast(it) }
                         }.onFailure {
                             Toast.makeText(this, "启动失败：$pkg", Toast.LENGTH_SHORT).show()

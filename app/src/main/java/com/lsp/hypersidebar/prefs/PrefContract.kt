@@ -54,8 +54,9 @@ object PrefKeys {
     const val RELAY_LAUNCH_EXTRA_SHORTCUT = "shortcut"
     const val RELAY_LAUNCH_EXTRA_TOKEN = "token"
 
-    /** 代发通道防伪令牌（两侧同源代码共享；防任意 App 伪造广播借 root 启动任意组件） */
-    const val RELAY_LAUNCH_TOKEN = "hsRl-2026-08-31-x7k9q2m4"
+    /** 跨进程广播防伪令牌（运行期随机生成，存 remotePrefs，见 util/RelayToken）。
+     *  原硬编码常量 RELAY_LAUNCH_TOKEN 已废止——反编译即可读出，等同零校验。 */
+    const val RELAY_TOKEN = "relayToken"
 
     // ===== hook 状态探针（§2.5.4：设置页打开时有序 ping，hook 侧接收器回 resultCode） =====
     // 背景（1C 实测实锤）：hook 进程的 remotePrefs 只读（写抛 "Read only implementation"），

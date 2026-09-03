@@ -32,12 +32,13 @@ class XposedInit : XposedModule() {
         when {
             param.packageName == "com.miui.securitycenter" && procName.endsWith(":ui") -> {
                 // 横屏 B 路线触发端 + 竖屏小白条隐藏穿透宿主 + 执行端（fan 选中动作本进程直执行）
+                val prefs = remotePrefsWithProbe()
                 if (turboLayoutHook == null) {
-                    val prefs = remotePrefsWithProbe()
                     turboLayoutHook = TurboLayout(prefs)
                 }
                 if (freeformRelayHook == null) {
-                    freeformRelayHook = FreeformRelayHook()
+                    // prefs 同时供 FreeformRelay 做跨进程广播令牌校验（批次 0 安全修复）
+                    freeformRelayHook = FreeformRelayHook(prefs)
                 }
                 initHooks(turboLayoutHook!!, freeformRelayHook!!)
             }

@@ -34,6 +34,7 @@ import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.AppIconImage
 import com.lsp.hypersidebar.ui.fan.FanAppInfo
 import com.lsp.hypersidebar.ui.fan.rememberAppIcon
+import com.lsp.hypersidebar.util.RelayToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
@@ -445,6 +446,8 @@ private fun withMissingPinned(
 private fun requestSuggestionsFromUi(context: Context, onResult: (List<String>?) -> Unit) {
     val intent = Intent(PrefKeys.ACTION_REQUEST_SUGGESTIONS).apply {
         setPackage("com.miui.securitycenter")
+        // 跨进程防伪令牌（:ui 侧 FreeformRelayHook 校验）
+        RelayToken.attach(this, RelayToken.current())
     }
     runCatching {
         context.sendOrderedBroadcast(

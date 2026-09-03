@@ -8,6 +8,7 @@ import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import com.lsp.hypersidebar.ui.fan.FanLaunchStrategy
+import com.lsp.hypersidebar.util.RelayToken
 import com.lsp.hypersidebar.util.ShortcutAction
 
 private const val TAG = "FanLaunch"
@@ -26,7 +27,9 @@ class BroadcastLaunchStrategy(
     private val launchAction: String,
     private val onRelayResult: ((alive: Boolean, what: String) -> Unit)? = null,
     /** 调试开关（熔断链路验证用）：真机 :ui 死亡窗口太短（~10s 即被系统重绑），无法自然复现 */
-    private val shouldSimulateRelayDead: () -> Boolean = { false }
+    private val shouldSimulateRelayDead: () -> Boolean = { false },
+    /** 跨进程防伪令牌（批次 0 安全修复）：取 launcher 侧 remotePrefs 读到的值，未下发则 null */
+    private val relayToken: () -> String? = { null }
 ) : FanLaunchStrategy {
 
     override fun launchFreeform(context: Context, pkg: String) {
@@ -61,6 +64,7 @@ class BroadcastLaunchStrategy(
         val intent = Intent(launchAction).apply {
             setPackage("com.miui.securitycenter")
             configure()
+            RelayToken.attach(this, relayToken())
         }
         context.sendOrderedBroadcast(
             intent,

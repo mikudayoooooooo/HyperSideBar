@@ -17,6 +17,7 @@ import com.lsp.hypersidebar.theme.HyperSidebarTheme
 import com.lsp.hypersidebar.theme.ThemeMode
 import com.lsp.hypersidebar.theme.ThemeModes
 import com.lsp.hypersidebar.ui.settings.MainScreen
+import com.lsp.hypersidebar.util.RelayToken
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 
@@ -40,6 +41,9 @@ class MainActivity : ComponentActivity() {
                 // getRemotePreferences 是一次性同步 binder 拉取全量快照，挪出主线程
                 Thread {
                     val prefs = service.getRemotePreferences("hyperSidebar")
+                    // 跨进程广播防伪令牌：模块进程是唯一可写端，首次绑定即生成并缓存
+                    // （hook 进程 remotePrefs 只读，只能读到此值；见 RelayToken）
+                    RelayToken.sync(prefs)
                     runOnUiThread { remotePrefs = prefs }
                 }.start()
             }

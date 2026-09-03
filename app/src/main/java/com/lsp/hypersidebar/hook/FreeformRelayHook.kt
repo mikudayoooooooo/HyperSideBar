@@ -4,11 +4,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
+import com.lsp.hypersidebar.util.RelayToken
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHook
 import org.json.JSONObject
@@ -24,12 +26,15 @@ private const val TAG = "FreeformRelay"
  * 注册时机：hook Application.attach 之后立即注册——修 spike 实测的注册延迟问题
  * （原 init 重试/懒注册路径在无人触摸小白条时收不到注册时机，约 1 分钟内广播丢失）。
  */
-class FreeformRelayHook : BaseHook() {
+class FreeformRelayHook(
+    /** :ui 的 remotePrefs（只读）：取模块下发的跨进程防伪令牌 */
+    private val remotePrefs: SharedPreferences
+) : BaseHook() {
 
     override val name = "FreeformRelay"
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val strategy = DirectLaunchStrategy()
+    private val strategy = DirectLaunchStrategy(remotePrefs)
     private var registered = false
 
     override fun init() {
@@ -58,6 +63,11 @@ class FreeformRelayHook : BaseHook() {
                         if (isOrderedBroadcast) resultCode = HookProbeState.uiCode()
                         return
                     }
+                    // 批次 0 安全修复：本接收器 RECEIVER_EXPORTED 注册（发送端是不同 uid，
+                    // 无法用非导出），此前零校验——任意 App 都能发广播借 system uid 拉起
+                    // 任意应用小窗。改为校验运行期随机令牌（remotePrefs 分发）。
+                    // 令牌未配置时按 RelayToken.verifyFan 兼容放行，保证全新安装期主链路可用。
+                    if (!RelayToken.verifyFan(intent, RelayToken.read(remotePrefs))) return
                     // 固定应用选择页准入列表请求（设置页 ← :ui，探针同款有序广播信道）：
                     // resultExtras 回带 DataLoader 缓存（同步读，陈旧即触发后台刷新，不阻塞
                     // 应答）。模块进程被 blocklist 拒绝调 getFreeformSuggestionList，只能

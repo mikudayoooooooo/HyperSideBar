@@ -14,6 +14,7 @@ import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import com.lsp.hypersidebar.ui.fan.FanMenuController
 import com.lsp.hypersidebar.util.DataLoader
+import com.lsp.hypersidebar.util.RelayToken
 import io.github.kyuubiran.ezxhelper.core.ClassLoaderProvider
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.EzXposed
@@ -61,7 +62,10 @@ class EdgeGestureHook(
                 shouldSimulateRelayDead = {
                     runCatching { remotePrefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false) }
                         .getOrDefault(false)
-                }
+                },
+                // 随广播附令牌（:ui 侧 FreeformRelayHook 校验）：每次发送时现读，
+                // 保证令牌下发后的第一次呼出就能带上新值，而不是绑死启动快照
+                relayToken = { runCatching { RelayToken.read(remotePrefs) }.getOrNull() }
             ),
             onMechanismResult = { ok, reason ->
                 // show 成功不清零（实测轮二踩坑）：呼出与执行端是独立机制，两次选中之间

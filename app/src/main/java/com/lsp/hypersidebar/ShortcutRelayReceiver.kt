@@ -6,6 +6,7 @@ import android.content.Intent
 import android.util.Log
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.util.DefaultLaunchStrategy
+import com.lsp.hypersidebar.util.RelayToken
 import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.ShortcutLauncher
 import org.json.JSONObject
@@ -20,17 +21,17 @@ private const val TAG = "ShortcutRelay"
  * 编辑页测试启动的 root 链路已验证）。:ui 预检失败时把完整 ShortcutAction JSON
  * 广播过来，本接收器走完整启动链（validate 失败 → 直试 → ANF → su root）。
  *
- * 防伪：令牌校验（PrefKeys.RELAY_LAUNCH_TOKEN，两侧同源共享）——否则任意 App
- * 可伪造广播借 root am start 启动任意组件。
+ * 防伪：运行期随机令牌校验（[RelayToken]，remotePrefs 分发）——否则任意 App 可伪造
+ * 广播借 root am start 启动任意组件。原硬编码令牌反编译即可读出，等同零校验（批次 0 修复）。
+ * 令牌在本进程由 MainActivity/AllAppsActivity 同步 remotePrefs 时生成并缓存；缓存为空
+ * （模块 App 从未启动过）时一律拒绝——root 代发是最坏场景，宁可拒绝不可放行。
+ * 该拒收影响面极小：用户没打开过 App 就不存在已配置的快捷方式可代发。
  */
 class ShortcutRelayReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != PrefKeys.RELAY_LAUNCH_ACTION) return
-        if (intent.getStringExtra(PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN) != PrefKeys.RELAY_LAUNCH_TOKEN) {
-            Log.w(TAG, "relay launch rejected: bad token")
-            return
-        }
+        if (!RelayToken.verifyRelay(intent)) return
         val json = intent.getStringExtra(PrefKeys.RELAY_LAUNCH_EXTRA_SHORTCUT) ?: return
         val shortcut = runCatching {
             ShortcutAction.fromJson(JSONObject(json))

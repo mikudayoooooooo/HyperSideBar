@@ -213,19 +213,50 @@ private fun AllAppsScreen(
     var entries by remember { mutableStateOf<List<GridEntry>>(emptyList()) }
     var hasFixedApps by remember { mutableStateOf(false) }
 
-    // 全部应用：优先用 ：ui 经 intent 传入的列表（首帧可显）；extras 缺失（异常路径）
-    // 才退回进程内 DataLoader——模块进程被 hidden API blocklist 拒绝，大概率空结果
-    LaunchedEffect(initialSuggestions) {
+    // 全部应用：优先用 ：ui 经 intent 传入的列表（首帧可显）。A4 冷启动 hydrate：
+    // extras 缺失（:ui 冷进程缓存空，>5s 空窗来源）时先灌 remotePrefs 缓存
+    // （CACHED_SUGGESTIONS，上次会话准入列表，与 AppSelectionPage 同键同格式）
+    // 立即出列表，等待循环只负责新数据覆盖；extras 齐全时后台写回保鲜。
+    // 模块进程被 hidden API blocklist 拒绝，DataLoader 只是最后兜底（大概率空）
+    LaunchedEffect(prefs, initialSuggestions) {
         if (!initialSuggestions.isNullOrEmpty()) {
             allPkgs = initialSuggestions
+            // 后台写回保鲜：内容没变不写（AllApps 高频打开，实际写盘趋近于零）
+            withContext(Dispatchers.IO) {
+                val json = org.json.JSONArray(initialSuggestions).toString()
+                val current = runCatching { prefs.getString(PrefKeys.CACHED_SUGGESTIONS, null) }.getOrNull()
+                if (current != json) {
+                    runCatching {
+                        prefs.edit().putString(PrefKeys.CACHED_SUGGESTIONS, json).apply()
+                    }
+                }
+            }
         } else {
+            // 1) 先灌缓存：remotePrefs 未绑定（fallbackPrefs 空壳）时读到空，
+            //    绑定完成后 LaunchedEffect(prefs) 重跑本段补灌
+            val cached = runCatching {
+                prefs.getString(PrefKeys.CACHED_SUGGESTIONS, null)?.let { json ->
+                    val arr = org.json.JSONArray(json)
+                    (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+                }
+            }.getOrNull().orEmpty()
+            if (cached.isNotEmpty()) allPkgs = cached
+            // 2) 等待 DataLoader 新数据（维持既有 1.5s 上限循环），拿到非空即覆盖 + 写回
             var list = DataLoader.loadApps(context)
             val deadline = System.currentTimeMillis() + MAX_DATA_WAIT_MS
             while (list.isEmpty() && System.currentTimeMillis() < deadline) {
                 delay(250)
                 list = DataLoader.loadApps(context)
             }
-            allPkgs = list
+            if (list.isNotEmpty()) {
+                allPkgs = list
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        prefs.edit().putString(PrefKeys.CACHED_SUGGESTIONS, org.json.JSONArray(list).toString()).apply()
+                    }
+                }
+            }
+            // 3) 全部落空且无缓存：allPkgs 保持空 → 空态文案兜底
         }
     }
 

@@ -12,7 +12,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,10 +37,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.theme.HyperSidebarTheme
 import com.lsp.hypersidebar.theme.ThemeModes
@@ -56,7 +55,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.Locale
 
@@ -252,24 +253,26 @@ private fun AllAppsScreen(
         }.toMap()
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MiuixTheme.colorScheme.background)
-    ) {
-        Text(
-            "全部应用",
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)
-        )
-
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+    Scaffold(
+        topBar = {
+            // freeform 小窗纵向空间有限：先取小标题形态（largeTitle 置空）。
+            // 真机 A/B：若想试 MIUI 大标题收缩，去掉 largeTitle 参数即可（迭代五批次 1 验证门）
+            TopAppBar(
+                title = stringResource(R.string.all_apps_title),
+                largeTitle = ""
+            )
+        }
+    ) { innerPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
             if (entries.isEmpty()) {
                 // 空态显式占位：避免被误读为黑屏（remote prefs 异步绑定与数据等待期间的过渡态）
                 Text(
                     if (!hasFixedApps) "加载中…" else "暂无更多可打开应用",
-                    fontSize = 13.sp,
+                    style = MiuixTheme.textStyles.footnote1,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     modifier = Modifier.align(Alignment.Center)
                 )
@@ -290,13 +293,12 @@ private fun AllAppsScreen(
                     }
                 ) { _, entry ->
                     when (entry) {
+                        // MIUI 抽屉的字母 header 就是一行小灰字：无通栏色带、无加粗
                         is GridEntry.Header -> Text(
                             entry.text,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
+                            style = MiuixTheme.textStyles.footnote1,
                             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                             modifier = Modifier
-                                .background(MiuixTheme.colorScheme.surfaceContainerHigh)
                                 .fillMaxWidth()
                                 .padding(horizontal = 20.dp, vertical = 6.dp)
                         )
@@ -319,7 +321,7 @@ private fun AllAppsScreen(
                 letterOffsets.forEach { (letter, idx) ->
                     Text(
                         letter,
-                        fontSize = 10.sp,
+                        style = MiuixTheme.textStyles.footnote2,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         modifier = Modifier
                             .padding(vertical = 1.dp)
@@ -369,12 +371,12 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
                     modifier = Modifier.size(40.dp)
                 )
             } else {
-                Text(label.take(1), fontSize = 18.sp, color = MiuixTheme.colorScheme.onSurface)
+                Text(label.take(1), style = MiuixTheme.textStyles.title4, color = MiuixTheme.colorScheme.onSurface)
             }
         }
         Text(
             label,
-            fontSize = 11.sp,
+            style = MiuixTheme.textStyles.footnote2,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             color = MiuixTheme.colorScheme.onSurface,

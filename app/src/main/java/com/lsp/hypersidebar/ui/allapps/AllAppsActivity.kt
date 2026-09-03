@@ -3,12 +3,20 @@ package com.lsp.hypersidebar.ui.allapps
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
+import android.view.HapticFeedbackConstants
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +34,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,7 +45,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -67,6 +79,9 @@ private const val MAX_DATA_WAIT_MS = 1500L
 
 /** 磁贴圆角提为常量：避免每磁贴每次重组重复分配 Shape。 */
 private val TILE_SHAPE = RoundedCornerShape(14.dp)
+
+/** 索引气泡圆角（A2）：MIUI 抽屉同款圆角方，非整圆。 */
+private val BUBBLE_SHAPE = RoundedCornerShape(24.dp)
 
 /**
  * 全部应用面板（PRD §7.3.2，样式参照 assets/image/全部应用.png 的抽屉网格）：
@@ -253,6 +268,57 @@ private fun AllAppsScreen(
         }.toMap()
     }
 
+    // ---- A2 索引条交互态 ----
+    val view = LocalView.current
+    // 拖动/点按中的字母：驱动中央气泡与索引条高亮；null=无交互
+    var activeLetter by remember { mutableStateOf<String?>(null) }
+    // 拖动进行中守卫：点按气泡的延时清除不得误杀拖动中的气泡
+    var dragActive by remember { mutableStateOf(false) }
+    // 索引条内容区高度（onSizeChanged 与 pointerInput 同在 padding 之后，坐标系一致）
+    var barHeightPx by remember { mutableStateOf(0f) }
+    val letters = remember(letterOffsets) { letterOffsets.keys.toList() }
+
+    // 跨字母震动：activeLetter 变化即 CLOCK_TICK——structuralEqualityPolicy 保证
+    // 同字母重复赋值不触发 effect 重启，"跨字母才震"由此天然满足（点按/拖动共用）
+    LaunchedEffect(activeLetter) {
+        if (activeLetter != null) {
+            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            // 点按场景气泡短暂驻留后自动消失；拖动场景由 dragActive 守卫不清除
+            delay(600)
+            if (!dragActive) activeLetter = null
+        }
+    }
+
+    // 当前组高亮：firstVisibleItemIndex 反查最近的字母 header。
+    // "已添加"不在 letterOffsets（构建时已过滤），首屏停留在固定区时无高亮，符合预期；
+    // derivedStateOf 只在跨组时产生新值，避免滚动逐帧驱动索引条重组
+    val currentLetter by remember(letterOffsets) {
+        derivedStateOf {
+            val first = gridState.firstVisibleItemIndex
+            var best: String? = null
+            var bestIdx = -1
+            letterOffsets.forEach { (l, idx) ->
+                if (idx <= first && idx > bestIdx) { best = l; bestIdx = idx }
+            }
+            best
+        }
+    }
+
+    fun jumpTo(letter: String?) {
+        if (letter == null) return
+        letterOffsets[letter]?.let { idx ->
+            activeLetter = letter
+            scope.launch { gridState.scrollToItem(idx) }
+        }
+    }
+
+    // 均分映射：条内 y 坐标 → 字母（MIUI 抽屉同款近似，字母行高均匀）
+    fun letterAt(y: Float): String? {
+        if (barHeightPx <= 0f || letters.isEmpty()) return null
+        val i = ((y / barHeightPx) * letters.size).toInt().coerceIn(0, letters.size - 1)
+        return letters.getOrNull(i)
+    }
+
     Scaffold(
         topBar = {
             // freeform 小窗纵向空间有限：先取小标题形态（largeTitle 置空）。
@@ -308,24 +374,65 @@ private fun AllAppsScreen(
                     }
                 }
             }
-            // 字母索引条：贴右缘，点按跳组
+            // 字母索引条：贴右缘。点按跳组 + 垂直拖动连续跳组（A2）；
+            // 字母本身不再各自 clickable——整条两个 pointerInput 接管，tap 识别器自动让位 drag
             Column(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .fillMaxHeight()
                     .width(28.dp)
-                    .padding(vertical = 8.dp),
+                    .padding(vertical = 8.dp)
+                    .onSizeChanged { barHeightPx = it.height.toFloat() }
+                    .pointerInput(letterOffsets) {
+                        detectTapGestures { offset -> jumpTo(letterAt(offset.y)) }
+                    }
+                    .pointerInput(letterOffsets) {
+                        detectVerticalDragGestures(
+                            onDragStart = { dragActive = true },
+                            onDragEnd = { dragActive = false; activeLetter = null },
+                            onDragCancel = { dragActive = false; activeLetter = null },
+                            onVerticalDrag = { change, _ ->
+                                // change.position 为相对本节点坐标，与 barHeightPx 同坐标系
+                                dragActive = true
+                                jumpTo(letterAt(change.position.y))
+                            }
+                        )
+                    },
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                letterOffsets.forEach { (letter, idx) ->
+                letters.forEach { letter ->
                     Text(
                         letter,
                         style = MiuixTheme.textStyles.footnote2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier
-                            .padding(vertical = 1.dp)
-                            .clickable { scope.launch { gridState.scrollToItem(idx) } }
+                        // 优先级：拖动/点按中的字母 > 当前组字母 > 普通态
+                        color = if (letter == (activeLetter ?: currentLetter)) {
+                            MiuixTheme.colorScheme.primary
+                        } else {
+                            MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        }
+                    )
+                }
+            }
+            // 中央大字气泡（A2）：MIUI 抽屉同款，primary 蓝底白字（暗色 primaryContainer
+            // 是灰底灰字对比不足，故弃用）；拖动中实时跟随，松手即收
+            AnimatedVisibility(
+                visible = activeLetter != null,
+                enter = fadeIn() + scaleIn(initialScale = 0.6f),
+                exit = scaleOut(targetScale = 0.6f) + fadeOut(),
+                modifier = Modifier.align(Alignment.Center)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(88.dp)
+                        .clip(BUBBLE_SHAPE)
+                        .background(MiuixTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        activeLetter.orEmpty(),
+                        style = MiuixTheme.textStyles.title1,
+                        color = MiuixTheme.colorScheme.onPrimary
                     )
                 }
             }

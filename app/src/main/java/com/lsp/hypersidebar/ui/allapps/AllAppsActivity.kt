@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -17,6 +18,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -77,8 +81,8 @@ private const val TAG = "AllAppsActivity"
 private const val PREFS_NAME = "hyperSidebar_prefs"
 private const val MAX_DATA_WAIT_MS = 1500L
 
-/** 磁贴圆角提为常量：避免每磁贴每次重组重复分配 Shape。 */
-private val TILE_SHAPE = RoundedCornerShape(14.dp)
+/** 磁贴圆角提为常量：避免每磁贴每次重组重复分配 Shape。A3：14→18dp（MIUI 抽屉近亲） */
+private val TILE_SHAPE = RoundedCornerShape(18.dp)
 
 /** 索引气泡圆角（A2）：MIUI 抽屉同款圆角方，非整圆。 */
 private val BUBBLE_SHAPE = RoundedCornerShape(24.dp)
@@ -456,29 +460,46 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
     }
     // Painter 随位图记忆化：否则每次重组（含同位图）都重建 BitmapPainter/asImageBitmap
     val painter = remember(bitmap) { bitmap?.let { BitmapPainter(it.asImageBitmap()) } }
+    // A3 按压反馈：scale 0.92、无 ripple（MIUI 磁贴只有缩放没有水波纹）；
+    // scale 值在 graphicsLayer lambda（draw 阶段）读取，动画帧跳过重组直接作用绘制
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val pressScale = animateFloatAsState(if (pressed) 0.92f else 1f, label = "tilePressScale")
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .graphicsLayer {
+                val s = pressScale.value
+                scaleX = s
+                scaleY = s
+            }
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
             .padding(horizontal = 6.dp, vertical = 8.dp)
     ) {
-        Box(
-            modifier = Modifier
-                .size(56.dp)
-                .clip(TILE_SHAPE)
-                .background(MiuixTheme.colorScheme.surfaceContainerHigh),
-            contentAlignment = Alignment.Center
-        ) {
-            // 局部捕获：delegated property 不能 smart cast
+        // A3 去托底：正常态图标 48dp 直接展示（MIUI 抽屉样式，图标自带形状边界）；
+        // miss 占位态保留托底 + 首字母。外层恒定 56dp 盒，防图标加载完成后行高跳变
+        Box(modifier = Modifier.size(56.dp), contentAlignment = Alignment.Center) {
             if (painter != null) {
                 Image(
                     painter = painter,
                     contentDescription = label,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(48.dp)
                 )
             } else {
-                Text(label.take(1), style = MiuixTheme.textStyles.title4, color = MiuixTheme.colorScheme.onSurface)
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(TILE_SHAPE)
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(label.take(1), style = MiuixTheme.textStyles.title4, color = MiuixTheme.colorScheme.onSurface)
+                }
             }
         }
         Text(

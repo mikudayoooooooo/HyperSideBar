@@ -18,7 +18,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -26,9 +28,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import top.yukonga.miuix.kmp.basic.Text
@@ -53,6 +57,36 @@ fun QuickAppsBar(
     Box(
         modifier = Modifier.fillMaxSize()
     ) {
+        // B3 选中反馈对齐扇形：选中图标上方显示应用名标签（样式同扇形 SelectedLabel）
+        if (selectedIndex in quickApps.indices) {
+            val app = quickApps[selectedIndex]
+            val iconPx = pxIconSize
+            val pad = barPadding
+            val step = iconPx * 1.35f
+            val cx = geometry.quickBarX + pad + selectedIndex * step + iconPx / 2f
+            var labelSize by remember { mutableStateOf(IntSize.Zero) }
+            Box(
+                modifier = Modifier
+                    .offset {
+                        IntOffset(
+                            (cx - labelSize.width / 2f).toInt(),
+                            (geometry.quickBarY - labelSize.height - 8.dp.roundToPx()).toInt()
+                        )
+                    }
+                    .alpha(if (labelSize == IntSize.Zero) 0f else 1f)
+                    .onSizeChanged { labelSize = it }
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(colors.surfaceContainerHigh.copy(alpha = 0.95f))
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = app.appName.ifEmpty { app.packageName },
+                    color = colors.onSurface,
+                    style = top.yukonga.miuix.kmp.theme.MiuixTheme.textStyles.footnote1
+                )
+            }
+        }
         Row(
             modifier = Modifier
                 .offset {
@@ -104,10 +138,11 @@ private fun QuickAppIcon(
             .size(iconSize.dp)
             .scale(iconScale)
             .alpha(iconAlpha)
-            .clip(CircleShape)
+            // B1 圆角 mask 统一：CircleShape → 圆角方（与扇形图标一致）
+            .clip(RoundedCornerShape((iconSize * 0.25f).dp))
             .background(
                 if (isSelected) colors.primaryContainer.copy(alpha = 0.9f)
-                else colors.surfaceContainerHigh
+                else colors.surfaceContainerHigh.copy(alpha = 0.35f)
             )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
@@ -122,9 +157,12 @@ private fun QuickAppIcon(
 
         if (isSelected) {
             androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                drawCircle(
+                // B1：描边随 mask 同形状（圆角方）
+                drawRoundRect(
                     color = colors.primary,
-                    radius = size.minDimension / 2f,
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(
+                        size.minDimension * 0.25f, size.minDimension * 0.25f
+                    ),
                     style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
                     alpha = iconAlpha
                 )

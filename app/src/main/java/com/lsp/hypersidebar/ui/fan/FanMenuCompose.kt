@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -23,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -189,7 +189,9 @@ private fun FanAppIcon(
             .size(iconSize.dp)
             .scale(scale * iconScale)
             .alpha(alpha * iconAlpha)
-            .clip(CircleShape)
+            // B1 圆角 mask 统一：CircleShape → 圆角方（图标尺寸 1/4，与应用图标
+            // 原生圆角一致；扇形/快捷栏/AllApps 全线统一）
+            .clip(RoundedCornerShape((iconSize * 0.25f).dp))
             .background(
                 if (isSelected) colors.primaryContainer.copy(alpha = 0.9f)
                 else colors.surfaceContainer.copy(alpha = 0.85f)
@@ -206,9 +208,10 @@ private fun FanAppIcon(
 
         if (isSelected) {
             androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                drawCircle(
+                // B1：描边随 mask 同形状（圆角方）
+                drawRoundRect(
                     color = colors.primary,
-                    radius = size.minDimension / 2f,
+                    cornerRadius = CornerRadius(size.minDimension * 0.25f, size.minDimension * 0.25f),
                     style = Stroke(width = 2.dp.toPx()),
                     alpha = alpha
                 )

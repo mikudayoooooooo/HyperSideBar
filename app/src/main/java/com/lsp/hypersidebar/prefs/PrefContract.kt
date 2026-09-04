@@ -112,6 +112,10 @@ object LayoutDefaults {
     const val TRIGGER_DWELL_MS = 250
     const val TRIGGER_MIN_DISTANCE_DP = 30f
 
+    /** AllApps 面板 FLAG_BLUR_BEHIND 模糊半径 dp（A5，模块进程 only）。纯视觉默认值，
+     *  不暴露设置项——无对应 PrefKey，恢复默认审计（D4）无需覆盖。 */
+    const val ALLAPPS_BLUR_RADIUS_DP = 40
+
     /** 所有布局相关键。恢复默认时批量写回。 */
     val layoutKeys = listOf(
         PrefKeys.ICON_SIZE,

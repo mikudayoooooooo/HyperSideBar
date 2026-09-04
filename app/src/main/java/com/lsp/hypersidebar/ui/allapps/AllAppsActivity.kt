@@ -2,8 +2,12 @@ package com.lsp.hypersidebar.ui.allapps
 
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.res.Configuration
+import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.os.Bundle
 import android.view.HapticFeedbackConstants
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -46,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.BitmapPainter
@@ -57,6 +62,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
+import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.theme.HyperSidebarTheme
 import com.lsp.hypersidebar.theme.ThemeModes
@@ -116,6 +122,8 @@ class AllAppsActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         fallbackPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         remotePrefs = cachedRemotePrefs
+        // A5 面板毛玻璃：window 层 flag + scrim，须在 setContent 前定（Compose 全透明承接）
+        applyPanelBlur()
         suggestions = intent.getStringArrayListExtra(EXTRA_SUGGESTIONS)
         XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
             override fun onServiceBind(service: XposedService) {
@@ -173,6 +181,40 @@ class AllAppsActivity : ComponentActivity() {
     private fun currentThemeMode(): String =
         (remotePrefs ?: fallbackPrefs).getString(PrefKeys.THEME_MODE, ThemeModes.MONET_SYSTEM)
             ?: ThemeModes.MONET_SYSTEM
+
+    /**
+     * A5 面板毛玻璃：FLAG_BLUR_BEHIND（公共 API 31+，minSdk 26 需门控）。
+     * 门控 isCrossWindowBlurEnabled——系统关"模糊效果"/设备不支持 → 降级全不透明
+     * surface scrim，观感对齐旧版。scrim 深浅与 Compose 层 colorMode 同源
+     * （HyperSidebarTheme 的 isDark 映射复刻，系统跟随态用 uiMode 判定）。
+     * freeform 小窗上 blur behind 的实机表现以装机为准（风险清单项）。
+     */
+    private fun applyPanelBlur() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val dark = when (currentThemeMode()) {
+            ThemeModes.DARK, ThemeModes.MONET_DARK -> true
+            ThemeModes.LIGHT, ThemeModes.MONET_LIGHT -> false
+            else -> (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        }
+        val blurEnabled = runCatching {
+            getSystemService(WindowManager::class.java).isCrossWindowBlurEnabled
+        }.getOrDefault(false)
+        if (blurEnabled) {
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_BLUR_BEHIND,
+                WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+            )
+            window.attributes = window.attributes.apply {
+                blurBehindRadius =
+                    (LayoutDefaults.ALLAPPS_BLUR_RADIUS_DP * resources.displayMetrics.density).toInt()
+            }
+        }
+        // scrim 底色对齐 miuix surface（light 0xF7F7F7 / dark 0x000000）；
+        // blur 开 = 72% alpha 透出模糊，blur 关 = 全不透明
+        val base = if (dark) 0x000000 else 0xF7F7F7
+        val scrim = ((if (blurEnabled) 0xB8 else 0xFF) shl 24) or base
+        window.setBackgroundDrawable(ColorDrawable(scrim))
+    }
 }
 
 /** 字母索引分组（A-Z + #）；中文经 ICU Han-Latin 转写取首字母，失败落 #。 */
@@ -355,12 +397,15 @@ private fun AllAppsScreen(
     }
 
     Scaffold(
+        // A5：全透明承接 window 层 scrim/blur（不透明背景会完全遮住模糊）
+        containerColor = Color.Transparent,
         topBar = {
             // freeform 小窗纵向空间有限：先取小标题形态（largeTitle 置空）。
             // 真机 A/B：若想试 MIUI 大标题收缩，去掉 largeTitle 参数即可（迭代五批次 1 验证门）
             TopAppBar(
                 title = stringResource(R.string.all_apps_title),
-                largeTitle = ""
+                largeTitle = "",
+                color = Color.Transparent
             )
         }
     ) { innerPadding ->

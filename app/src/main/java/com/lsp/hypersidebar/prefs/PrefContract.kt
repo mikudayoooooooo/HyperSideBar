@@ -112,9 +112,14 @@ object LayoutDefaults {
     const val TRIGGER_DWELL_MS = 250
     const val TRIGGER_MIN_DISTANCE_DP = 30f
 
-    /** AllApps 面板 FLAG_BLUR_BEHIND 模糊半径 dp（A5，模块进程 only）。纯视觉默认值，
-     *  不暴露设置项——无对应 PrefKey，恢复默认审计（D4）无需覆盖。 */
-    const val ALLAPPS_BLUR_RADIUS_DP = 40
+    // ===== 扇形面板自糊材质参数（批次 1.5 定稿） =====
+    // 面板**自身材质**自糊：扇形内主题色径向渐变（Monet 取色的 surfaceContainer）
+    // 经 LayerBackdrop 记录后由 textureBlur 糊化。纯视觉内部默认值——不暴露设置项
+    // 时无需四件套（D4 审计零负担）；若将来做成用户可调，此处即为默认值落点。
+    const val FAN_MATERIAL_BLUR_RADIUS_DP = 40f   // 糊化强度，越大越"玻璃"
+    const val FAN_MATERIAL_ALPHA_CORE = 0.62f     // 渐变起点（扇心）不透明度
+    const val FAN_MATERIAL_ALPHA_EDGE = 0.26f     // 渐变终点（外缘）不透明度；落差=纹理强度
+    const val FAN_MATERIAL_VEIL_ALPHA = 0.14f     // 糊化层上压的主题色 veil（影响图标可读性）
 
     /** 所有布局相关键。恢复默认时批量写回。 */
     val layoutKeys = listOf(

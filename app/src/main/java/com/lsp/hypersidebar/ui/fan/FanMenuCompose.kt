@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import com.lsp.hypersidebar.prefs.LayoutDefaults
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.blur.BlurDefaults
 import top.yukonga.miuix.kmp.blur.layerBackdrop
@@ -52,17 +53,6 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 选中态图标放大倍数（PRD §7.3.2"图标放大1.25倍"）；SelectedLabel 避让计算同源。 */
 internal const val SELECTED_ICON_SCALE = 1.25f
-
-// ===== 批次 1.5 面板自糊材质参数（观感调参集中处；真机反馈后微调） =====
-/** 自糊模糊半径（dp）：越大越"糊"，40≈MIUI 玻璃感。 */
-private const val MATERIAL_BLUR_RADIUS_DP = 40f
-/** 材质源层：扇心处主题色不透明度（渐变起点——强）。 */
-private const val MATERIAL_ALPHA_CORE = 0.62f
-/** 材质源层：外缘处主题色不透明度（渐变终点——弱，制造纹理供糊化）。 */
-private const val MATERIAL_ALPHA_EDGE = 0.26f
-/** 糊化层之上再压一层主题色 veil，保证深浅主题下的可读性与色调统一。 */
-private const val MATERIAL_VEIL_ALPHA = 0.14f
-// ===== 材质参数结束 =====
 
 @Composable
 fun FanMenuCompose(
@@ -165,8 +155,8 @@ private fun FanBackground(
             drawArc(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        colors.surfaceContainer.copy(alpha = MATERIAL_ALPHA_CORE),
-                        colors.surfaceContainer.copy(alpha = MATERIAL_ALPHA_EDGE)
+                        colors.surfaceContainer.copy(alpha = LayoutDefaults.FAN_MATERIAL_ALPHA_CORE),
+                        colors.surfaceContainer.copy(alpha = LayoutDefaults.FAN_MATERIAL_ALPHA_EDGE)
                     ),
                     center = Offset(geometry.anchor.x, geometry.anchor.y),
                     radius = geometry.outerRadius
@@ -191,14 +181,14 @@ private fun FanBackground(
                 .textureBlur(
                     backdrop = backdrop,
                     shape = FanSectorShape(geometry),
-                    blurRadius = MATERIAL_BLUR_RADIUS_DP * density,
+                    blurRadius = LayoutDefaults.FAN_MATERIAL_BLUR_RADIUS_DP * density,
                     noiseCoefficient = BlurDefaults.NoiseCoefficient
                 )
         )
         // 主题色调 veil + 描边（毛玻璃之上压主题色）
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
             drawArc(
-                color = colors.surfaceContainer.copy(alpha = MATERIAL_VEIL_ALPHA * alpha),
+                color = colors.surfaceContainer.copy(alpha = LayoutDefaults.FAN_MATERIAL_VEIL_ALPHA * alpha),
                 startAngle = geometry.startAngle,
                 sweepAngle = geometry.spanAngle,
                 useCenter = true,

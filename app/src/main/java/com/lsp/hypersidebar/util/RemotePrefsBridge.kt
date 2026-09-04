@@ -2,6 +2,9 @@ package com.lsp.hypersidebar.util
 
 import android.content.SharedPreferences
 import android.util.Log
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import java.util.concurrent.CopyOnWriteArrayList
@@ -24,9 +27,13 @@ object RemotePrefsBridge : XposedServiceHelper.OnServiceListener {
 
     const val PREFS_NAME = "hyperSidebar"
 
-    /** LSPosed 服务端 RemotePreferences 快照；onServiceDied 后为 null。 */
-    @Volatile
-    var prefs: SharedPreferences? = null
+    /**
+     * LSPosed 服务端 RemotePreferences 快照；onServiceDied 后为 null。
+     * 用 Compose state 承载：绑定完成本身即全局重组信号——任何在组合期读取
+     * 本值的页面（如 SettingsPage 的 D1 修复）都会被强制刷新，不依赖上游
+     * 参数链（navigation3 entry 可能固化旧参数捕获）。
+     */
+    var prefs: SharedPreferences? by mutableStateOf(null)
         private set
 
     /** 服务句柄（MainScreen 等需要直接调 service API 的消费者使用）。 */

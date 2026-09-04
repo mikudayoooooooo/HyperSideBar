@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.theme.ThemeMode
 import com.lsp.hypersidebar.theme.ThemeModes
+import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.ShortcutStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -61,14 +62,18 @@ internal fun SettingsPage(
     onNavigateToShortcutSelection: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var enabled by remember(prefs, prefsRevision) {
-        mutableStateOf(prefs.getBoolean(PrefKeys.ENABLED, true))
+    // D1：绑定晚到时参数 prefs 仍是本地空壳（remember 首读即 0 且 revision 通道只覆盖
+    // 本地写入）。bridge.prefs 是 Compose state——绑定完成强制本组合重组并切换读取源，
+    // 不依赖上游参数链（navigation3 entry 可能固化旧参数捕获）
+    val effectivePrefs = RemotePrefsBridge.prefs ?: prefs
+    var enabled by remember(effectivePrefs, prefsRevision) {
+        mutableStateOf(effectivePrefs.getBoolean(PrefKeys.ENABLED, true))
     }
-    val selectedApps = remember(prefs, prefsRevision) {
-        prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty().size
+    val selectedApps = remember(effectivePrefs, prefsRevision) {
+        effectivePrefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty().size
     }
-    val shortcutStats = remember(prefs, prefsRevision) {
-        val all = ShortcutStore.loadUserShortcuts(prefs)
+    val shortcutStats = remember(effectivePrefs, prefsRevision) {
+        val all = ShortcutStore.loadUserShortcuts(effectivePrefs)
         all.size to all.count { it.enabled }
     }
     val themeOptions = listOf(
@@ -90,7 +95,7 @@ internal fun SettingsPage(
     fun manualRetry() {
         // 手动重试：写时间戳，hook 侧比较 resetAt > 本端熔断时刻即解除
         //（launcher=下次边缘呼出，:ui=2s 看门狗内）；3s 后复测刷新状态行
-        prefs.edit()
+        effectivePrefs.edit()
             .putLong(PrefKeys.CIRCUIT_RESET_AT, System.currentTimeMillis())
             .commit()
         probeScope.launch {
@@ -137,7 +142,7 @@ internal fun SettingsPage(
                     checked = enabled,
                     onCheckedChange = {
                         enabled = it
-                        prefs.savePref(PrefKeys.ENABLED, it)
+                        effectivePrefs.savePref(PrefKeys.ENABLED, it)
                     }
                 )
             }

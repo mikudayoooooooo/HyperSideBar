@@ -97,8 +97,6 @@ class ComposeFanHost(
         quickApps: List<FanAppInfo>,
         isLandscape: Boolean
     ) {
-        // 批次 1.5 毛玻璃：壁纸糊化源幂等预热（进程内首次呼出启动，一次缓存永不变更）
-        FanBackdrop.prewarm(context)
         val wm = windowManager
             ?: (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
                 .also { windowManager = it }
@@ -349,11 +347,13 @@ class ComposeFanHost(
             gravity = Gravity.TOP or Gravity.START
             x = 0
             y = 0
-            // 批次 1.5 方案 C spike：overlay 窗口系统毛玻璃排除性验证。
-            // AOSP 对 SYSTEM_ALERT_WINDOW 默认禁 cross-window blur，大概率无效——
-            // 真机确认后归档（无效则删本段）。blurBehindRadius 为 px，40px 试值
-            flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
-            blurBehindRadius = 40
+            // 方案 C 真机结论（2026-09-04）：overlay 窗口加 FLAG_BLUR_BEHIND +
+            // blurBehindRadius **在本机 HyperOS 上确实生效**（弧形背后被系统糊化）
+            // ——即 MIUI 放开了 SYSTEM_ALERT_WINDOW 的 cross-window blur（AOSP 默认禁）。
+            // 但用户澄清方向：要的是"面板本身"的模糊质感，不是背后画面模糊，
+            // 故撤销（能力已验证、留档备用：将来若要背后模糊，加回本 2 行即可）。
+            // flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+            // blurBehindRadius = 40
         }
 
     /** 摘窗口并复位交互态（不动 composition/lifecycle——池化复用的前提）。 */

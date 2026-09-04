@@ -3,7 +3,6 @@ package com.lsp.hypersidebar.ui.fan
 import android.content.Context
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -25,23 +25,13 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Outline
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.runtime.MutableState
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -133,27 +123,13 @@ private fun FanBackground(
     alpha: Float,
     modifier: Modifier = Modifier
 ) {
+    // 回退基线（2026-09-04 用户澄清后）：用户要的是"面板本身"的模糊质感，
+    // 而非背后画面/壁纸的模糊——背后模糊路径（壁纸采样、PixelCopy、FLAG_BLUR_BEHIND）
+    // 全部撤销，扇形维持纯着色弧 + 描边形态，待自糊方案定稿后重塑。
     Box(modifier = modifier.fillMaxSize()) {
-        // 批次 1.5 毛玻璃：FanBackdrop 离线糊化的背后画面（PixelCopy 自截 launcher
-        // 窗口），裁扇形显示——面板拿到的永远是"已糊好的图"，无清晰帧闪现；
-        // 无画面（冷启动首呼出/截图失败）时走原着色弧兜底
-        FanBackdrop.image?.let { backdropImage ->
-            Image(
-                bitmap = backdropImage,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .matchParentSize()
-                    .graphicsLayer { this.alpha = alpha }
-                    .clip(FanSectorShape(geometry))
-            )
-        }
-        // 主题色调 veil + 描边（毛玻璃之上压主题色；无画面时即原着色弧兜底）
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-            val hasBackdrop = FanBackdrop.image != null
-            val veilAlpha = if (hasBackdrop) 0.22f else 0.15f
             drawArc(
-                color = colors.surfaceContainer.copy(alpha = veilAlpha * alpha),
+                color = colors.surfaceContainer.copy(alpha = 0.15f * alpha),
                 startAngle = geometry.startAngle,
                 sweepAngle = geometry.spanAngle,
                 useCenter = true,
@@ -184,32 +160,6 @@ private fun FanBackground(
                 alpha = alpha
             )
         }
-    }
-}
-
-/** 扇形 Outline（圆心=呼出锚点，useCenter 闭合），供 textureBlur 裁切。 */
-private class FanSectorShape(private val geometry: FanGeometry) : Shape {
-    override fun createOutline(
-        size: Size,
-        layoutDirection: LayoutDirection,
-        density: Density
-    ): Outline {
-        val path = Path().apply {
-            moveTo(geometry.anchor.x, geometry.anchor.y)
-            arcTo(
-                rect = Rect(
-                    left = geometry.anchor.x - geometry.outerRadius,
-                    top = geometry.anchor.y - geometry.outerRadius,
-                    right = geometry.anchor.x + geometry.outerRadius,
-                    bottom = geometry.anchor.y + geometry.outerRadius
-                ),
-                startAngleDegrees = geometry.startAngle,
-                sweepAngleDegrees = geometry.spanAngle,
-                forceMoveTo = false
-            )
-            close()
-        }
-        return Outline.Generic(path)
     }
 }
 

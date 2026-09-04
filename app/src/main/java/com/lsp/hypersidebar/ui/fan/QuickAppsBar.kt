@@ -62,7 +62,9 @@ fun QuickAppsBar(
                     )
                 }
                 .clip(RoundedCornerShape((iconSizeDp / 2f + 4f).dp))
-                .background(colors.surfaceContainer.copy(alpha = 0.9f))
+                // 批次 1.5 v2：条底改半透明淡着色——毛玻璃材质由 FanBackground 的
+                // 联合形状层（扇形+快捷栏一次糊化）承担，这里只做色调区分
+                .background(colors.surfaceContainer.copy(alpha = 0.25f))
                 .padding(
                     horizontal = (iconSizeDp * 0.25f).dp,
                     vertical = (iconSizeDp * 0.25f).dp
@@ -107,7 +109,7 @@ private fun QuickAppIcon(
             .clip(CircleShape)
             .background(
                 if (isSelected) colors.primaryContainer.copy(alpha = 0.9f)
-                else colors.surfaceContainerHigh
+                else colors.surfaceContainerHigh.copy(alpha = 0.35f)
             )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center

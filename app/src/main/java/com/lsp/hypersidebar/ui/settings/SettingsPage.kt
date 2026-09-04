@@ -81,9 +81,29 @@ internal fun SettingsPage(
         stringResource(R.string.theme_light),
         stringResource(R.string.theme_dark)
     )
-    val baseMode = ThemeModes.baseMode(currentThemeMode)
+    // 主题开关实时性（2026-09-04 用户反馈"开关要重开应用才刷新"）：currentThemeMode
+    // 参数链会被 navigation3 entry 固化（D1 同病）——开关自持 listener 直读 prefs，
+    // THEME_MODE 键值写入即时驱动本页重组（主题全局切换由 MainActivity 的键级
+    // 监听负责，此处只管开关自身的 checked 呈现）
+    var themeModeLive by remember(effectivePrefs) {
+        mutableStateOf(
+            effectivePrefs.getString(PrefKeys.THEME_MODE, ThemeModes.MONET_SYSTEM)
+                ?: ThemeModes.MONET_SYSTEM
+        )
+    }
+    DisposableEffect(effectivePrefs) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { p, key ->
+            if (key == PrefKeys.THEME_MODE) {
+                themeModeLive = p.getString(PrefKeys.THEME_MODE, ThemeModes.MONET_SYSTEM)
+                    ?: ThemeModes.MONET_SYSTEM
+            }
+        }
+        effectivePrefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { effectivePrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    val baseMode = ThemeModes.baseMode(themeModeLive)
     val selectedThemeIndex = ThemeModes.BASE_MODES.indexOf(baseMode).coerceAtLeast(0)
-    val useSystemColors = ThemeModes.usesSystemColors(currentThemeMode)
+    val useSystemColors = ThemeModes.usesSystemColors(themeModeLive)
 
     // hook 状态探针（§2.5.4）：设置页组合进入时双路 ping（切 Tab 返回会重新组合=顺带刷新）。
     // 旧通路（hook→app 经 remotePrefs 回写熔断/降级）在 LSPosed 下是死路：hook 进程 prefs 只读

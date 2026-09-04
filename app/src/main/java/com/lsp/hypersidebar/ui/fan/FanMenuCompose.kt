@@ -25,8 +25,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -139,20 +141,27 @@ private fun FanBackground(
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current.density
+    val context = LocalContext.current
     Box(modifier = modifier.fillMaxSize()) {
-        // 批次 1.5 定稿：**面板自身材质自糊**——糊的是面板自己画出来的那一层，
-        // 不采样任何外部画面（背后模糊/壁纸/PixelCopy 全部撤销）。
-        //   ① 源层：primaryContainer（Monet 紫系）径向三段渐变，外缘渐隐——
-        //      主题色调 + 柔和边缘，修正"纯黑无过渡"
-        //   ② 自糊：LayerBackdrop 记录源层 → textureBlur 糊它 + 噪点抗条带
-        //   ③ 描边收口
+        // 批次 1.5 v2：**面板自身材质自糊**——糊的是面板自己画出来的那一层，
+        // 不采样任何外部画面。源层 = 主题色渐变底 + 每个应用图标位置的
+        // **主色柔光斑**（IconPalette 提取图标平均色）：糊化后呈现"应用背后的
+        // 色彩晕染"，底色跟呼出的应用组合动态走（HyperOS 控制中心/文件夹观感）。
+        // 扇形与快捷栏共用同一材质层（联合形状一次糊化）——表现一体。
         val backdrop = rememberLayerBackdrop()
+        var paletteTick by remember { mutableIntStateOf(0) }
+        LaunchedEffect(geometry) {
+            val pkgs = geometry.items.map { it.app.packageName } +
+                geometry.quickApps.map { it.packageName }
+            IconPalette.extractAsync(context, pkgs) { paletteTick++ }
+        }
         Canvas(
             modifier = Modifier
                 .matchParentSize()
-                .clip(FanSectorShape(geometry))
+                .clip(FanMaterialShape(geometry, density))
                 .layerBackdrop(backdrop)
         ) {
+            // ① 渐变底：primaryContainer（Monet 紫系）三段径向渐变，外缘渐隐
             drawArc(
                 brush = Brush.radialGradient(
                     colors = listOf(
@@ -173,21 +182,68 @@ private fun FanBackground(
                 size = Size(geometry.outerRadius * 2, geometry.outerRadius * 2),
                 alpha = alpha
             )
+            // ② 图标主色柔光斑（paletteTick 驱动：主色提取到位即出现晕染）
+            paletteTick.let {
+                val spotR = geometry.iconSize * density * 1.5f
+                geometry.items.forEach { item ->
+                    IconPalette.colorOf(item.app.packageName)?.let { argb ->
+                        val tint = Color(argb)
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    tint.copy(alpha = 0.5f),
+                                    tint.copy(alpha = 0f)
+                                ),
+                                center = Offset(item.centerX, item.centerY),
+                                radius = spotR
+                            ),
+                            radius = spotR,
+                            center = Offset(item.centerX, item.centerY)
+                        )
+                    }
+                }
+                // 快捷栏区域：沿条带均匀分布的快捷应用主色光斑
+                val quick = geometry.quickApps.take(6)
+                if (quick.isNotEmpty()) {
+                    val iconPx = geometry.quickIconSize * density
+                    val pad = iconPx * 0.25f
+                    val step = iconPx * 1.35f
+                    quick.forEachIndexed { i, app ->
+                        IconPalette.colorOf(app.packageName)?.let { argb ->
+                            val tint = Color(argb)
+                            val cx = geometry.quickBarX + pad + i * step + iconPx / 2f
+                            val cy = geometry.quickBarY + pad + iconPx / 2f
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(
+                                        tint.copy(alpha = 0.45f),
+                                        tint.copy(alpha = 0f)
+                                    ),
+                                    center = Offset(cx, cy),
+                                    radius = iconPx * 1.5f
+                                ),
+                                radius = iconPx * 1.5f,
+                                center = Offset(cx, cy)
+                            )
+                        }
+                    }
+                }
+            }
         }
-        // 自糊层（盖在源层之上）：源层本就是柔和渐变，即使糊化首帧未就绪
-        // 露出的也是渐变本身——不会像"清晰桌面"那样突兀
+        // 自糊层（盖在源层之上）：源层本就是柔和渐变+光斑，即使糊化首帧未就绪
+        // 露出的也是渐变底——不会像"清晰桌面"那样突兀
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer { this.alpha = alpha }
                 .textureBlur(
                     backdrop = backdrop,
-                    shape = FanSectorShape(geometry),
+                    shape = FanMaterialShape(geometry, density),
                     blurRadius = LayoutDefaults.FAN_MATERIAL_BLUR_RADIUS_DP * density,
                     noiseCoefficient = BlurDefaults.NoiseCoefficient
                 )
         )
-        // 描边收口
+        // 描边收口：扇形 + 快捷栏条（一体双段描边）
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
             drawArc(
                 color = colors.outline.copy(alpha = 0.2f * alpha),
@@ -202,12 +258,34 @@ private fun FanBackground(
                 style = Stroke(width = 1.dp.toPx()),
                 alpha = alpha
             )
+            val quick = geometry.quickApps.take(6)
+            if (quick.isNotEmpty()) {
+                val iconPx = geometry.quickIconSize * density
+                val pad = iconPx * 0.25f
+                val w = quick.size * iconPx + (quick.size - 1) * iconPx * 0.35f + pad * 2
+                val h = iconPx + pad * 2
+                val r = (geometry.quickIconSize / 2f + 4f) * density
+                drawRoundRect(
+                    color = colors.outline.copy(alpha = 0.2f * alpha),
+                    topLeft = Offset(geometry.quickBarX, geometry.quickBarY),
+                    size = Size(w, h),
+                    cornerRadius = CornerRadius(r, r),
+                    style = Stroke(width = 1.dp.toPx()),
+                    alpha = alpha
+                )
+            }
         }
     }
 }
 
-/** 扇形 Outline（圆心=呼出锚点，useCenter 闭合），供材质源层裁切与自糊裁切。 */
-private class FanSectorShape(private val geometry: FanGeometry) : Shape {
+/**
+ * 材质联合形状：扇形（圆心=呼出锚点）+ 快捷栏圆角条——一次糊化覆盖两者，
+ * 表现一体。快捷栏条形尺寸与 QuickAppsBar 的 Row 布局同源（图标数×步进+内边距）。
+ */
+private class FanMaterialShape(
+    private val geometry: FanGeometry,
+    private val density: Float
+) : Shape {
     override fun createOutline(
         size: Size,
         layoutDirection: LayoutDirection,
@@ -227,6 +305,21 @@ private class FanSectorShape(private val geometry: FanGeometry) : Shape {
                 forceMoveTo = false
             )
             close()
+            val quick = geometry.quickApps.take(6)
+            if (quick.isNotEmpty()) {
+                val iconPx = geometry.quickIconSize * density.density
+                val pad = iconPx * 0.25f
+                val w = quick.size * iconPx + (quick.size - 1) * iconPx * 0.35f + pad * 2
+                val h = iconPx + pad * 2
+                val r = (geometry.quickIconSize / 2f + 4f) * density.density
+                addRoundRect(
+                    RoundRect(
+                        geometry.quickBarX, geometry.quickBarY,
+                        geometry.quickBarX + w, geometry.quickBarY + h,
+                        CornerRadius(r, r)
+                    )
+                )
+            }
         }
         return Outline.Generic(path)
     }

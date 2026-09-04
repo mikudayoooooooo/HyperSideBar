@@ -213,7 +213,8 @@ private fun FallbackIcon(
     Box(
         modifier = Modifier
             .size(size.dp)
-            .clip(CircleShape)
+            // B1：兜底头像与全线图标 mask 统一（圆角方）
+            .clip(RoundedCornerShape((size * 0.25f).dp))
             .background(androidx.compose.ui.graphics.Color(fallbackColor)),
         contentAlignment = Alignment.Center
     ) {

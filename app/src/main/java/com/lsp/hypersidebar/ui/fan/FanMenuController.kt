@@ -137,7 +137,11 @@ class FanMenuController(
             )
             val allQuick = runtimeQuick.map { sa ->
                 FanAppInfo(
-                    packageName = if (sa.kind == ShortcutKind.TOOLBOX) "__open_panel__" else "shortcut:${sa.id}",
+                    // 真实宿主包名（批次 2 修复）：此前用 "shortcut:${id}" 伪包名，
+                    // IconLoader.getApplicationIcon 必然 NameNotFound → drawable=null
+                    // → 快捷栏退化字首头像（圆形）而非宿主真图标。启动逻辑不依赖
+                    // packageName（走 actionHandle 闭包捕获的 sa），改真包名无副作用
+                    packageName = sa.packageName ?: "",
                     appName = sa.label,
                     actionHandle = { ctx ->
                         if (sa.kind == ShortcutKind.TOOLBOX) {

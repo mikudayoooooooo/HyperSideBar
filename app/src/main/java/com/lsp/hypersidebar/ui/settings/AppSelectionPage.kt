@@ -368,12 +368,8 @@ private fun AppSelectionRow(
 
 private fun loadInstalledApps(context: Context): List<AppItem> {
     val packageManager = context.packageManager
-    val installed = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-        packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
-    } else {
-        @Suppress("DEPRECATION")
-        packageManager.getInstalledApplications(0)
-    }
+    // minSdk 33：ApplicationInfoFlags 版恒定可用，无版本分支
+    val installed = packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
     return installed
         .asSequence()
         .filter { it.enabled }

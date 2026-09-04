@@ -4,8 +4,8 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.graphics.drawable.ColorDrawable
-import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.HapticFeedbackConstants
 import android.view.WindowManager
 import android.widget.Toast
@@ -70,9 +70,8 @@ import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import com.lsp.hypersidebar.util.AppIconCache
 import com.lsp.hypersidebar.util.AppMetaCache
 import com.lsp.hypersidebar.util.DataLoader
+import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.RelayToken
-import io.github.libxposed.service.XposedService
-import io.github.libxposed.service.XposedServiceHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -106,12 +105,6 @@ class AllAppsActivity : ComponentActivity() {
         /** :ui（system uid）启动时经 intent 传入的准入应用列表——模块进程被 hidden API
          *  blocklist 拒绝（getFreeformSuggestionList denied），自取数据不可行。 */
         const val EXTRA_SUGGESTIONS = "suggestions"
-
-        /** 跨实例缓存：XposedServiceHelper 全局只绑定一次，第二个 Activity 实例注册的
-         *  监听器可能不再收到回调——静态持有 remotePrefs 供后续实例直接可用
-         *  （修"后续打开看不到固定应用"：fallback 本地 prefs 是空壳）。 */
-        @Volatile
-        var cachedRemotePrefs: SharedPreferences? = null
     }
 
     private var remotePrefs by mutableStateOf<SharedPreferences?>(null)
@@ -121,33 +114,30 @@ class AllAppsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         fallbackPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        remotePrefs = cachedRemotePrefs
+        // D7 修复：改走进程级绑定桥。原自注册 listener 在"设置页先完成绑定后，
+        // 本 Activity 二次注册收不到回调"路径下 remotePrefs 永远为 null——本地
+        // 空壳 prefs 读不到 CUSTOM_APPS，固定应用消失（logcat 实证 2026-09-04）
+        remotePrefs = RemotePrefsBridge.prefs
         // A5 面板毛玻璃：window 层 flag + scrim，须在 setContent 前定（Compose 全透明承接）
         applyPanelBlur()
         suggestions = intent.getStringArrayListExtra(EXTRA_SUGGESTIONS)
-        XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
-            override fun onServiceBind(service: XposedService) {
-                Thread {
-                    runCatching { service.getRemotePreferences("hyperSidebar") }
-                        .onSuccess { prefs ->
-                            cachedRemotePrefs = prefs
-                            // 令牌同步（模块进程可写端）：面板进程可能是全新进程，
-                            // 未同步过则 :ui 侧 ShortcutRelayReceiver 无法完成 root 代发校验
-                            RelayToken.sync(prefs)
-                            runOnUiThread { remotePrefs = prefs }
-                        }
-                }.start()
+        RemotePrefsBridge.addListener { prefs ->
+            runOnUiThread {
+                remotePrefs = prefs
+                Log.i(
+                    TAG,
+                    "bridge bound: customApps=" +
+                        runCatching { prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()) }
+                            .getOrNull()?.size
+                )
             }
-
-            override fun onServiceDied(service: XposedService) {
-                remotePrefs = null
-            }
-        })
+        }
 
         setContent {
             HyperSidebarTheme(colorMode = currentThemeMode()) {
                 AllAppsScreen(
                     prefs = remotePrefs ?: fallbackPrefs,
+                    prefsIsFallback = remotePrefs == null,
                     initialSuggestions = suggestions,
                     onLaunch = { pkg ->
                         // 打开目标一律经 :ui 中继（system uid 才能算小窗 options 并
@@ -183,14 +173,13 @@ class AllAppsActivity : ComponentActivity() {
             ?: ThemeModes.MONET_SYSTEM
 
     /**
-     * A5 面板毛玻璃：FLAG_BLUR_BEHIND（公共 API 31+，minSdk 26 需门控）。
-     * 门控 isCrossWindowBlurEnabled——系统关"模糊效果"/设备不支持 → 降级全不透明
+     * A5 面板毛玻璃：FLAG_BLUR_BEHIND（公共 API；minSdk 33 后无需版本门控）。
+     * 运行时门控 isCrossWindowBlurEnabled——系统关"模糊效果"/设备不支持 → 降级全不透明
      * surface scrim，观感对齐旧版。scrim 深浅与 Compose 层 colorMode 同源
      * （HyperSidebarTheme 的 isDark 映射复刻，系统跟随态用 uiMode 判定）。
      * freeform 小窗上 blur behind 的实机表现以装机为准（风险清单项）。
      */
     private fun applyPanelBlur() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
         val dark = when (currentThemeMode()) {
             ThemeModes.DARK, ThemeModes.MONET_DARK -> true
             ThemeModes.LIGHT, ThemeModes.MONET_LIGHT -> false
@@ -247,6 +236,7 @@ private sealed class GridEntry {
 @Composable
 private fun AllAppsScreen(
     prefs: SharedPreferences,
+    prefsIsFallback: Boolean,
     initialSuggestions: List<String>?,
     onLaunch: (String) -> Unit
 ) {
@@ -310,6 +300,8 @@ private fun AllAppsScreen(
         val fixed = runCatching {
             prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty()
         }.getOrDefault(emptySet())
+        // D7 诊断：prefs 实例来源 + fixed 实读数量（绑定切换前后各一条）
+        Log.i(TAG, "assemble: prefsIsFallback=$prefsIsFallback, fixed=${fixed.size}, allPkgs=${pkgs.size}")
         if (pkgs.isEmpty() && fixed.isEmpty()) {
             hasFixedApps = false
             entries = emptyList()

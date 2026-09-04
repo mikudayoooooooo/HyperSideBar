@@ -4,7 +4,6 @@ import com.lsp.hypersidebar.prefs.savePref
 import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -17,11 +16,9 @@ import com.lsp.hypersidebar.theme.HyperSidebarTheme
 import com.lsp.hypersidebar.theme.ThemeMode
 import com.lsp.hypersidebar.theme.ThemeModes
 import com.lsp.hypersidebar.ui.settings.MainScreen
-import com.lsp.hypersidebar.util.RelayToken
+import com.lsp.hypersidebar.util.RemotePrefsBridge
 import io.github.libxposed.service.XposedService
-import io.github.libxposed.service.XposedServiceHelper
 
-private const val TAG = "MainActivity"
 private const val PREFS_NAME = "hyperSidebar_prefs"
 
 class MainActivity : ComponentActivity() {
@@ -34,26 +31,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         fallbackPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
-        XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
-            override fun onServiceBind(service: XposedService) {
-                Log.d(TAG, "XposedService bound")
-                xposedService = service
-                // getRemotePreferences 是一次性同步 binder 拉取全量快照，挪出主线程
-                Thread {
-                    val prefs = service.getRemotePreferences("hyperSidebar")
-                    // 跨进程广播防伪令牌：模块进程是唯一可写端，首次绑定即生成并缓存
-                    // （hook 进程 remotePrefs 只读，只能读到此值；见 RelayToken）
-                    RelayToken.sync(prefs)
-                    runOnUiThread { remotePrefs = prefs }
-                }.start()
+        // D7 修复：改走进程级绑定桥（原自注册 listener 在"设置页先完成绑定后，
+        // 本 Activity 重建时二次注册收不到回调"路径下 remotePrefs 永远为 null
+        // ——计数 0 的根因；见 RemotePrefsBridge）
+        RemotePrefsBridge.addListener { prefs ->
+            runOnUiThread {
+                remotePrefs = prefs
+                xposedService = RemotePrefsBridge.service
             }
-
-            override fun onServiceDied(service: XposedService) {
-                Log.d(TAG, "XposedService died")
-                xposedService = null
-                remotePrefs = null
-            }
-        })
+        }
 
         val storedTheme = fallbackPrefs.getString(PrefKeys.THEME_MODE, ThemeModes.MONET_SYSTEM)
             ?: ThemeModes.MONET_SYSTEM

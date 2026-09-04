@@ -347,13 +347,6 @@ class ComposeFanHost(
             gravity = Gravity.TOP or Gravity.START
             x = 0
             y = 0
-            // 方案 C 真机结论（2026-09-04）：overlay 窗口加 FLAG_BLUR_BEHIND +
-            // blurBehindRadius **在本机 HyperOS 上确实生效**（弧形背后被系统糊化）
-            // ——即 MIUI 放开了 SYSTEM_ALERT_WINDOW 的 cross-window blur（AOSP 默认禁）。
-            // 但用户澄清方向：要的是"面板本身"的模糊质感，不是背后画面模糊，
-            // 故撤销（能力已验证、留档备用：将来若要背后模糊，加回本 2 行即可）。
-            // flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
-            // blurBehindRadius = 40
         }
 
     /** 摘窗口并复位交互态（不动 composition/lifecycle——池化复用的前提）。 */

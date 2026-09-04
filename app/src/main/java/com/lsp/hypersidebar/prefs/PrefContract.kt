@@ -112,16 +112,6 @@ object LayoutDefaults {
     const val TRIGGER_DWELL_MS = 250
     const val TRIGGER_MIN_DISTANCE_DP = 30f
 
-    // ===== 扇形面板自糊材质参数（批次 1.5 定稿） =====
-    // 面板**自身材质**自糊：扇形内主题色（primaryContainer，Monet 紫系）径向三段
-    // 渐变——扇心浓、中段过渡、外缘**渐隐到透明**（边缘柔和融入桌面，不生硬）
-    // ——经 LayerBackdrop 记录后由 textureBlur 糊化。纯视觉内部默认值——不暴露
-    // 设置项时无需四件套（D4 审计零负担）；若将来做成用户可调，此处即为默认值落点。
-    const val FAN_MATERIAL_BLUR_RADIUS_DP = 40f   // 糊化强度，越大越"玻璃"
-    const val FAN_MATERIAL_ALPHA_CORE = 0.50f     // 渐变起点（扇心）不透明度——浓
-    const val FAN_MATERIAL_ALPHA_MID = 0.28f      // 渐变中段不透明度
-    const val FAN_MATERIAL_ALPHA_EDGE = 0f        // 渐变终点（外缘）——渐隐，边缘不生硬
-
     /** 所有布局相关键。恢复默认时批量写回。 */
     val layoutKeys = listOf(
         PrefKeys.ICON_SIZE,

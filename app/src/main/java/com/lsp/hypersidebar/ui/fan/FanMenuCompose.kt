@@ -188,21 +188,25 @@ private fun FanAppIcon(
             }
             .size(iconSize.dp)
             .scale(scale * iconScale)
-            .alpha(alpha * iconAlpha)
-            // B1 圆角 mask 统一：CircleShape → 圆角方（图标尺寸 1/4，与应用图标
-            // 原生圆角一致；扇形/快捷栏/AllApps 全线统一）
-            .clip(RoundedCornerShape((iconSize * 0.25f).dp))
-            .background(
-                if (isSelected) colors.primaryContainer.copy(alpha = 0.9f)
-                else colors.surfaceContainer.copy(alpha = 0.85f)
-            ),
+            .alpha(alpha * iconAlpha),
         contentAlignment = Alignment.Center
     ) {
+        // 选中高亮板仅选中态绘制：常态无底框——原生应用图标自带形状边界，
+        // 常驻托底 + 0.7 缩放会造成"双层方框夹空隙"（用户反馈空隙大）
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape((iconSize * 0.25f).dp))
+                    .background(colors.primaryContainer.copy(alpha = 0.9f))
+            )
+        }
         AppIconImage(
             drawable = drawable,
             fallbackColor = fallbackColor,
             appName = item.app.appName,
-            size = iconSize * 0.7f,
+            // 0.7（圆形托底时代遗留）→ 0.92：图标几乎占满，与 AllApps 去托底一致
+            size = iconSize * 0.92f,
             colors = colors
         )
 

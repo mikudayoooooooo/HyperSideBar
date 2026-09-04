@@ -97,6 +97,8 @@ class ComposeFanHost(
         quickApps: List<FanAppInfo>,
         isLandscape: Boolean
     ) {
+        // 批次 1.5 毛玻璃：背后画面预热（幂等，进程内首呼出启动壁纸采样）
+        FanBackdrop.prewarm(context)
         val wm = windowManager
             ?: (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
                 .also { windowManager = it }

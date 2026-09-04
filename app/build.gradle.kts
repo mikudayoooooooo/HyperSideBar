@@ -117,6 +117,9 @@ dependencies {
     implementation(libs.miuix.ui)
     implementation(libs.miuix.preference)
     implementation(libs.miuix.icons)
+    // miuix-blur（批次 1.5 定稿）：面板**自身材质**自糊（LayerBackdrop 记录
+    // 自己 → textureBlur 糊自己），不采样任何外部画面
+    implementation(libs.miuix.blur)
     implementation(libs.miuix.navigation3.ui)
     // miuix-navigation3-ui 只内嵌 ui/scene 包，runtime（NavKey/NavBackStack/NavEntry）需显式引入
     implementation(libs.androidx.navigation3.runtime)

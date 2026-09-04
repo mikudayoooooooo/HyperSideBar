@@ -3,6 +3,7 @@ package com.lsp.hypersidebar.ui.fan
 import android.content.Context
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,19 +26,43 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.blur.BlurDefaults
+import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
+import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 选中态图标放大倍数（PRD §7.3.2"图标放大1.25倍"）；SelectedLabel 避让计算同源。 */
 internal const val SELECTED_ICON_SCALE = 1.25f
+
+// ===== 批次 1.5 面板自糊材质参数（观感调参集中处；真机反馈后微调） =====
+/** 自糊模糊半径（dp）：越大越"糊"，40≈MIUI 玻璃感。 */
+private const val MATERIAL_BLUR_RADIUS_DP = 40f
+/** 材质源层：扇心处主题色不透明度（渐变起点——强）。 */
+private const val MATERIAL_ALPHA_CORE = 0.62f
+/** 材质源层：外缘处主题色不透明度（渐变终点——弱，制造纹理供糊化）。 */
+private const val MATERIAL_ALPHA_EDGE = 0.26f
+/** 糊化层之上再压一层主题色 veil，保证深浅主题下的可读性与色调统一。 */
+private const val MATERIAL_VEIL_ALPHA = 0.14f
+// ===== 材质参数结束 =====
 
 @Composable
 fun FanMenuCompose(
@@ -123,13 +148,29 @@ private fun FanBackground(
     alpha: Float,
     modifier: Modifier = Modifier
 ) {
-    // 回退基线（2026-09-04 用户澄清后）：用户要的是"面板本身"的模糊质感，
-    // 而非背后画面/壁纸的模糊——背后模糊路径（壁纸采样、PixelCopy、FLAG_BLUR_BEHIND）
-    // 全部撤销，扇形维持纯着色弧 + 描边形态，待自糊方案定稿后重塑。
+    val density = LocalDensity.current.density
     Box(modifier = modifier.fillMaxSize()) {
-        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+        // 批次 1.5 定稿：**面板自身材质自糊**——糊的是面板自己画出来的那一层，
+        // 不采样任何外部画面（背后模糊/壁纸/PixelCopy 全部撤销）。
+        //   ① 源层：主题色径向渐变（扇心强 → 外缘弱），必须有纹理才糊得出东西
+        //   ② 自糊：LayerBackdrop 记录源层 → textureBlur 糊它 + 噪点抗条带
+        //   ③ 主题 veil + 描边收口
+        val backdrop = rememberLayerBackdrop()
+        Canvas(
+            modifier = Modifier
+                .matchParentSize()
+                .clip(FanSectorShape(geometry))
+                .layerBackdrop(backdrop)
+        ) {
             drawArc(
-                color = colors.surfaceContainer.copy(alpha = 0.15f * alpha),
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        colors.surfaceContainer.copy(alpha = MATERIAL_ALPHA_CORE),
+                        colors.surfaceContainer.copy(alpha = MATERIAL_ALPHA_EDGE)
+                    ),
+                    center = Offset(geometry.anchor.x, geometry.anchor.y),
+                    radius = geometry.outerRadius
+                ),
                 startAngle = geometry.startAngle,
                 sweepAngle = geometry.spanAngle,
                 useCenter = true,
@@ -137,10 +178,35 @@ private fun FanBackground(
                     geometry.anchor.x - geometry.outerRadius,
                     geometry.anchor.y - geometry.outerRadius
                 ),
-                size = androidx.compose.ui.geometry.Size(
-                    geometry.outerRadius * 2,
-                    geometry.outerRadius * 2
+                size = Size(geometry.outerRadius * 2, geometry.outerRadius * 2),
+                alpha = alpha
+            )
+        }
+        // 自糊层（盖在源层之上）：源层本就是柔和渐变，即使糊化首帧未就绪
+        // 露出的也是渐变本身——不会像"清晰桌面"那样突兀
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { this.alpha = alpha }
+                .textureBlur(
+                    backdrop = backdrop,
+                    shape = FanSectorShape(geometry),
+                    blurRadius = MATERIAL_BLUR_RADIUS_DP * density,
+                    noiseCoefficient = BlurDefaults.NoiseCoefficient
+                )
+        )
+        // 主题色调 veil + 描边（毛玻璃之上压主题色）
+        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+            drawArc(
+                color = colors.surfaceContainer.copy(alpha = MATERIAL_VEIL_ALPHA * alpha),
+                startAngle = geometry.startAngle,
+                sweepAngle = geometry.spanAngle,
+                useCenter = true,
+                topLeft = Offset(
+                    geometry.anchor.x - geometry.outerRadius,
+                    geometry.anchor.y - geometry.outerRadius
                 ),
+                size = Size(geometry.outerRadius * 2, geometry.outerRadius * 2),
                 alpha = alpha
             )
             drawArc(
@@ -152,14 +218,37 @@ private fun FanBackground(
                     geometry.anchor.x - geometry.outerRadius,
                     geometry.anchor.y - geometry.outerRadius
                 ),
-                size = androidx.compose.ui.geometry.Size(
-                    geometry.outerRadius * 2,
-                    geometry.outerRadius * 2
-                ),
+                size = Size(geometry.outerRadius * 2, geometry.outerRadius * 2),
                 style = Stroke(width = 1.dp.toPx()),
                 alpha = alpha
             )
         }
+    }
+}
+
+/** 扇形 Outline（圆心=呼出锚点，useCenter 闭合），供材质源层裁切与自糊裁切。 */
+private class FanSectorShape(private val geometry: FanGeometry) : Shape {
+    override fun createOutline(
+        size: Size,
+        layoutDirection: LayoutDirection,
+        density: Density
+    ): Outline {
+        val path = Path().apply {
+            moveTo(geometry.anchor.x, geometry.anchor.y)
+            arcTo(
+                rect = Rect(
+                    left = geometry.anchor.x - geometry.outerRadius,
+                    top = geometry.anchor.y - geometry.outerRadius,
+                    right = geometry.anchor.x + geometry.outerRadius,
+                    bottom = geometry.anchor.y + geometry.outerRadius
+                ),
+                startAngleDegrees = geometry.startAngle,
+                sweepAngleDegrees = geometry.spanAngle,
+                forceMoveTo = false
+            )
+            close()
+        }
+        return Outline.Generic(path)
     }
 }
 

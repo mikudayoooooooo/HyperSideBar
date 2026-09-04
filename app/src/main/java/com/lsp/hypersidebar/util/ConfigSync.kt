@@ -96,6 +96,9 @@ object ConfigSync {
             val intent = Intent(ACTION_SYNC)
                 .putExtra("map", map as java.io.Serializable)
             context.sendBroadcast(intent)
+            // 诊断锚点：与 hook 侧 "config synced" 配对——推了没收到=投递问题，
+            // 没推=写入监听/绑定问题
+            Log.i(TAG, "sendSync: ${map.size} keys, iconSize=${map[com.lsp.hypersidebar.prefs.PrefKeys.ICON_SIZE]}")
         }.onFailure { Log.w(TAG, "sendSync failed: ${it.message}") }
     }
 

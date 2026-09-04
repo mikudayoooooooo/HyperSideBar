@@ -53,8 +53,6 @@ import top.yukonga.miuix.kmp.window.WindowDialog
 @Composable
 internal fun SettingsPage(
     prefs: SharedPreferences,
-    repo: SettingsRepository,
-    prefsRevision: Int,
     status: ModuleStatus,
     currentThemeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit,
@@ -66,13 +64,19 @@ internal fun SettingsPage(
     // 本地写入）。bridge.prefs 是 Compose state——绑定完成强制本组合重组并切换读取源，
     // 不依赖上游参数链（navigation3 entry 可能固化旧参数捕获）
     val effectivePrefs = RemotePrefsBridge.prefs ?: prefs
-    var enabled by remember(effectivePrefs, prefsRevision) {
+    // D1 写端残留（2026-09-04 logcat 实证：remote store 有 innerRadius/outerRadiusMax/
+    // 数量键=nav3 迁移前落盘的老值，唯独没有 iconSize）：repo 参数同样是 entry 固化的
+    // 绑定前捕获（包着本地 fallbackPrefs），布局 sheet commitDraft / 一键重置 / 预览卡
+    // 的读写全落在 hook 永远不可见的本地文件上。以 effectivePrefs 页内重建，读写同源。
+    val effectiveRepo = remember(effectivePrefs) { SettingsRepository(effectivePrefs) }
+    DisposableEffect(effectiveRepo) { onDispose { effectiveRepo.dispose() } }
+    var enabled by remember(effectivePrefs, effectiveRepo.revision) {
         mutableStateOf(effectivePrefs.getBoolean(PrefKeys.ENABLED, true))
     }
-    val selectedApps = remember(effectivePrefs, prefsRevision) {
+    val selectedApps = remember(effectivePrefs, effectiveRepo.revision) {
         effectivePrefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty().size
     }
-    val shortcutStats = remember(effectivePrefs, prefsRevision) {
+    val shortcutStats = remember(effectivePrefs, effectiveRepo.revision) {
         val all = ShortcutStore.loadUserShortcuts(effectivePrefs)
         all.size to all.count { it.enabled }
     }
@@ -132,7 +136,7 @@ internal fun SettingsPage(
     var showResetConfirm by remember { mutableStateOf(false) }
 
     fun openLayoutSheet(orientation: LayoutOrientation) {
-        repo.discardDraft() // 兜底清残留（上次关闭未走 onDismissFinished 的极端路径）
+        effectiveRepo.discardDraft() // 兜底清残留（上次关闭未走 onDismissFinished 的极端路径）
         sheetOrientation = orientation
         sheetVisible = true
     }
@@ -140,7 +144,7 @@ internal fun SettingsPage(
     // 草稿守卫：sheet 关闭或页面离开组合（含切 Tab 丢 sheet 状态）时兜底丢弃，
     // 防止残留草稿持续泄漏进预览卡的草稿优先读（"没保存却生效"的观感来源）
     DisposableEffect(sheetOrientation) {
-        onDispose { repo.discardDraft() }
+        onDispose { effectiveRepo.discardDraft() }
     }
 
     SettingsList(modifier = modifier) {
@@ -171,7 +175,7 @@ internal fun SettingsPage(
         item { SmallTitle(text = stringResource(R.string.effect_preview)) }
         item {
             LayoutPreviewCard(
-                repo = repo,
+                repo = effectiveRepo,
                 onPortraitClick = { openLayoutSheet(LayoutOrientation.PORTRAIT) },
                 onLandscapeClick = { openLayoutSheet(LayoutOrientation.LANDSCAPE) }
             )
@@ -241,11 +245,11 @@ internal fun SettingsPage(
     LayoutBottomSheet(
         show = sheetVisible,
         orientation = sheetOrientation ?: LayoutOrientation.PORTRAIT,
-        repo = repo,
+        repo = effectiveRepo,
         onDismiss = { sheetVisible = false },
         onDismissFinished = {
             // 保存路径 commit 已清空草稿，此处为无操作；取消/滑掉/返回=丢弃
-            repo.discardDraft()
+            effectiveRepo.discardDraft()
             sheetOrientation = null
         }
     )
@@ -254,7 +258,7 @@ internal fun SettingsPage(
     ResetConfirmDialog(
         show = showResetConfirm,
         onConfirm = {
-            repo.restoreAllDefaults()
+            effectiveRepo.restoreAllDefaults()
             showResetConfirm = false
             Toast.makeText(
                 context,

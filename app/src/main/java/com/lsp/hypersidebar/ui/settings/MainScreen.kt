@@ -187,8 +187,6 @@ internal fun MainScreen(
                         ) {
                             SettingsPage(
                                 prefs = prefs,
-                                repo = settingsRepo,
-                                prefsRevision = prefsRevision,
                                 status = moduleStatus,
                                 currentThemeMode = themeMode,
                                 onThemeModeChange = onThemeModeChange,

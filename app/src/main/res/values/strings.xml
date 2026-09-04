@@ -52,6 +52,9 @@
     <string name="theme_dark">深色</string>
     <string name="system_colors">系统配色</string>
     <string name="system_colors_summary">使用 HyperOS 系统动态颜色</string>
+    <string name="interaction_section">交互</string>
+    <string name="trigger_dwell_title">呼出停顿</string>
+    <string name="trigger_dwell_summary">贴边停顿 %1$d ms 后展开扇形</string>
     <string name="defaults_section">重置</string>
     <string name="restore_defaults">恢复默认值</string>
     <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，立即生效</string>
@@ -181,5 +184,7 @@
     <string name="activity_picker_search">搜索活动…</string>
     <string name="activity_picker_loading">正在加载…</string>
     <string name="activity_picker_count">%d 个活动</string>
+    <string name="activity_picker_filter_targets">只看快捷方式 (%1$d)</string>
+    <string name="activity_picker_filter_all">显示全部 (%1$d)</string>
     <string name="all_apps_title">全部应用</string>
 </resources>

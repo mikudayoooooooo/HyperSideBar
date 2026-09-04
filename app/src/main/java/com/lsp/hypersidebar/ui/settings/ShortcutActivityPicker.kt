@@ -1,12 +1,15 @@
 package com.lsp.hypersidebar.ui.settings
 
 import android.content.Context
+import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
+import android.os.Process
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -21,6 +24,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -33,6 +37,7 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.preference.ArrowPreference
@@ -48,7 +53,8 @@ data class ComponentInfo(
     val label: String,
     val appLabel: String,
     val exported: Boolean,
-    val isService: Boolean
+    val isService: Boolean,
+    val isShortcutTarget: Boolean = false
 )
 
 private data class AppInfo(
@@ -203,6 +209,15 @@ private fun ActivityList(
     onSelected: (packageName: String, activityName: String, label: String) -> Unit,
     onBack: () -> Unit
 ) {
+    // C2（批次 3）：默认只看快捷方式目标（发现过滤器），一键切回全量；无目标时直接全量
+    val targetCount = app.components.count { it.isShortcutTarget }
+    var onlyShortcuts by remember(app.packageName) { mutableStateOf(targetCount > 0) }
+    val shown = if (onlyShortcuts && targetCount > 0) {
+        app.components.filter { it.isShortcutTarget }
+    } else {
+        app.components
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -226,23 +241,41 @@ private fun ActivityList(
         }
 
         item {
-            Text(
-                text = stringResource(
-                    R.string.shortcut_components_info,
-                    app.components.size,
-                    app.components.count { !it.exported }
-                ),
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                style = MiuixTheme.textStyles.footnote1,
-                modifier = Modifier.padding(vertical = 4.dp)
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+            ) {
+                Text(
+                    text = stringResource(
+                        R.string.shortcut_components_info,
+                        app.components.size,
+                        app.components.count { !it.exported }
+                    ),
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    style = MiuixTheme.textStyles.footnote1,
+                    modifier = Modifier.weight(1f)
+                )
+                if (targetCount > 0) {
+                    TextButton(
+                        text = if (onlyShortcuts) {
+                            stringResource(R.string.activity_picker_filter_all, app.components.size)
+                        } else {
+                            stringResource(R.string.activity_picker_filter_targets, targetCount)
+                        },
+                        onClick = { onlyShortcuts = !onlyShortcuts }
+                    )
+                }
+            }
         }
 
-        items(app.components, key = { it.className + (if (it.isService) "#s" else "#a") }) { info ->
+        items(shown, key = { it.className + (if (it.isService) "#s" else "#a") }) { info ->
             val typeTag = if (info.isService) "[S] " else ""
+            val quickTag = if (info.isShortcutTarget) "[快捷] " else ""
             val lockTag = if (!info.exported) " 🔒" else ""
             ArrowPreference(
-                title = typeTag + info.label.ifEmpty { info.className.substringAfterLast('.') } + lockTag,
+                title = quickTag + typeTag + info.label.ifEmpty { info.className.substringAfterLast('.') } + lockTag,
                 summary = info.className,
                 onClick = { onSelected(info.packageName, info.className, info.label) }
             )
@@ -250,8 +283,36 @@ private fun ActivityList(
     }
 }
 
+/**
+ * C1 spike / C2 数据源（批次 3）：LauncherApps.getShortcuts(MATCH_MANIFEST) 取全系统
+ * 清单静态快捷方式，返回 包名 → 目标 activity 类名集合。只当"发现过滤器"——
+ * 启动机制零改动（仍 am start 组件名，root 可拉起非导出目标）。
+ * 失败（受限/异常）返回空 map，列表退化为未过滤全量，不影响可用性。
+ */
+private fun loadShortcutTargetActivities(context: Context): Map<String, Set<String>> =
+    runCatching {
+        val la = context.getSystemService(LauncherApps::class.java)
+            ?: return@runCatching emptyMap<String, Set<String>>()
+        val query = LauncherApps.ShortcutQuery()
+            .setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST)
+        val infos = la.getShortcuts(query, Process.myUserHandle()).orEmpty()
+        val map = HashMap<String, MutableSet<String>>()
+        infos.forEach { si ->
+            val cn = si.activity ?: return@forEach
+            map.getOrPut(cn.packageName) { HashSet() }.add(cn.className)
+        }
+        // spike 判定点：可见性/稳定性实证（C1b）
+        Log.i(TAG, "ShortcutProbe: manifest=${infos.size} pkgs=${map.size} " +
+            "sample=${map.entries.take(3).joinToString { "${it.key}=${it.value.size}" }}")
+        map
+    }.getOrElse { e ->
+        Log.w(TAG, "ShortcutProbe failed: ${e.javaClass.simpleName}: ${e.message}")
+        emptyMap()
+    }
+
 private fun loadAppsByPackage(context: Context): List<AppInfo> {
     val pm = context.packageManager
+    val shortcutTargets = loadShortcutTargetActivities(context)
     val apps = mutableMapOf<String, MutableList<ComponentInfo>>()
     val labels = mutableMapOf<String, String>()
 
@@ -264,6 +325,7 @@ private fun loadAppsByPackage(context: Context): List<AppInfo> {
                 pm.getPackageInfo(pkgName, PackageManager.GET_ACTIVITIES or PackageManager.GET_SERVICES)
             }.getOrNull() ?: continue
 
+            val targets = shortcutTargets[pkgName].orEmpty()
             val components = mutableListOf<ComponentInfo>()
 
             // Activities（含非导出）
@@ -274,7 +336,8 @@ private fun loadAppsByPackage(context: Context): List<AppInfo> {
                     label = runCatching { ai.loadLabel(pm).toString() }.getOrNull() ?: "",
                     appLabel = "",
                     exported = ai.exported,
-                    isService = false
+                    isService = false,
+                    isShortcutTarget = ai.name in targets
                 ))
             }
 
@@ -305,7 +368,9 @@ private fun loadAppsByPackage(context: Context): List<AppInfo> {
         AppInfo(
             packageName = pkgName,
             appLabel = labels[pkgName] ?: pkgName,
-            components = components.sortedWith(compareBy({ !it.exported }, { it.isService }, { it.label.ifEmpty { it.className } }))
+            components = components.sortedWith(
+                compareBy({ !it.isShortcutTarget }, { !it.exported }, { it.isService }, { it.label.ifEmpty { it.className } })
+            )
         )
     }.sortedBy { it.appLabel.lowercase(Locale.ROOT) }
 }

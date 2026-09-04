@@ -49,6 +49,7 @@ import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.window.WindowDialog
+import kotlin.math.roundToInt
 
 @Composable
 internal fun SettingsPage(
@@ -223,6 +224,33 @@ internal fun SettingsPage(
                         }
                     )
                 }
+            }
+        }
+
+        // D2（批次 4，用户 2026-09-04 定稿）：呼出停顿滑条 150~350ms 步进 50 默认 250——
+        // 取消 0 档（极易误触）、上限 500→350 收窄；150ms 快松预选锁死是独立硬编码守卫不受影响。
+        // 拖动只改本地 state，松手才落盘（=一次 ConfigSync 广播）；restoreDefaults 后经
+        // revision 通道回读默认值（D4 复原审计 ✓）
+        item { SmallTitle(text = stringResource(R.string.interaction_section)) }
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                var dwellMs by remember(effectivePrefs, effectiveRepo.revision) {
+                    mutableStateOf(effectiveRepo.triggerDwellMs())
+                }
+                SettingsSliderItem(
+                    title = stringResource(R.string.trigger_dwell_title),
+                    summary = stringResource(R.string.trigger_dwell_summary, dwellMs),
+                    value = dwellMs.toFloat(),
+                    valueRange = 150f..350f,
+                    steps = 3,
+                    onValueChange = {
+                        dwellMs = ((it / 50f).roundToInt() * 50).coerceIn(150, 350)
+                    },
+                    onValueChangeFinished = {
+                        effectiveRepo.save(PrefKeys.TRIGGER_DWELL_MS, dwellMs)
+                    },
+                    compact = true
+                )
             }
         }
 

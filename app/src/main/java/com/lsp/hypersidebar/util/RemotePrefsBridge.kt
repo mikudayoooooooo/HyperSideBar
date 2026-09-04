@@ -1,5 +1,6 @@
 package com.lsp.hypersidebar.util
 
+import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +58,12 @@ object RemotePrefsBridge : XposedServiceHelper.OnServiceListener {
             XposedServiceHelper.registerListener(this)
         }
         prefs?.let(onBound)
+    }
+
+    /** 模块进程侧配置同步：注册写入监听（写入即全量广播给 hook 进程）+ 绑定完成即推一次。 */
+    fun registerConfigSync(context: Context) {
+        val p = prefs ?: return
+        com.lsp.hypersidebar.util.ConfigSync.ensureModuleSide(context, p)
     }
 
     override fun onServiceBind(service: XposedService) {

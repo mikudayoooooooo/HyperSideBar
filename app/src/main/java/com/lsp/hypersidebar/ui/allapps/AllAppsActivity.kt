@@ -125,6 +125,7 @@ class AllAppsActivity : ComponentActivity() {
                             .getOrNull()?.size
                 )
             }
+            RemotePrefsBridge.registerConfigSync(applicationContext)
         }
 
         setContent {

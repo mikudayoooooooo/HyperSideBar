@@ -13,8 +13,13 @@ object FreeformLauncher {
     /** 模块自身包名：Intent(context, Class) 会把 component 包名绑到宿主进程包（:ui 里
      *  =com.miui.securitycenter，实测系统 resolve "does not exist" result -92 且
      *  startActivityAsUser 静默"成功"）——activity 类随模块代码加载进宿主，但 manifest
-     *  注册在模块包，跨进程拉起必须显式用模块包名。 */
-    const val MODULE_PACKAGE = "com.lsp.hypersidebar"
+     *  注册在模块包，跨进程拉起必须显式用模块包名。
+     *
+     *  迭代五批次 0：必须等于 app/build.gradle.kts 的 applicationId（APK 身份），
+     *  与源码 namespace（com.lsp.hypersidebar）解耦——改包名时此处同步改。 */
+    const val MODULE_PACKAGE = "io.github.mikudayoooooooo.hypersidebar"
+    /** 源码命名空间（类路径前缀）：与 applicationId 解耦，跨进程寻址"包名 + 类路径"时拼接用。 */
+    const val MODULE_CLASS_NAMESPACE = "com.lsp.hypersidebar"
 
     fun launch(context: Context, packageName: String) {
         val clsName = getMainActivity(context, packageName)

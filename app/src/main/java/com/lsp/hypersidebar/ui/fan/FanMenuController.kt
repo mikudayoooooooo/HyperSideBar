@@ -28,21 +28,13 @@ private const val FAN_IDLE_TIMEOUT_MS = 10_000L
  * 仅此两类——单应用启动失败属数据面，不在此报。
  */
 class FanMenuController(
-    prefs: SharedPreferences,
-    private val prefsProvider: (() -> SharedPreferences)? = null,
+    private val prefs: SharedPreferences,
     private val launchStrategy: FanLaunchStrategy,
     private val onMechanismResult: ((success: Boolean, reason: String) -> Unit)? = null
 ) {
 
-    /**
-     * 每呼出由 [prefsProvider] 刷新（D3/滑条失效修复）：libxposed 的
-     * RemotePreferences 是构造时一次拉取的**不可变快照**且无跨进程推送
-     * （源码 101.0.0 实证，XposedInit 的 P5 listener 注释与库实现不符）——
-     * hook 进程不重拉的话，设置页的任何改动（图标大小/dwell/开关）在
-     * hook 进程重启前永远不可见。provider 每次现调 getRemotePreferences，
-     * 无论 LSPosed 返回新快照还是缓存实例，两种行为下都取到当前最准值。
-     */
-    private var prefs: SharedPreferences = prefs
+    // prefs 实例由装配方提供（hook 进程为 SyncedPrefs 同步感知装饰器——
+    // 配置同步广播缓存命中优先，设置页写入即时可见；见 util/ConfigSync）
 
     @Volatile
     var isShowing = false
@@ -95,9 +87,6 @@ class FanMenuController(
         // 实测轮七：入口状态遥测——定位 isShowing 被无日志翻转的路径（双开根因）
         Log.i(TAG, "showInternal enter: isShowing=$isShowing host=${host != null} anchor=($anchorX,$anchorY)")
         if (isShowing && host != null) return
-
-        // 每呼出现取最新 prefs 快照（provider 由 XposedInit 注入 getRemotePreferences）
-        prefsProvider?.let { prefs = it() }
 
         isShowing = true
         // 防御性单窗口不变量：任何状态下不允许两个 fan 窗口并存——

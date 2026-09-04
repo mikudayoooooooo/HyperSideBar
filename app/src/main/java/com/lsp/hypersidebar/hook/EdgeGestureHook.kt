@@ -38,12 +38,11 @@ private const val TAG = "EdgeGesture"
  * - 拦截层：GestureStubView$3.onSwipeStop 翻转首参为 false（消费路径漏事件时的兜底）
  */
 class EdgeGestureHook(
-    remotePrefs: SharedPreferences,
-    private val prefsProvider: (() -> SharedPreferences)? = null
+    remotePrefs: SharedPreferences
 ) : BaseHook() {
 
-    // 每呼出由 prefsProvider 刷新（死快照修复，见 XposedInit 装配注释）——
-    // dwell/令牌/熔断读取随之取到当前值
+    // 批次 2 起包装为 SyncedPrefs（XposedInit 装配）：配置同步广播缓存命中优先，
+    // 设置页任何写入即时生效——remotePrefs 保持 var 以便将来替换实例
     private var remotePrefs: SharedPreferences = remotePrefs
 
     override val name = "EdgeGesture"
@@ -58,7 +57,6 @@ class EdgeGestureHook(
     private val fanController: FanMenuController by lazy {
         FanMenuController(
             remotePrefs,
-            prefsProvider = prefsProvider,
             BroadcastLaunchStrategy(
                 launchAction = ACTION_FAN_LAUNCH,
                 onRelayResult = { alive, what ->
@@ -169,6 +167,9 @@ class EdgeGestureHook(
                         receiver, IntentFilter(PrefKeys.PROBE_ACTION_HOME), Context.RECEIVER_EXPORTED
                     )
                     Log.i(TAG, "probe receiver registered (via Application.attach)")
+                    // 配置同步通道（批次 2）：收设置页全量推送，根治 hook 进程死快照
+                    com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx)
+                    Log.i(TAG, "config sync receiver registered (via Application.attach)")
                 } catch (e: Throwable) {
                     Log.e(TAG, "probe receiver registration failed: ${e.message}", e)
                 }

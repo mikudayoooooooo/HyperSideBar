@@ -18,6 +18,7 @@ import com.lsp.hypersidebar.theme.HyperSidebarTheme
 import com.lsp.hypersidebar.theme.ThemeMode
 import com.lsp.hypersidebar.theme.ThemeModes
 import com.lsp.hypersidebar.ui.settings.MainScreen
+import com.lsp.hypersidebar.util.ConfigSync
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import io.github.libxposed.service.XposedService
 
@@ -41,6 +42,9 @@ class MainActivity : ComponentActivity() {
                 remotePrefs = prefs
                 xposedService = RemotePrefsBridge.service
             }
+            // 配置同步通道（批次 2）：模块进程任何 prefs 写入即全量广播给
+            // hook 进程（幂等注册）；绑定完成本身也推一次
+            RemotePrefsBridge.registerConfigSync(applicationContext)
         }
 
         val storedTheme = fallbackPrefs.getString(PrefKeys.THEME_MODE, ThemeModes.MONET_SYSTEM)

@@ -374,10 +374,6 @@ class EdgeGestureHook(
         Log.i(TAG, "showFan: anchor=($anchorX, $anchorY) downY=$downY dwell=${dwellMs()}ms")
         val r = Runnable {
             pendingShow = null
-            // 批次 1.5 毛玻璃：呼出瞬间自截 launcher 窗口（壁纸+图标全量合成，
-            // 手势必在 launcher 前台故画面必真实）；异步回调更新采样缓存，
-            // 本呼出先用既有画面（壁纸兜底）
-            stub?.let { com.lsp.hypersidebar.ui.fan.FanBackdrop.captureHostWindow(it) }
             fanController.show(ctx, anchorX, anchorY)
         }
         pendingShow = r

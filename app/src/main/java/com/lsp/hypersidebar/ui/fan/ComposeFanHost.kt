@@ -97,6 +97,8 @@ class ComposeFanHost(
         quickApps: List<FanAppInfo>,
         isLandscape: Boolean
     ) {
+        // 批次 1.5 毛玻璃：壁纸糊化源幂等预热（进程内首次呼出启动，一次缓存永不变更）
+        FanBackdrop.prewarm(context)
         val wm = windowManager
             ?: (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
                 .also { windowManager = it }
@@ -347,6 +349,11 @@ class ComposeFanHost(
             gravity = Gravity.TOP or Gravity.START
             x = 0
             y = 0
+            // 批次 1.5 方案 C spike：overlay 窗口系统毛玻璃排除性验证。
+            // AOSP 对 SYSTEM_ALERT_WINDOW 默认禁 cross-window blur，大概率无效——
+            // 真机确认后归档（无效则删本段）。blurBehindRadius 为 px，40px 试值
+            flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+            blurBehindRadius = 40
         }
 
     /** 摘窗口并复位交互态（不动 composition/lifecycle——池化复用的前提）。 */

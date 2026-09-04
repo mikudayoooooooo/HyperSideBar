@@ -38,8 +38,13 @@ private const val TAG = "EdgeGesture"
  * - 拦截层：GestureStubView$3.onSwipeStop 翻转首参为 false（消费路径漏事件时的兜底）
  */
 class EdgeGestureHook(
-    private val remotePrefs: SharedPreferences
+    remotePrefs: SharedPreferences,
+    private val prefsProvider: (() -> SharedPreferences)? = null
 ) : BaseHook() {
+
+    // 每呼出由 prefsProvider 刷新（死快照修复，见 XposedInit 装配注释）——
+    // dwell/令牌/熔断读取随之取到当前值
+    private var remotePrefs: SharedPreferences = remotePrefs
 
     override val name = "EdgeGesture"
 
@@ -53,6 +58,7 @@ class EdgeGestureHook(
     private val fanController: FanMenuController by lazy {
         FanMenuController(
             remotePrefs,
+            prefsProvider = prefsProvider,
             BroadcastLaunchStrategy(
                 launchAction = ACTION_FAN_LAUNCH,
                 onRelayResult = { alive, what ->

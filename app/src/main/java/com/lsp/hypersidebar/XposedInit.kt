@@ -45,8 +45,13 @@ class XposedInit : XposedModule() {
             param.packageName == "com.miui.home" && procName == "com.miui.home" -> {
                 // 竖屏边缘手势通道（内滑+停顿零干扰透传；横屏触发已移交 :ui B 路线）
                 if (edgeGestureHook == null) {
-                    val prefs = remotePrefsWithProbe()
-                    edgeGestureHook = EdgeGestureHook(prefs)
+                    // prefsProvider：每次呼出现调 getRemotePreferences 拉最新快照——
+                    // RemotePreferences 无跨进程推送（库源码实证），固定实例是死快照，
+                    // 设置页的滑条/开关改动 hook 进程重启前不可见（D3 结论）
+                    edgeGestureHook = EdgeGestureHook(
+                        remotePrefsWithProbe(),
+                        prefsProvider = { getRemotePreferences("hyperSidebar") }
+                    )
                 }
                 initHooks(edgeGestureHook!!)
             }

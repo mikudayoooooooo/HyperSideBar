@@ -69,7 +69,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private val fanController: FanMenuController by lazy {
         FanMenuController(
             remotePrefs,
-            DirectLaunchStrategy(remotePrefs),
+            launchStrategy = DirectLaunchStrategy(remotePrefs),
             onMechanismResult = { ok, reason ->
                 // fan 窗口装配失败 = 机制性失败（熔断数据源）；成功 = 连续失败清零
                 if (ok) breaker.recordSuccess() else breaker.recordFailure(reason)

@@ -7,6 +7,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +53,20 @@ class MainActivity : ComponentActivity() {
 
             LaunchedEffect(activePrefs) {
                 themeMode = activePrefs.getString(PrefKeys.THEME_MODE, themeMode) ?: themeMode
+            }
+            // 主题实时性修复（2026-09-04 用户反馈"关闭系统配色要重开应用才刷新"）：
+            // LaunchedEffect(activePrefs) 只在实例切换时跑，键值写入不触发——
+            // 补 OnSharedPreferenceChangeListener 响应 THEME_MODE 写入（设置页开关/
+            // 任何页面写入/进程内他处写入统一实时生效）。同进程写会收到自己的回调，
+            // 与 onThemeModeChange 的 state 赋值重复但幂等。
+            DisposableEffect(activePrefs) {
+                val listener = SharedPreferences.OnSharedPreferenceChangeListener { p, key ->
+                    if (key == PrefKeys.THEME_MODE) {
+                        themeMode = p.getString(PrefKeys.THEME_MODE, themeMode) ?: themeMode
+                    }
+                }
+                activePrefs.registerOnSharedPreferenceChangeListener(listener)
+                onDispose { activePrefs.unregisterOnSharedPreferenceChangeListener(listener) }
             }
 
             HyperSidebarTheme(colorMode = themeMode) {

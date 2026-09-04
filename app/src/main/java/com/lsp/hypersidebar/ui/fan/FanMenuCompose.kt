@@ -142,9 +142,10 @@ private fun FanBackground(
     Box(modifier = modifier.fillMaxSize()) {
         // 批次 1.5 定稿：**面板自身材质自糊**——糊的是面板自己画出来的那一层，
         // 不采样任何外部画面（背后模糊/壁纸/PixelCopy 全部撤销）。
-        //   ① 源层：主题色径向渐变（扇心强 → 外缘弱），必须有纹理才糊得出东西
+        //   ① 源层：primaryContainer（Monet 紫系）径向三段渐变，外缘渐隐——
+        //      主题色调 + 柔和边缘，修正"纯黑无过渡"
         //   ② 自糊：LayerBackdrop 记录源层 → textureBlur 糊它 + 噪点抗条带
-        //   ③ 主题 veil + 描边收口
+        //   ③ 描边收口
         val backdrop = rememberLayerBackdrop()
         Canvas(
             modifier = Modifier
@@ -155,8 +156,9 @@ private fun FanBackground(
             drawArc(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        colors.surfaceContainer.copy(alpha = LayoutDefaults.FAN_MATERIAL_ALPHA_CORE),
-                        colors.surfaceContainer.copy(alpha = LayoutDefaults.FAN_MATERIAL_ALPHA_EDGE)
+                        colors.primaryContainer.copy(alpha = LayoutDefaults.FAN_MATERIAL_ALPHA_CORE),
+                        colors.primaryContainer.copy(alpha = LayoutDefaults.FAN_MATERIAL_ALPHA_MID),
+                        colors.primaryContainer.copy(alpha = LayoutDefaults.FAN_MATERIAL_ALPHA_EDGE)
                     ),
                     center = Offset(geometry.anchor.x, geometry.anchor.y),
                     radius = geometry.outerRadius
@@ -185,20 +187,8 @@ private fun FanBackground(
                     noiseCoefficient = BlurDefaults.NoiseCoefficient
                 )
         )
-        // 主题色调 veil + 描边（毛玻璃之上压主题色）
+        // 描边收口
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-            drawArc(
-                color = colors.surfaceContainer.copy(alpha = LayoutDefaults.FAN_MATERIAL_VEIL_ALPHA * alpha),
-                startAngle = geometry.startAngle,
-                sweepAngle = geometry.spanAngle,
-                useCenter = true,
-                topLeft = Offset(
-                    geometry.anchor.x - geometry.outerRadius,
-                    geometry.anchor.y - geometry.outerRadius
-                ),
-                size = Size(geometry.outerRadius * 2, geometry.outerRadius * 2),
-                alpha = alpha
-            )
             drawArc(
                 color = colors.outline.copy(alpha = 0.2f * alpha),
                 startAngle = geometry.startAngle,

@@ -44,10 +44,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.blur.BlurDefaults
-import top.yukonga.miuix.kmp.blur.layerBackdrop
-import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
-import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 选中态图标放大倍数（PRD §7.3.2"图标放大1.25倍"）；SelectedLabel 避让计算同源。 */
@@ -137,38 +133,25 @@ private fun FanBackground(
     alpha: Float,
     modifier: Modifier = Modifier
 ) {
-    val density = LocalDensity.current.density
     Box(modifier = modifier.fillMaxSize()) {
-        val backdropImage = FanBackdrop.image
-        if (backdropImage != null) {
-            // 批次 1.5 毛玻璃：背后画面（壁纸快照）记录为 backdrop 源层，
-            // 弧形区域用 textureBlur 糊化 + 噪点抗条带（miuix-blur，RuntimeShader）。
-            // 源 Image 裁到扇形：弧内被糊化层覆盖，弧外完全透明透出 launcher
-            val backdrop = rememberLayerBackdrop()
+        // 批次 1.5 毛玻璃：FanBackdrop 离线糊化的背后画面（PixelCopy 自截 launcher
+        // 窗口），裁扇形显示——面板拿到的永远是"已糊好的图"，无清晰帧闪现；
+        // 无画面（冷启动首呼出/截图失败）时走原着色弧兜底
+        FanBackdrop.image?.let { backdropImage ->
             Image(
                 bitmap = backdropImage,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .matchParentSize()
-                    .clip(FanSectorShape(geometry))
-                    .layerBackdrop(backdrop)
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
                     .graphicsLayer { this.alpha = alpha }
-                    .textureBlur(
-                        backdrop = backdrop,
-                        shape = FanSectorShape(geometry),
-                        blurRadius = 40f * density,
-                        noiseCoefficient = BlurDefaults.NoiseCoefficient
-                    )
+                    .clip(FanSectorShape(geometry))
             )
         }
-        // 主题色调 veil + 描边（毛玻璃之上压主题色；无壁纸时即原着色弧兜底）
+        // 主题色调 veil + 描边（毛玻璃之上压主题色；无画面时即原着色弧兜底）
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-            val veilAlpha = if (backdropImage != null) 0.22f else 0.15f
+            val hasBackdrop = FanBackdrop.image != null
+            val veilAlpha = if (hasBackdrop) 0.22f else 0.15f
             drawArc(
                 color = colors.surfaceContainer.copy(alpha = veilAlpha * alpha),
                 startAngle = geometry.startAngle,

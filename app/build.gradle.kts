@@ -117,8 +117,6 @@ dependencies {
     implementation(libs.miuix.ui)
     implementation(libs.miuix.preference)
     implementation(libs.miuix.icons)
-    // miuix-blur（批次 1.5 扇形毛玻璃）：RuntimeShader 特效，minSdk 33 直接可用
-    implementation(libs.miuix.blur)
     implementation(libs.miuix.navigation3.ui)
     // miuix-navigation3-ui 只内嵌 ui/scene 包，runtime（NavKey/NavBackStack/NavEntry）需显式引入
     implementation(libs.androidx.navigation3.runtime)

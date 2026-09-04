@@ -449,7 +449,7 @@ private fun PreviewQuickBar(
                 Box(
                     modifier = Modifier
                         .size(iconSizeDp.value.dp)
-                        .clip(CircleShape)
+                        .clip(RoundedCornerShape((iconSizeDp.value * 0.25f).dp))
                         .background(placeholderColor(colors))
                 )
             }

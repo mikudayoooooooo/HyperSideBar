@@ -2,7 +2,7 @@ package com.lsp.hypersidebar.ui.settings
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -68,7 +68,7 @@ private fun FallbackSettingsIcon(appName: String, size: Float) {
     Box(
         modifier = Modifier
             .size(size.dp)
-            .clip(CircleShape)
+            .clip(RoundedCornerShape((size * 0.25f).dp))
             .background(Color(colors[colorIndex])),
         contentAlignment = androidx.compose.ui.Alignment.Center
     ) {

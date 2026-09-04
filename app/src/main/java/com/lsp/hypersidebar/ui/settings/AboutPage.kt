@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -116,7 +116,7 @@ internal fun AboutPage(
                         contentDescription = stringResource(R.string.app_icon_content_desc),
                         modifier = Modifier
                             .size(68.dp)
-                            .clip(CircleShape)
+                            .clip(RoundedCornerShape(17.dp))
                             .background(MiuixTheme.colorScheme.primaryContainer)
                     )
                     Spacer(modifier = Modifier.height(12.dp))

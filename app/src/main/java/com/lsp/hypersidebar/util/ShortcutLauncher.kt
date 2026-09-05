@@ -550,9 +550,12 @@ object ShortcutLauncher {
     }
 
     /**
-     * QS_TILE 启动路径：root `cmd statusbar click-tile <组件>`。
+     * QS_TILE 启动路径：root 复合命令（轻拉 shade 激活 → click-tile）。
      * TileService 类存储在 serviceName 字段（与 SERVICE 同构）。
-     * 无 root 直接失败；click-tile 对不在 QS 的磁贴静默失败（系统行为，无法探测）。
+     * 真机定案（2026-09-05）：`cmd statusbar click-tile` 仅在 shade 处于交互态时
+     * 真正生效（顶部轻拉即可、无须展开；与调用 uid 无关，fire-and-forget——QS 收起时
+     * 静默丢弃且 exit=0）。故先 `input swipe` 复现一次顶部轻拉，停顿后点击。
+     * 无 root 直接失败。
      */
     private fun launchQsTile(
         context: Context,
@@ -567,7 +570,47 @@ object ShortcutLauncher {
         if (!isRootAvailable()) {
             return LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, "QS tile requires root (su)")
         }
-        return launchViaRoot(action)
+        return launchQsTileViaRoot(action)
+    }
+
+    private fun launchQsTileViaRoot(action: ShortcutAction): LaunchResult {
+        val pkg = action.packageName ?: return LaunchResult.Failure(
+            FailureReason.INVALID_CONFIG, "packageName is empty"
+        )
+        val cls = action.serviceName ?: return LaunchResult.Failure(
+            FailureReason.INVALID_CONFIG, "serviceName is empty"
+        )
+        val fullCls = if (cls.startsWith(".")) "$pkg$cls" else cls
+        if (!pkg.matches(PKG_ACTIVITY_REGEX) || !fullCls.matches(PKG_ACTIVITY_REGEX)) {
+            return LaunchResult.Failure(FailureReason.INVALID_CONFIG, "Invalid tile component")
+        }
+        // 组合脚本：顶部轻拉（shade 进入交互态）→ 停顿 → click-tile。
+        // 组件名已过 PKG_ACTIVITY_REGEX 白名单（仅字母数字点），无注入面
+        val script = "input swipe 300 2 300 80 120; sleep 0.2; " +
+            "/system/bin/cmd statusbar click-tile $pkg/$fullCls"
+        val cmd = listOf("su", "-c", shellQuote(script))
+        Log.i(TAG, "launchQsTileViaRoot: $script")
+        return try {
+            val process = ProcessBuilder(cmd).start()
+            try {
+                val exitCode = process.waitFor()
+                val errorOutput = BufferedReader(InputStreamReader(process.errorStream)).use {
+                    it.readText().trim()
+                }
+                if (exitCode == 0) {
+                    Log.i(TAG, "launchQsTileViaRoot: SUCCESS")
+                    LaunchResult.Success(null)
+                } else {
+                    Log.w(TAG, "launchQsTileViaRoot: exit=$exitCode, error=$errorOutput")
+                    LaunchResult.Failure(FailureReason.ROOT_EXEC_FAILED, "exit=$exitCode: $errorOutput")
+                }
+            } finally {
+                process.destroy()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "launchQsTileViaRoot: exception", e)
+            LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, e.message ?: "su exec failed")
+        }
     }
 
     /** QS_TILE 轻量验证：包已安装 + 字段齐全即可（QS 归属无法静态判断）。 */

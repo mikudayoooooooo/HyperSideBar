@@ -44,6 +44,14 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
         val pending = goAsync()
         Thread {
             try {
+                // 冷启动缺口修复（2026-09-05）：令牌缓存只在 Activity 绑定时填充——
+                // 模块进程被杀后由本广播冷启时缓存为空，verifyRelay 一律拒绝（日志
+                // 实证：磁贴/INTENT_URI 代发全静默失败）。后台线程内等桥绑定拉取
+                // remotePrefs 并同步令牌（≤3s；LSPosed 死则超时按拒绝处理，安全档不变）
+                if (com.lsp.hypersidebar.util.RelayToken.current() == null) {
+                    val provisioned = awaitTokenProvision()
+                    Log.i(TAG, "relay token cold-provision: ok=$provisioned")
+                }
                 Log.i(TAG, "relay launch: id=${shortcut.id} kind=${shortcut.kind}")
                 val result = ShortcutLauncher.launch(context, shortcut, DefaultLaunchStrategy())
                 Log.i(TAG, "relay launch result: $result")
@@ -51,5 +59,16 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
                 pending.finish()
             }
         }.start()
+    }
+
+    /**
+     * 冷启动等令牌：RemotePrefsBridge.addListener 幂等——已绑定立即同步回调，
+     * 未绑定走异步绑定（onServiceBind 线程内 RelayToken.sync 填充缓存后才通知）。
+     * 超时=绑定不可用，返回 false 交由 verifyRelay 按无令牌拒绝。
+     */
+    private fun awaitTokenProvision(): Boolean {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        com.lsp.hypersidebar.util.RemotePrefsBridge.addListener { _ -> latch.countDown() }
+        return latch.await(3, java.util.concurrent.TimeUnit.SECONDS)
     }
 }

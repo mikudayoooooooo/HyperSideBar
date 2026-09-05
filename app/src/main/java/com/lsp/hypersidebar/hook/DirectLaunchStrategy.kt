@@ -62,16 +62,27 @@ class DirectLaunchStrategy(
     }
 
     override fun launchShortcut(context: Context, shortcut: ShortcutAction) {
-        // QS_TILE 需要 root `cmd statusbar click-tile`：本进程无 su → 一律转发模块 App
-        // root 代发（磁贴须已在 QS，否则系统侧静默无动作——2026-09-04 spike 实测定案）
+        // QS_TILE 触发链（2026-09-05）：首选 :ui 直发 `cmd statusbar click-tile`
+        // （adb shell uid 实测可点磁贴；uid 1000 需 STATUS_BAR 权限，被拒则回退
+        // 模块 App root 代发）。后台线程执行避免阻塞接收器主线程。
         if (shortcut.kind == ShortcutKind.QS_TILE) {
-            if (relayLaunchToModule(context, shortcut)) {
-                runCatching {
-                    Toast.makeText(context, "已触发磁贴：${shortcut.label}", Toast.LENGTH_SHORT).show()
+            val appCtx = context.applicationContext
+            Thread {
+                val directOk = clickTileDirect(shortcut)
+                if (!directOk) {
+                    relayLaunchToModule(appCtx, shortcut)
                 }
-                return
-            }
-            Log.w(TAG, "QS_TILE relay failed, falling through to local launch")
+                Handler(Looper.getMainLooper()).post {
+                    runCatching {
+                        val msg = when {
+                            directOk -> "已触发磁贴：${shortcut.label}"
+                            else -> "磁贴指令已转发：${shortcut.label}"
+                        }
+                        Toast.makeText(appCtx, msg, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }.start()
+            return
         }
 
         // 非 exported 目标预检失败时直接转发模块 App 代发（§2.4 实测定案）：
@@ -100,6 +111,31 @@ class DirectLaunchStrategy(
             runCatching {
                 Toast.makeText(context, "activity/Service无法正常启动", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    /** :ui 直发磁贴点击（无 root 无令牌依赖）。uid 1000 需 STATUS_BAR 权限，
+     *  被拒（exit≠0）返回 false 由上层回退 root 代发。 */
+    private fun clickTileDirect(shortcut: ShortcutAction): Boolean {
+        val pkg = shortcut.packageName ?: return false
+        val cls = shortcut.serviceName ?: return false
+        val full = if (cls.startsWith(".")) "$pkg$cls" else cls
+        if (!pkg.matches(Regex("^[a-zA-Z_][a-zA-Z0-9_]*(?:[.][a-zA-Z_][a-zA-Z0-9_]*)+$")) ||
+            !full.matches(Regex("^[a-zA-Z_][a-zA-Z0-9_]*(?:[.][a-zA-Z_][a-zA-Z0-9_]*)+$"))
+        ) return false
+        return runCatching {
+            val proc = ProcessBuilder("cmd", "statusbar", "click-tile", "$pkg/$full").start()
+            val exit = proc.waitFor()
+            if (exit == 0) {
+                Log.i(TAG, "clickTileDirect: ok $pkg/$full")
+            } else {
+                Log.w(TAG, "clickTileDirect: exit=$exit err=" +
+                    proc.errorStream.bufferedReader().readText().trim().take(200))
+            }
+            exit == 0
+        }.getOrElse {
+            Log.w(TAG, "clickTileDirect failed: ${it.message}")
+            false
         }
     }
 

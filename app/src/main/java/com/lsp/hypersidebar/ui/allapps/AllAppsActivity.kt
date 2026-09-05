@@ -1,5 +1,6 @@
 package com.lsp.hypersidebar.ui.allapps
 
+import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
@@ -269,6 +270,9 @@ private fun AllAppsScreen(
             entries = emptyList()
             return@LaunchedEffect
         }
+        // 耗时锚点（冷启动段位测量）：本段 cost 与 RemotePrefsBridge "onServiceBind"、
+        // AppIconCache "preload" 日志的时间戳差 = 绑定等待/组装/图标预灌各段占比
+        val t0 = System.currentTimeMillis()
         // 固定区按用户拖动排序展示（§2.4），无序键时按 label 字母序兜底
         val fixedOrder = runCatching {
             prefs.getString(PrefKeys.CUSTOM_APPS_ORDER, null)?.let { s ->
@@ -276,8 +280,11 @@ private fun AllAppsScreen(
                 (0 until arr.length()).map { arr.optString(it) }
             }
         }.getOrNull() ?: emptyList()
+        var labels: Map<String, String> = emptyMap()
         val result = withContext(Dispatchers.IO) {
-            val labels = (pkgs + fixed).distinct().associateWith { AppMetaCache.label(context, it) }
+            // 冷启动盘灌：上次会话的 label 快照先顶住，miss 才回 PM（实测冷组装 769ms 的主构成）
+            AppMetaCache.warmFromDisk(context)
+            labels = (pkgs + fixed).distinct().associateWith { AppMetaCache.label(context, it) }
             val fixedSorted = fixed
                 .sortedBy { pkg -> fixedOrder.indexOf(pkg).let { if (it >= 0) it else Int.MAX_VALUE } }
                 .map { it to (labels[it] ?: it) }
@@ -285,7 +292,32 @@ private fun AllAppsScreen(
         }
         hasFixedApps = fixed.isNotEmpty()
         entries = result
-        // 图标全量预灌（后台单线程顺序）：快滑时新磁贴基本同帧命中缓存，消除
+        Log.i(TAG, "assemble done: entries=${result.size} cost=${System.currentTimeMillis() - t0}ms")
+        // 本地镜像（IO）：CACHED_SUGGESTIONS/CUSTOM_APPS/CUSTOM_APPS_ORDER 写入模块本地
+        // prefs——冷进程 remotePrefs 未绑定时读端（remotePrefs ?: fallbackPrefs）可直接
+        // 出列表，绑定完成后 remotePrefs 为权威、镜像只作快速路径预览（旧值短暂展示可接受）。
+        // 没变化不写（AllApps 高频打开）
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val p = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                val editor = p.edit()
+                var dirty = false
+                val sugJson = org.json.JSONArray(pkgs).toString()
+                if (pkgs.isNotEmpty() && p.getString(PrefKeys.CACHED_SUGGESTIONS, null) != sugJson) {
+                    editor.putString(PrefKeys.CACHED_SUGGESTIONS, sugJson); dirty = true
+                }
+                if (p.getStringSet(PrefKeys.CUSTOM_APPS, null) != fixed) {
+                    editor.putStringSet(PrefKeys.CUSTOM_APPS, fixed); dirty = true
+                }
+                val orderJson = org.json.JSONArray(fixedOrder).toString()
+                if (p.getString(PrefKeys.CUSTOM_APPS_ORDER, null) != orderJson) {
+                    editor.putString(PrefKeys.CUSTOM_APPS_ORDER, orderJson); dirty = true
+                }
+                if (dirty) editor.apply()
+            }
+            AppMetaCache.persistToDisk(context, labels)
+        }
+        // 图标全量预灌（后台 4 线程并行）：快滑时新磁贴基本同帧命中缓存，消除
         // 逐磁贴 miss 的解码风暴与重组洪水；未及覆盖的格子由 AppTile miss 路径兜底
         AppIconCache.preload(context, pkgs + fixed)
     }

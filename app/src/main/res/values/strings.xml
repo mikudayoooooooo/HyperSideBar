@@ -186,6 +186,13 @@
     <string name="activity_picker_count">%d 个活动</string>
     <string name="activity_picker_filter_targets">只看快捷方式 (%1$d)</string>
     <string name="activity_picker_filter_all">显示全部 (%1$d)</string>
+    <string name="shortcuts_add_qs_tile">添加快捷开关</string>
+    <string name="shortcuts_add_qs_tile_summary">选择系统控制中心磁贴（root 触发）</string>
+    <string name="qs_tile_picker_title">选择快捷开关</string>
+    <string name="qs_tile_picker_search">搜索磁贴…</string>
+    <string name="qs_tile_picker_loading">正在扫描磁贴服务…</string>
+    <string name="qs_tile_picker_count">%d 个磁贴</string>
+    <string name="qs_tile_pick">选择磁贴</string>
     <string name="shortcut_qs_tile_target">磁贴组件</string>
     <string name="shortcut_qs_tile_note">通过 root 触发系统快捷开关（cmd statusbar click-tile）；磁贴须已加入控制中心，否则触发无效</string>
     <string name="all_apps_title">全部应用</string>

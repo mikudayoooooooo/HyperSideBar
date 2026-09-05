@@ -60,6 +60,7 @@ internal fun ShortcutEditPage(
     onSave: (ShortcutAction) -> Unit,
     onDelete: (() -> Unit)?,
     onPickActivity: () -> Unit,
+    onPickQsTile: () -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -252,10 +253,10 @@ internal fun ShortcutEditPage(
                             )
                             Spacer(Modifier.height(12.dp))
                             Button(
-                                onClick = onPickActivity,
+                                onClick = onPickQsTile,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text(stringResource(R.string.shortcut_pick_activity))
+                                Text(stringResource(R.string.qs_tile_pick))
                             }
                             Spacer(Modifier.height(4.dp))
                             Text(

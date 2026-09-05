@@ -89,7 +89,7 @@ internal fun MainScreen(
         SettingsKey.TabSettings -> stringResource(R.string.tab_settings)
         SettingsKey.TabAbout -> stringResource(R.string.tab_about)
         is SettingsKey.AppSelection -> top.title
-        SettingsKey.ShortcutList, SettingsKey.ShortcutPicker ->
+        SettingsKey.ShortcutList, SettingsKey.ShortcutPicker, SettingsKey.QsTilePicker ->
             stringResource(R.string.shortcuts_add_section)
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
     }
@@ -272,6 +272,32 @@ internal fun MainScreen(
                                     }
                                 },
                                 onPickActivity = { settingsStack.add(SettingsKey.ShortcutPicker) },
+                                onPickQsTile = { settingsStack.add(SettingsKey.QsTilePicker) },
+                                onBack = { settingsStack.removeLast() }
+                            )
+                        }
+                    }
+                    SettingsKey.QsTilePicker -> NavEntry(key) {
+                        DetailPageContainer {
+                            QsTilePickerPage(
+                                onSelected = { pkg, cls, label ->
+                                    // 与 ShortcutPicker 同款回填：原地替换栈中编辑键 + 弹出选择器
+                                    val idx = settingsStack.indexOfLast { it is SettingsKey.ShortcutEdit }
+                                    if (idx >= 0) {
+                                        val cur = settingsStack[idx] as SettingsKey.ShortcutEdit
+                                        settingsStack[idx] = cur.copy(
+                                            shortcut = cur.shortcut.copy(
+                                                packageName = pkg,
+                                                serviceName = cls,
+                                                activityName = null,
+                                                kind = com.lsp.hypersidebar.util.ShortcutKind.QS_TILE,
+                                                label = cur.shortcut.label.ifEmpty { label },
+                                                iconPackageName = pkg
+                                            )
+                                        )
+                                    }
+                                    settingsStack.removeLast()
+                                },
                                 onBack = { settingsStack.removeLast() }
                             )
                         }

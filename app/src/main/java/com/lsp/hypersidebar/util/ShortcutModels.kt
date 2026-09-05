@@ -149,6 +149,9 @@ object ShortcutStore {
 
         try {
             prefs.edit().putString(KEY, arr.toString()).apply()
+            // 诊断锚点：快捷栏缺失问题时区分"保存没落盘"（无此行/条目缺）vs"扇形没读到"
+            Log.i(TAG, "saved ${userItems.size} shortcuts: " +
+                userItems.joinToString { "${it.kind}:${it.label}(${if (it.enabled) "on" else "off"})" })
         } catch (e: Exception) {
             Log.e(TAG, "saveUserShortcuts: write failed", e)
         }
@@ -241,10 +244,13 @@ object ShortcutStore {
 
         // 用户启用的快捷方式：栏上限 6 含占位（PRD §7.1）——占位在场取 5 个，隐藏时 6 个全上
         val maxUser = if (toolboxAvailable) 5 else 6
-        loadUserShortcuts(prefs)
-            .filter { it.enabled }
-            .take(maxUser)
-            .forEach { result.add(it) }
+        val userEnabled = loadUserShortcuts(prefs).filter { it.enabled }
+        val picked = userEnabled.take(maxUser)
+        // 诊断锚点：与 saveUserShortcuts 的 "saved N" 配对——读端缓存陈旧时
+        // enabled 数与最近一次 saved 数不一致
+        Log.i(TAG, "runtimeQuick: user=${userEnabled.size} out=${picked.size} " +
+            "kinds=${picked.joinToString { it.kind.name }}")
+        picked.forEach { result.add(it) }
 
         return result
     }

@@ -8,7 +8,7 @@
     <string name="back">返回</string>
 
     <string name="module_section">模块</string>
-    <string name="module_enabled">启用超级侧边栏</string>
+    <string name="module_enabled">启用 HyperSideBar</string>
     <string name="module_enabled_summary">替换原生侧边栏为扇形菜单</string>
     <string name="status_running">模块运行中</string>
     <string name="status_normal_summary">手势与执行通道工作正常</string>
@@ -191,10 +191,13 @@
     <string name="qs_tile_picker_title">选择快捷开关</string>
     <string name="qs_tile_picker_search">搜索磁贴…</string>
     <string name="qs_tile_picker_loading">正在扫描磁贴服务…</string>
-    <string name="qs_tile_picker_count">%d 个可选项</string>
+    <string name="qs_tile_picker_count">%d 个应用</string>
     <string name="qs_tile_pick">选择磁贴</string>
     <string name="qs_tile_group_tiles">控制中心磁贴</string>
     <string name="qs_tile_group_shortcuts">应用快捷方式</string>
+    <string name="qs_tile_group_apps_count">%1$d 个应用可用</string>
+    <string name="qs_tile_item_count">%1$d 个磁贴</string>
+    <string name="qs_shortcut_item_count">%1$d 个快捷方式</string>
     <string name="shortcut_qs_tile_target">磁贴组件</string>
     <string name="shortcut_qs_tile_note">通过 root 触发系统快捷开关（cmd statusbar click-tile）；磁贴须已加入控制中心，否则触发无效</string>
     <string name="all_apps_title">全部应用</string>

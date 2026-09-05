@@ -117,6 +117,12 @@
     <string name="about_author">作者</string>
     <string name="about_project_url">项目地址</string>
     <string name="open_link_failed">无法打开链接</string>
+    <string name="update_check">检查更新</string>
+    <string name="update_check_idle">点击检查最新版本</string>
+    <string name="update_checking">正在检查…</string>
+    <string name="update_up_to_date">已是最新版本</string>
+    <string name="update_available">发现新版本 %1$s，点击前往下载</string>
+    <string name="update_check_failed">检查失败（网络原因），点击重试</string>
     <string name="about_module_scope">模块作用域</string>
     <string name="scope_configured">已包含 com.miui.securitycenter</string>
     <string name="unknown">未知</string>
@@ -125,6 +131,12 @@
     <string name="debug_section">调试</string>
     <string name="debug_relay_blackhole">模拟执行端失联</string>
     <string name="debug_relay_blackhole_summary">所有执行广播按失联处理，用于验证熔断链路；测完务必关闭</string>
+    <string name="debug_relay_confirm_title">开启模拟执行端失联？</string>
+    <string name="debug_relay_confirm_summary">开启后扇形的所有点击都会被人为拦截：提示"服务不可用"，连续 5 次后触发真实熔断，症状与真实故障完全相同。此设置卸载重装后仍会保留，只能回到本页关闭。</string>
+    <string name="debug_relay_confirm_countdown">%d 秒后可确认</string>
+    <string name="debug_relay_confirm_ready">倒计时结束，可以确认了</string>
+    <string name="debug_relay_confirm_action">确认开启</string>
+    <string name="debug_relay_confirm_action_counting">确认开启（%d）</string>
 
     <!-- Shortcut -->
     <string name="shortcut_count_format">已添加 %1$d · 启用 %2$d</string>

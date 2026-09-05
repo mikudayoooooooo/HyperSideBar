@@ -200,6 +200,19 @@ private fun LayoutSheetContent(
                 sliderHorizontalPadding = 0.dp,
                 compact = true
             )
+            // 内圈应用数（用户 2026-09-04：顺序置于外圈应用数之前；竖屏上限 8→6）。
+            // 实际可摆数另受"外圈先挑走应用"约束：内圈=总数−外圈，外圈调大内圈跟着变小
+            SettingsSliderItem(
+                title = stringResource(R.string.inner_apps_count),
+                summary = stringResource(R.string.inner_apps_summary, innerCount),
+                value = innerCount.toFloat(),
+                valueRange = if (isPortrait) 2f..6f else 0f..6f,
+                steps = if (isPortrait) 3 else 5,
+                onValueChange = { putInnerCount(it.toInt()) },
+                onValueChangeFinished = {},
+                sliderHorizontalPadding = 0.dp,
+                compact = true
+            )
             SettingsSliderItem(
                 title = stringResource(R.string.outer_apps_count),
                 summary = stringResource(R.string.outer_apps_summary, outerCount),
@@ -207,17 +220,6 @@ private fun LayoutSheetContent(
                 valueRange = if (isPortrait) 4f..12f else 3f..8f,
                 steps = if (isPortrait) 7 else 4,
                 onValueChange = { putOuterCount(it.toInt()) },
-                onValueChangeFinished = {},
-                sliderHorizontalPadding = 0.dp,
-                compact = true
-            )
-            SettingsSliderItem(
-                title = stringResource(R.string.inner_apps_count),
-                summary = stringResource(R.string.inner_apps_summary, innerCount),
-                value = innerCount.toFloat(),
-                valueRange = if (isPortrait) 2f..8f else 0f..6f,
-                steps = if (isPortrait) 5 else 5,
-                onValueChange = { putInnerCount(it.toInt()) },
                 onValueChangeFinished = {},
                 sliderHorizontalPadding = 0.dp,
                 compact = true

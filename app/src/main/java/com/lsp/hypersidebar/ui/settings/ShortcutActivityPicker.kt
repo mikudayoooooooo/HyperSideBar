@@ -1,6 +1,7 @@
 package com.lsp.hypersidebar.ui.settings
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.os.Process
@@ -54,7 +55,8 @@ data class ComponentInfo(
     val appLabel: String,
     val exported: Boolean,
     val isService: Boolean,
-    val isShortcutTarget: Boolean = false
+    val isShortcutTarget: Boolean = false,
+    val isQsTile: Boolean = false
 )
 
 private data class AppInfo(
@@ -65,7 +67,7 @@ private data class AppInfo(
 
 @Composable
 internal fun ActivityPickerPage(
-    onSelected: (packageName: String, activityName: String, label: String) -> Unit,
+    onSelected: (packageName: String, activityName: String, label: String, isQsTile: Boolean) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -125,8 +127,7 @@ internal fun ActivityPickerPage(
                     onSelected = onSelected,
                     onBack = { selectedPackage = null }
                 )
-            }
-        }
+            }        }
     }
 }
 
@@ -206,14 +207,15 @@ private fun AppList(
 @Composable
 private fun ActivityList(
     app: AppInfo,
-    onSelected: (packageName: String, activityName: String, label: String) -> Unit,
+    onSelected: (packageName: String, activityName: String, label: String, isQsTile: Boolean) -> Unit,
     onBack: () -> Unit
 ) {
-    // C2（批次 3）：默认只看快捷方式目标（发现过滤器），一键切回全量；无目标时直接全量
-    val targetCount = app.components.count { it.isShortcutTarget }
+    // C2/C3（批次 3）：默认只看"发现目标"（快捷方式目标 + QS 磁贴），一键切回全量；
+    // 应用无任何目标时直接全量
+    val targetCount = app.components.count { it.isShortcutTarget || it.isQsTile }
     var onlyShortcuts by remember(app.packageName) { mutableStateOf(targetCount > 0) }
     val shown = if (onlyShortcuts && targetCount > 0) {
-        app.components.filter { it.isShortcutTarget }
+        app.components.filter { it.isShortcutTarget || it.isQsTile }
     } else {
         app.components
     }
@@ -273,11 +275,14 @@ private fun ActivityList(
         items(shown, key = { it.className + (if (it.isService) "#s" else "#a") }) { info ->
             val typeTag = if (info.isService) "[S] " else ""
             val quickTag = if (info.isShortcutTarget) "[快捷] " else ""
+            val qsTag = if (info.isQsTile) "[QS] " else ""
             val lockTag = if (!info.exported) " 🔒" else ""
             ArrowPreference(
-                title = quickTag + typeTag + info.label.ifEmpty { info.className.substringAfterLast('.') } + lockTag,
+                title = quickTag + qsTag + typeTag + info.label.ifEmpty { info.className.substringAfterLast('.') } + lockTag,
                 summary = info.className,
-                onClick = { onSelected(info.packageName, info.className, info.label) }
+                onClick = {
+                    onSelected(info.packageName, info.className, info.label, info.isQsTile)
+                }
             )
         }
     }
@@ -310,9 +315,30 @@ private fun loadShortcutTargetActivities(context: Context): Map<String, Set<Stri
         emptyMap()
     }
 
+/**
+ * C3（批次 3，用户拍板"只展示扫得到的"）：枚举全系统 TileService
+ * （QS_TILE action 的 service），返回 "pkg/类名" 集合。
+ * 触发走 root `cmd statusbar click-tile`，磁贴须已加入 QS（spike 实测）。
+ */
+private fun loadQsTileComponents(context: Context): Set<String> =
+    runCatching {
+        val infos = context.packageManager.queryIntentServices(
+            Intent("android.service.quicksettings.action.QS_TILE"), 0
+        ).orEmpty()
+        val set = infos.mapNotNull { it.serviceInfo }
+            .map { "${it.packageName}/${it.name}" }
+            .toSet()
+        Log.i(TAG, "QsTileProbe: ${set.size} tile services")
+        set
+    }.getOrElse { e ->
+        Log.w(TAG, "QsTileProbe failed: ${e.javaClass.simpleName}: ${e.message}")
+        emptySet()
+    }
+
 private fun loadAppsByPackage(context: Context): List<AppInfo> {
     val pm = context.packageManager
     val shortcutTargets = loadShortcutTargetActivities(context)
+    val qsTiles = loadQsTileComponents(context)
     val apps = mutableMapOf<String, MutableList<ComponentInfo>>()
     val labels = mutableMapOf<String, String>()
 
@@ -341,7 +367,7 @@ private fun loadAppsByPackage(context: Context): List<AppInfo> {
                 ))
             }
 
-            // Services（含非导出）
+            // Services（含非导出；QS 磁贴服务单独标注供 C3 选取）
             pkgInfo.services?.forEach { si ->
                 components.add(ComponentInfo(
                     packageName = pkgName,
@@ -349,7 +375,8 @@ private fun loadAppsByPackage(context: Context): List<AppInfo> {
                     label = runCatching { si.loadLabel(pm).toString() }.getOrNull() ?: "",
                     appLabel = "",
                     exported = si.exported,
-                    isService = true
+                    isService = true,
+                    isQsTile = "$pkgName/${si.name}" in qsTiles
                 ))
             }
 
@@ -369,7 +396,10 @@ private fun loadAppsByPackage(context: Context): List<AppInfo> {
             packageName = pkgName,
             appLabel = labels[pkgName] ?: pkgName,
             components = components.sortedWith(
-                compareBy({ !it.isShortcutTarget }, { !it.exported }, { it.isService }, { it.label.ifEmpty { it.className } })
+                compareBy(
+                    { !it.isShortcutTarget }, { !it.isQsTile },
+                    { !it.exported }, { it.isService }, { it.label.ifEmpty { it.className } }
+                )
             )
         )
     }.sortedBy { it.appLabel.lowercase(Locale.ROOT) }

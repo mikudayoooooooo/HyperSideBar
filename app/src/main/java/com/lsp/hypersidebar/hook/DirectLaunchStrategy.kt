@@ -62,6 +62,18 @@ class DirectLaunchStrategy(
     }
 
     override fun launchShortcut(context: Context, shortcut: ShortcutAction) {
+        // QS_TILE 需要 root `cmd statusbar click-tile`：本进程无 su → 一律转发模块 App
+        // root 代发（磁贴须已在 QS，否则系统侧静默无动作——2026-09-04 spike 实测定案）
+        if (shortcut.kind == ShortcutKind.QS_TILE) {
+            if (relayLaunchToModule(context, shortcut)) {
+                runCatching {
+                    Toast.makeText(context, "已触发磁贴：${shortcut.label}", Toast.LENGTH_SHORT).show()
+                }
+                return
+            }
+            Log.w(TAG, "QS_TILE relay failed, falling through to local launch")
+        }
+
         // 非 exported 目标预检失败时直接转发模块 App 代发（§2.4 实测定案）：
         // 本进程（system uid）startActivityAsUser 对启动不了的目标静默假成功
         // （不抛异常、实际不启动，无法靠异常触发 root 回退），且本进程无 su 授权；

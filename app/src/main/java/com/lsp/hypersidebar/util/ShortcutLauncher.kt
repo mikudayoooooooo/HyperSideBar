@@ -150,6 +150,12 @@ object ShortcutLauncher {
             return LaunchResult.Failure(FailureReason.INVALID_CONFIG, "TOOLBOX should be handled by broadcast")
         }
 
+        // QS_TILE 独立路径：root `cmd statusbar click-tile`（不走 Intent 管线）。
+        // 磁贴须已加入 QS，否则系统侧静默无动作（2026-09-04 spike 实测）
+        if (action.kind == ShortcutKind.QS_TILE) {
+            return launchQsTile(context, action, allowRootFallback)
+        }
+
         // SERVICE 有独立的启动路径（startService），不走 Activity 管线
         if (action.kind == ShortcutKind.SERVICE) {
             return launchService(context, action, allowRootFallback)
@@ -229,6 +235,12 @@ object ShortcutLauncher {
         // SERVICE 用 Service 专用解析，不走 Activity 管线
         if (action.kind == ShortcutKind.SERVICE) {
             return validateService(context, action)
+        }
+
+        // QS_TILE 轻量验证：包已安装即可——磁贴是否在 QS 无法静态判断，
+        // click-tile 对不在 QS 的磁贴静默失败（spike 定案），留给运行时观察
+        if (action.kind == ShortcutKind.QS_TILE) {
+            return validateQsTile(context, action)
         }
 
         // COMPONENT 自动探测后分发验证
@@ -537,10 +549,49 @@ object ShortcutLauncher {
         }
     }
 
+    /**
+     * QS_TILE 启动路径：root `cmd statusbar click-tile <组件>`。
+     * TileService 类存储在 serviceName 字段（与 SERVICE 同构）。
+     * 无 root 直接失败；click-tile 对不在 QS 的磁贴静默失败（系统行为，无法探测）。
+     */
+    private fun launchQsTile(
+        context: Context,
+        action: ShortcutAction,
+        allowRootFallback: Boolean
+    ): LaunchResult {
+        val validation = validateQsTile(context, action)
+        if (validation is LaunchResult.Failure) return validation
+        if (!allowRootFallback) {
+            return LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, "QS tile requires root fallback disabled")
+        }
+        if (!isRootAvailable()) {
+            return LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, "QS tile requires root (su)")
+        }
+        return launchViaRoot(action)
+    }
+
+    /** QS_TILE 轻量验证：包已安装 + 字段齐全即可（QS 归属无法静态判断）。 */
+    private fun validateQsTile(context: Context, action: ShortcutAction): LaunchResult {
+        val pkg = action.packageName
+        val cls = action.serviceName
+        if (pkg.isNullOrEmpty() || cls.isNullOrEmpty()) {
+            return LaunchResult.Failure(FailureReason.INVALID_CONFIG, "packageName or serviceName is empty")
+        }
+        return try {
+            context.packageManager.getPackageInfo(pkg, 0)
+            LaunchResult.Success(ComponentName(pkg, cls))
+        } catch (e: PackageManager.NameNotFoundException) {
+            LaunchResult.Failure(FailureReason.APP_NOT_INSTALLED, "Package not found: $pkg")
+        }
+    }
+
     private fun buildIntent(action: ShortcutAction): BuildIntentResult = when (action.kind) {
         ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> buildActivityIntent(action)
         ShortcutKind.INTENT_URI -> buildIntentUri(action)
         ShortcutKind.SERVICE -> buildServiceIntent(action)
+        ShortcutKind.QS_TILE -> BuildIntentResult.Failure(
+            FailureReason.INVALID_CONFIG, "QS_TILE is dispatched via statusbar command, not Intent"
+        )
         ShortcutKind.TOOLBOX -> BuildIntentResult.Failure(
             FailureReason.INVALID_CONFIG, "TOOLBOX cannot be built as Intent"
         )
@@ -979,6 +1030,15 @@ object ShortcutLauncher {
                     return null
                 }
                 arrayOf("am", "startservice", "-n", "$pkg/$fullSvc")
+            }
+            ShortcutKind.QS_TILE -> {
+                val pkg = action.packageName ?: return null
+                val cls = normalizeServiceName(pkg, action.serviceName ?: return null)
+                val fullCls = if (cls.startsWith(".")) "$pkg$cls" else cls
+                if (!pkg.matches(PKG_ACTIVITY_REGEX) || !fullCls.matches(PKG_ACTIVITY_REGEX)) {
+                    return null
+                }
+                arrayOf("statusbar", "click-tile", "$pkg/$fullCls")
             }
             ShortcutKind.TOOLBOX -> null
         }

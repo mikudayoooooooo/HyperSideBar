@@ -14,13 +14,16 @@ private const val TAG = "ShortcutModels"
  * - SERVICE: 显式 Service（向后兼容旧数据）
  * - INTENT_URI: Intent URI (deep link / action / data)
  * - TOOLBOX: 内置视频/游戏面板快捷项（不占用户名额）
+ * - QS_TILE: 快捷开关磁贴（TileService 类，root `cmd statusbar click-tile` 触发；
+ *   磁贴须已加入控制中心 QS，否则系统侧静默无动作——2026-09-04 spike 实测定案）
  */
 enum class ShortcutKind {
     COMPONENT,
     ACTIVITY,
     INTENT_URI,
     TOOLBOX,
-    SERVICE
+    SERVICE,
+    QS_TILE
 }
 
 /**

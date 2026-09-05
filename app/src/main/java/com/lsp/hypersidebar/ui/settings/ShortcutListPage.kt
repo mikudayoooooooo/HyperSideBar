@@ -338,6 +338,11 @@ private fun buildShortcutSummary(shortcut: ShortcutAction, unsetUri: String, too
             val svc = shortcut.serviceName ?: "?"
             "$pkg/$svc"
         }
+        ShortcutKind.QS_TILE -> {
+            val pkg = shortcut.packageName ?: "?"
+            val svc = shortcut.serviceName ?: "?"
+            "$pkg/$svc"
+        }
     }
     return if (raw.length > 40) raw.take(38) + "…" else raw
 }

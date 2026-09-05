@@ -140,6 +140,8 @@ class EdgeGestureHook(
         com.lsp.hypersidebar.util.DataLoader.prewarmWithRetry(
             provider = { runCatching { EzXposed.appContext }.getOrNull() }
         )
+        // 扇形 UI 类族后台预载：把 ART 校验从首呼出主线程挪走（"有时候呼出会卡"实凶）
+        com.lsp.hypersidebar.util.FanUiWarmup.warm()
     }
 
     /**
@@ -253,6 +255,12 @@ class EdgeGestureHook(
     private fun handleTouch(ev: MotionEvent, stub: View?): Boolean {
         // 数据源死亡停摆（迭代四 §1.3）：整条透传原生（原生返回优先），不再呼出
         if (DataDeadState.dead) {
+            if (fanController.isShowing) fanController.dismiss()
+            return false
+        }
+        // 总开关门（设置页"启用超级侧边栏"）：关闭=整条透传原生（同数据源死亡语义），
+        // 展示中的 fan 立即收起；重新打开即时恢复（SyncedPrefs 读=内存缓存命中）
+        if (!moduleEnabled()) {
             if (fanController.isShowing) fanController.dismiss()
             return false
         }
@@ -379,8 +387,12 @@ class EdgeGestureHook(
         val anchorX = if (downX < dm.widthPixels / 2f) 0f else dm.widthPixels.toFloat()
         val anchorY = if (zoneTop < zoneBottom) downY.coerceIn(zoneTop, zoneBottom) else downY
         Log.i(TAG, "showFan: anchor=($anchorX, $anchorY) downY=$downY dwell=${dwellMs()}ms")
+        // 耗时锚点（呼出卡顿归因）：postLag=launcher 主线程繁忙度——数值大说明
+        // 呼出迟到是主线程排队，而不是装配慢
+        val postAtMs = android.os.SystemClock.uptimeMillis()
         val r = Runnable {
             pendingShow = null
+            Log.i(TAG, "g#$gestureSeq showFan runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
             fanController.show(ctx, anchorX, anchorY)
         }
         pendingShow = r
@@ -453,4 +465,8 @@ class EdgeGestureHook(
     } catch (_: Exception) {
         LayoutDefaults.TRIGGER_DWELL_MS.toLong()
     }
+
+    /** 总开关（设置页"启用超级侧边栏"，PrefKeys.ENABLED）：关闭=本 hook 停止一切侵入。 */
+    private fun moduleEnabled(): Boolean =
+        runCatching { remotePrefs.getBoolean(PrefKeys.ENABLED, true) }.getOrDefault(true)
 }

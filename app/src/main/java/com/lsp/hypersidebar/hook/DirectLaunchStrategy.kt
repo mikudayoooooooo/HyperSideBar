@@ -69,7 +69,9 @@ class DirectLaunchStrategy(
         if (shortcut.kind == ShortcutKind.QS_TILE) {
             if (relayLaunchToModule(context, shortcut)) {
                 runCatching {
-                    Toast.makeText(context, "已触发磁贴：${shortcut.label}", Toast.LENGTH_SHORT).show()
+                    // click-tile 是 fire-and-forget（任何良构组件都返回成功，磁贴是否真
+                    // 切换取决于 SystemUI 侧 QS 状态/目标应用是否被冻结）——文案不承诺结果
+                    Toast.makeText(context, "已发送磁贴指令：${shortcut.label}", Toast.LENGTH_SHORT).show()
                 }
                 return
             }

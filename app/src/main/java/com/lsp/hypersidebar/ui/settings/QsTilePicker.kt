@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -31,10 +32,12 @@ import com.lsp.hypersidebar.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.preference.ArrowPreference
@@ -98,6 +101,11 @@ internal fun loadManifestShortcuts(context: Context): List<QsTileInfo> =
             .setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST)
         val pm = context.packageManager
         la.getShortcuts(query, Process.myUserHandle()).orEmpty()
+            .also { probe ->
+                // 探针（2026-09-05"应用快捷方式数量为0"诊断）：区分 API 返回空 vs 异常
+                Log.i(TAG, "ManifestShortcutProbe: raw=${probe.size} " +
+                    "withActivity=${probe.count { it.activity != null }}")
+            }
             .mapNotNull { si ->
                 val cn = si.activity ?: return@mapNotNull null
                 val appLabel = runCatching {
@@ -151,20 +159,16 @@ internal fun QsTilePickerPage(
         value = withContext(Dispatchers.IO) { buildTileApps(context) }
     }
 
-    // 内部两级返回栈：L3 → L2 → L1 → 关闭选择器（回到编辑页）
-    var selectedGroup by remember { mutableStateOf<Boolean?>(null) } // true=磁贴 false=快捷方式
+    // 顶部同级类型 Tab（用户 2026-09-05：随时切换）+ 单级返回栈：L3 → L2 → 关闭选择器
+    var selectedGroup by remember { mutableStateOf(true) } // true=磁贴 false=快捷方式
     var selectedPackage by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
 
     val activity = LocalContext.current as? ComponentActivity
-    DisposableEffect(activity, selectedGroup, selectedPackage) {
+    DisposableEffect(activity, selectedPackage) {
         val callback = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                when {
-                    selectedPackage != null -> selectedPackage = null
-                    selectedGroup != null -> selectedGroup = null
-                    else -> onBack()
-                }
+                if (selectedPackage != null) selectedPackage = null else onBack()
             }
         }
         activity?.onBackPressedDispatcher?.addCallback(callback)
@@ -197,18 +201,36 @@ internal fun QsTilePickerPage(
             )
         }
 
+        // 类型 Tab（同级，随时切换；切换即回到该类型的应用列表）
         item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                TextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    label = stringResource(R.string.qs_tile_picker_search),
-                    modifier = Modifier.padding(8.dp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                GroupTab(
+                    text = stringResource(R.string.qs_tile_group_tiles),
+                    selected = selectedGroup,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        selectedGroup = true
+                        selectedPackage = null
+                    }
+                )
+                GroupTab(
+                    text = stringResource(R.string.qs_tile_group_shortcuts),
+                    selected = !selectedGroup,
+                    modifier = Modifier.weight(1f),
+                    onClick = {
+                        selectedGroup = false
+                        selectedPackage = null
+                    }
                 )
             }
         }
 
-        if (loading && selectedGroup == null) {
+        if (loading) {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Text(
@@ -220,94 +242,93 @@ internal fun QsTilePickerPage(
             }
         }
 
-        when {
-            // L1：类型分组入口
-            selectedGroup == null -> {
-                item {
-                    ArrowPreference(
-                        title = stringResource(R.string.qs_tile_group_tiles),
-                        summary = stringResource(R.string.qs_tile_group_apps_count, tileAppCount),
-                        onClick = {
-                            selectedGroup = true
-                            searchQuery = ""
+        if (selectedPackage == null) {
+            // L2：当前类型下有可用项的应用列表
+            val isTiles = selectedGroup
+            val groupApps = apps
+                .filter { if (isTiles) it.tiles.isNotEmpty() else it.shortcuts.isNotEmpty() }
+                .filter { app ->
+                    searchQuery.isBlank() ||
+                        app.appLabel.contains(searchQuery, ignoreCase = true) ||
+                        app.packageName.contains(searchQuery, ignoreCase = true) ||
+                        (if (isTiles) app.tiles else app.shortcuts).any {
+                            it.label.contains(searchQuery, ignoreCase = true)
                         }
-                    )
                 }
-                item {
-                    ArrowPreference(
-                        title = stringResource(R.string.qs_tile_group_shortcuts),
-                        summary = stringResource(R.string.qs_tile_group_apps_count, shortcutAppCount),
-                        onClick = {
-                            selectedGroup = false
-                            searchQuery = ""
-                        }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    TextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        label = stringResource(R.string.qs_tile_picker_search),
+                        modifier = Modifier.padding(8.dp)
                     )
                 }
             }
-
-            // L2：该类型下有可用项的应用列表
-            selectedPackage == null -> {
-                val isTiles = selectedGroup == true
-                val groupApps = apps
-                    .filter { if (isTiles) it.tiles.isNotEmpty() else it.shortcuts.isNotEmpty() }
-                    .filter { app ->
-                        searchQuery.isBlank() ||
-                            app.appLabel.contains(searchQuery, ignoreCase = true) ||
-                            app.packageName.contains(searchQuery, ignoreCase = true) ||
-                            (if (isTiles) app.tiles else app.shortcuts).any {
-                                it.label.contains(searchQuery, ignoreCase = true)
-                            }
-                    }
+            item {
+                Text(
+                    text = stringResource(R.string.qs_tile_picker_count, groupApps.size),
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    style = MiuixTheme.textStyles.footnote1,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            }
+            items(groupApps, key = { it.packageName }) { app ->
+                ArrowPreference(
+                    title = app.appLabel,
+                    summary = stringResource(
+                        if (isTiles) R.string.qs_tile_item_count else R.string.qs_shortcut_item_count,
+                        if (isTiles) app.tiles.size else app.shortcuts.size
+                    ),
+                    startAction = {
+                        SettingsAppIcon(
+                            packageName = app.packageName,
+                            appName = app.appLabel,
+                            size = 28f
+                        )
+                    },
+                    onClick = { selectedPackage = app.packageName }
+                )
+            }
+        } else {
+            // L3：该应用在当前类型下的可用条目
+            val app = apps.find { it.packageName == selectedPackage }
+            val isTiles = selectedGroup
+            if (app != null) {
+                val entries = if (isTiles) app.tiles else app.shortcuts
                 item {
                     Text(
-                        text = stringResource(R.string.qs_tile_picker_count, groupApps.size),
+                        text = app.appLabel,
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         style = MiuixTheme.textStyles.footnote1,
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
                 }
-                items(groupApps, key = { it.packageName }) { app ->
-                    ArrowPreference(
-                        title = app.appLabel,
-                        summary = stringResource(
-                            if (isTiles) R.string.qs_tile_item_count else R.string.qs_shortcut_item_count,
-                            if (isTiles) app.tiles.size else app.shortcuts.size
-                        ),
-                        startAction = {
-                            SettingsAppIcon(
-                                packageName = app.packageName,
-                                appName = app.appLabel,
-                                size = 28f
-                            )
-                        },
-                        onClick = { selectedPackage = app.packageName }
-                    )
-                }
-            }
-
-            // L3：该应用在该类型下的可用条目
-            else -> {
-                val app = apps.find { it.packageName == selectedPackage }
-                val isTiles = selectedGroup == true
-                if (app != null) {
-                    val entries = if (isTiles) app.tiles else app.shortcuts
-                    item {
-                        Text(
-                            text = stringResource(
-                                if (isTiles) R.string.qs_tile_group_tiles else R.string.qs_tile_group_shortcuts
-                            ),
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            style = MiuixTheme.textStyles.footnote1,
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        )
-                    }
-                    items(entries, key = { it.className + "/" + it.label }) { item ->
-                        PickerRow(item) { onSelected(item, isTiles) }
-                    }
+                items(entries, key = { it.className + "/" + it.label }) { item ->
+                    PickerRow(item) { onSelected(item, isTiles) }
                 }
             }
         }
     }
+}
+
+/** 类型切换 Tab（同层级、随时可切；选中态 primary 高亮）。 */
+@Composable
+private fun GroupTab(
+    text: String,
+    selected: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    TextButton(
+        text = text,
+        onClick = onClick,
+        modifier = modifier,
+        colors = ButtonDefaults.textButtonColors(
+            color = if (selected) MiuixTheme.colorScheme.primary
+            else MiuixTheme.colorScheme.onSurfaceVariantSummary
+        )
+    )
 }
 
 @Composable

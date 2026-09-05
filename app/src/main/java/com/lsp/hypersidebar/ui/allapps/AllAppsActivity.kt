@@ -71,6 +71,7 @@ import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.RelayToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -284,11 +285,18 @@ private fun AllAppsScreen(
         val result = withContext(Dispatchers.IO) {
             // 冷启动盘灌：上次会话的 label 快照先顶住，miss 才回 PM（实测冷组装 769ms 的主构成）
             AppMetaCache.warmFromDisk(context)
-            labels = (pkgs + fixed).distinct().associateWith { AppMetaCache.label(context, it) }
+            // 绑定/数据到达窗口内本 effect 会连环重启（实测 3 次）：被取消的跑次逐包
+            // ensureActive 立即终止，避免多份冷 PM label 循环并发互抢（769ms 被顶到 1376ms）
+            val fetched = mutableMapOf<String, String>()
+            for (pkg in (pkgs + fixed).distinct()) {
+                ensureActive()
+                fetched[pkg] = AppMetaCache.label(context, pkg)
+            }
+            labels = fetched
             val fixedSorted = fixed
                 .sortedBy { pkg -> fixedOrder.indexOf(pkg).let { if (it >= 0) it else Int.MAX_VALUE } }
-                .map { it to (labels[it] ?: it) }
-            buildEntries(pkgs, fixedSorted, labels)
+                .map { it to (fetched[it] ?: it) }
+            buildEntries(pkgs, fixedSorted, fetched)
         }
         hasFixedApps = fixed.isNotEmpty()
         entries = result
@@ -299,7 +307,7 @@ private fun AllAppsScreen(
         // 没变化不写（AllApps 高频打开）
         withContext(Dispatchers.IO) {
             runCatching {
-                val p = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                val p = context.getSharedPreferences(PREFS_NAME, android.content.Context.MODE_PRIVATE)
                 val editor = p.edit()
                 var dirty = false
                 val sugJson = org.json.JSONArray(pkgs).toString()

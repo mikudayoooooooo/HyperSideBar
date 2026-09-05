@@ -86,6 +86,8 @@ object PrefKeys {
     const val EXTRA_SUGGESTION_LIST = "suggestions"
     /** 模块本地准入列表缓存键（设置页 prefs，JSON 数组，与 DataLoader 落盘同格式） */
     const val CACHED_SUGGESTIONS = "cachedSuggestions"
+    /** 模块本地 label 镜像键（AppMetaCache 落盘快照，JSON 对象 pkg→label，冷启动组装免逐包 PM binder） */
+    const val CACHED_LABELS = "cachedLabels"
 }
 
 // channelMode（EDGE/HANDLE）已废弃（1B：EDGE 为唯一产品形态，HANDLE 遗留调试通道代码

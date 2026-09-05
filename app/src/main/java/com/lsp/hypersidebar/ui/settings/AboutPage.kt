@@ -38,6 +38,7 @@ import com.lsp.hypersidebar.BuildConfig
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.savePref
+import com.lsp.hypersidebar.util.RemotePrefsBridge
 import io.github.libxposed.service.XposedService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -58,9 +59,13 @@ internal fun AboutPage(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val relayBlackhole by remember(prefs, prefsRevision) {
+    // D1 同款（SettingsPage）：绑定晚到时参数 prefs 可能是 nav3 entry 固化的本地空壳，
+    // 读写都落不到 hook 可见的 remote store——页内切到 bridge.prefs 保读写同源
+    val effectivePrefs = RemotePrefsBridge.prefs ?: prefs
+    var relayBlackhole by remember(effectivePrefs, prefsRevision) {
         mutableStateOf(
-            runCatching { prefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false) }.getOrDefault(false)
+            runCatching { effectivePrefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false) }
+                .getOrDefault(false)
         )
     }
     val versionName = remember {
@@ -227,8 +232,11 @@ internal fun AboutPage(
                     summary = stringResource(R.string.debug_relay_blackhole_summary),
                     checked = relayBlackhole,
                     onCheckedChange = {
-                        // 写 remotePrefs：launcher 侧每次执行广播时读取（binder 缓存实时同步）
-                        prefs.savePref(PrefKeys.DEBUG_RELAY_BLACKHOLE, it)
+                        // 乐观本地更新：开关样式即时翻转（写入→revision→重组的异步链
+                        // 不保证触发，曾实测样式滞留旧态）；写 remotePrefs，
+                        // launcher 侧每次执行广播时读取（binder 缓存实时同步）
+                        relayBlackhole = it
+                        effectivePrefs.savePref(PrefKeys.DEBUG_RELAY_BLACKHOLE, it)
                     }
                 )
             }

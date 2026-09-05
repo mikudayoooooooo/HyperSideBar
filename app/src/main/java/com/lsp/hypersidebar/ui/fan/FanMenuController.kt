@@ -87,6 +87,9 @@ class FanMenuController(
         // 实测轮七：入口状态遥测——定位 isShowing 被无日志翻转的路径（双开根因）
         Log.i(TAG, "showInternal enter: isShowing=$isShowing host=${host != null} anchor=($anchorX,$anchorY)")
         if (isShowing && host != null) return
+        // 耗时锚点（呼出卡顿归因）：cost=本次呼出主线程装配全程；firstAssembly=true
+        // =本进程池为空（进程冷启/被杀后首呼出），这是"有时候呼出会卡"的头号嫌疑段
+        val t0 = android.os.SystemClock.elapsedRealtime()
 
         isShowing = true
         // 防御性单窗口不变量：任何状态下不允许两个 fan 窗口并存——
@@ -158,12 +161,14 @@ class FanMenuController(
 
             // 池=1 复用（1C P2）：host 不逐呼出重建，context 经 activeContext 提供
             activeContext = context
+            val firstAssembly = idleHost == null
             val fanHost = obtainHost()
             host = fanHost
             fanHost.show(anchorX, anchorY, apps, allQuick, isLandscape)
             touchHeartbeat()
             onMechanismResult?.invoke(true, "show ok")
-            Log.i(TAG, "show: fan overlay added (pooled), ${allQuick.size} quick actions, landscape=$isLandscape")
+            Log.i(TAG, "show: fan overlay added (pooled), ${allQuick.size} quick actions, landscape=$isLandscape, " +
+                "cost=${android.os.SystemClock.elapsedRealtime() - t0}ms, firstAssembly=$firstAssembly")
 
         } catch (e: Throwable) {
             Log.e(TAG, "show FAILED: ${e.message}", e)

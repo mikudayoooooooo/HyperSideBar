@@ -48,6 +48,7 @@ private const val DEFAULT_DEGRADE_TOAST = "扇形侧边栏：边缘穿透持续�
  *   ② `ImageView.onDraw` 身份过滤置空；③ `View.draw` 身份过滤置空——覆盖熄屏重建/主题切换
  *   换 drawable 类等一切绘制路径。M1/N1 提示一并清理。
  * 系统侧边栏开关保持开启 → :ui 常驻 → 活动面板与 B 链路正常。
+ * 总开关（设置页"启用超级侧边栏"）关闭=同降级姿态让位（原生侧边栏恢复），可回切；
  * 非 EDGE 值（HANDLE）为遗留调试通道：条可见可摸、f.onTouch 直呼 fan，产品不暴露。
  * 执行动作用 DirectLaunchStrategy（本进程直执行）。
  * 自动降级（1C，PRD §9.4）：竖屏穿透失效 ≥3 次/分钟 → 恢复原生侧边栏（条可摸/可见/
@@ -94,14 +95,17 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 // 幽灵入口）；横屏=B 路线状态机接管（隐藏条即触发器）。
                 // 已降级（1C）：竖屏事件放行原生流（不吞不计数）；
                 // 数据源死亡（迭代四 §1.3）：两侧全放行原生流，不再呼出；
-                // 已熔断（1C 轮二）：两侧全放行，本进程停止一切侵入
+                // 已熔断（1C 轮二）：两侧全放行，本进程停止一切侵入；
+                // 总开关关闭：两侧全放行（原生侧边栏恢复可用），不吞不计数
                 if (!isLandscape(view)) {
-                    if (passthroughDegraded || breaker.open || DataDeadState.dead) return@createBeforeHook
+                    if (!moduleEnabled() || passthroughDegraded || breaker.open || DataDeadState.dead) {
+                        return@createBeforeHook
+                    }
                     if (event.actionMasked == MotionEvent.ACTION_DOWN) onCoverTouchLeak()
                     it.result = true
                     return@createBeforeHook
                 }
-                if (breaker.open || DataDeadState.dead) return@createBeforeHook
+                if (!moduleEnabled() || breaker.open || DataDeadState.dead) return@createBeforeHook
                 handleStripGesture(view, event)
                 it.result = true
             }
@@ -251,8 +255,11 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         val anchorX = if (sDownX < dm.widthPixels / 2f) 0f else dm.widthPixels.toFloat()
         val anchorY = LANDSCAPE_ANCHOR_Y_DP * dm.density
         Log.i(TAG, "s#$sGestureSeq showFan: anchor=($anchorX, $anchorY) downY=${sDownY.toInt()} dwell=${stripDwellMs()}ms")
+        // 耗时锚点（呼出卡顿归因）：postLag=:ui 主线程繁忙度（同 EdgeGestureHook）
+        val postAtMs = android.os.SystemClock.uptimeMillis()
         val r = Runnable {
             sPendingShow = null
+            Log.i(TAG, "s#$sGestureSeq showFan runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
             fanController.show(ctx, anchorX, anchorY)
         }
         sPendingShow = r
@@ -279,6 +286,14 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
     private fun isLandscape(view: View): Boolean =
         view.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+    /**
+     * 总开关（设置页"启用超级侧边栏"，PrefKeys.ENABLED）：关闭=本进程 hook 让位，
+     * 恢复原生侧边栏全部能力（条可见/可摸/事件原生流，同 passthroughDegraded 让位面）。
+     * 与降级的区别：单向不可逆 vs 各决策点现读即开即生效（SyncedPrefs 读=内存缓存命中）。
+     */
+    private fun moduleEnabled(): Boolean =
+        runCatching { remotePrefs.getBoolean(PrefKeys.ENABLED, true) }.getOrDefault(true)
 
     fun getStats(): String {
         val wrapper = if (sidebarWrapperRef?.get() != null) "1" else "0"
@@ -333,6 +348,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         com.lsp.hypersidebar.util.DataLoader.prewarmWithRetry(
             provider = { runCatching { EzXposed.appContext }.getOrNull() }
         )
+        // 扇形 UI 类族后台预载（同 EdgeGestureHook）：:ui 侧横屏首呼出同样受益
+        com.lsp.hypersidebar.util.FanUiWarmup.warm()
     }
 
     // ===== 小白条视觉隐藏（EDGE 模式） =====
@@ -350,7 +367,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 .filterByParamTypes(Canvas::class.java)
                 .firstOrNull()
                 ?.createBeforeHook {
-                    if (!passthroughDegraded) it.result = null
+                    if (!passthroughDegraded && moduleEnabled()) it.result = null
                 }
                 ?.also { Log.i(TAG, "hookHideWhiteBar: c.draw hooked OK") }
                 ?: Log.w(TAG, "hookHideWhiteBar: c.draw NOT FOUND（条保持可见，安全降级）")
@@ -453,7 +470,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
      * 已降级（1C）：竖屏期望态翻为"可触摸"（原生侧边栏恢复），任何窗口重建不再注入。
      */
     private fun applyCoverFlagAtBoundary(view: View, lp: WindowManager.LayoutParams, via: String) {
-        val wantFlag = !isLandscape(view) && !passthroughDegraded
+        val wantFlag = !isLandscape(view) && !passthroughDegraded && moduleEnabled()
         val hasFlag = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0
         when {
             wantFlag && !hasFlag -> {
@@ -526,8 +543,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             val lp = view.layoutParams as? WindowManager.LayoutParams
                 ?: return@runCatching Log.w(TAG, "applyCoverFlag: lp=${view.layoutParams?.javaClass?.name} 非 WM.LayoutParams")
             // B 路线（1B）：横屏条要收事件——仅竖屏 EDGE 期望穿透 flag；旋转后本方法
-            // （看门狗 2s 周期）负责收敛残留。已降级（1C）：竖屏反向清 flag 恢复可摸
-            val want = !isLandscape(view) && !passthroughDegraded
+            // （看门狗 2s 周期）负责收敛残留。已降级（1C）/总开关关闭：竖屏反向清 flag 恢复可摸
+            val want = !isLandscape(view) && !passthroughDegraded && moduleEnabled()
             val has = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0
             if (want != has) {
                 lp.flags = if (want) {
@@ -572,8 +589,10 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 .firstOrNull()
                 ?.createBeforeHook {
                     val v = it.thisObjectOrNull ?: return@createBeforeHook
-                    // 已降级（1C）放行：条恢复可见
-                    if (v.javaClass.name == handleBarView && !passthroughDegraded) it.result = null
+                    // 已降级（1C）/总开关关闭 放行：条恢复可见
+                    if (v.javaClass.name == handleBarView && !passthroughDegraded && moduleEnabled()) {
+                        it.result = null
+                    }
                 }
                 ?.also { Log.i(TAG, "hookHandleBarPixelKill: ImageView.onDraw hooked OK") }
                 ?: Log.w(TAG, "hookHandleBarPixelKill: ImageView.onDraw NOT FOUND（降级仅靠 c.draw）")
@@ -588,8 +607,10 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 .firstOrNull()
                 ?.createBeforeHook {
                     val v = it.thisObjectOrNull ?: return@createBeforeHook
-                    // 已降级（1C）放行：条恢复可见
-                    if (v.javaClass.name == handleBarView && !passthroughDegraded) it.result = null
+                    // 已降级（1C）/总开关关闭 放行：条恢复可见
+                    if (v.javaClass.name == handleBarView && !passthroughDegraded && moduleEnabled()) {
+                        it.result = null
+                    }
                 }
                 ?.also { Log.i(TAG, "hookHandleBarPixelKill: View.draw (L3) hooked OK") }
                 ?: Log.w(TAG, "hookHandleBarPixelKill: View.draw NOT FOUND")

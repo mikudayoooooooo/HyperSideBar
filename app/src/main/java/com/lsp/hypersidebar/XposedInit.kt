@@ -32,7 +32,9 @@ class XposedInit : XposedModule() {
         when {
             param.packageName == "com.miui.securitycenter" && procName.endsWith(":ui") -> {
                 // 横屏 B 路线触发端 + 竖屏小白条隐藏穿透宿主 + 执行端（fan 选中动作本进程直执行）
-                val prefs = remotePrefsWithProbe()
+                // SyncedPrefs 包装（同 home 端批次 2）：总开关/横屏 dwell 等读取走同步广播
+                // 缓存命中，实时性不再单靠 LSPosed push 订阅
+                val prefs = com.lsp.hypersidebar.util.SyncedPrefs(remotePrefsWithProbe())
                 if (turboLayoutHook == null) {
                     turboLayoutHook = TurboLayout(prefs)
                 }

@@ -2,6 +2,8 @@ package com.lsp.hypersidebar.ui.settings
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.LauncherApps
+import android.os.Process
 import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
@@ -71,14 +73,48 @@ internal fun loadQsTiles(context: Context): List<QsTileInfo> =
     }
 
 /**
- * QS 磁贴平铺选择页（用户 2026-09-05 拍板：添加入口与组件/Intent URI 同级，
- * 独立平铺全部扫到的 TileService，不走"应用→服务"两级翻找）。
- * 选中回填编辑页（kind=QS_TILE，类名进 serviceName）；将来 ShortcutManager
- * 型应用快捷方式可并入本页（"qs 和 shortcut 都可以通过这个入口"）。
+ * manifest 静态应用快捷方式（与 C2 的 ShortcutProbe 同源数据）：
+ * 目标 activity 已知 → 选中后建 COMPONENT 快捷方式 am start 直启（C2 定案，
+ * root 可拉非导出目标）。动态/固定 shortcut 不可此法（intent 对非桌面不可见、
+ * startShortcut 需桌面角色——B2 归档约束不变）。
+ */
+internal fun loadManifestShortcuts(context: Context): List<QsTileInfo> =
+    runCatching {
+        val la = context.getSystemService(LauncherApps::class.java)
+            ?: return@runCatching emptyList<QsTileInfo>()
+        val query = LauncherApps.ShortcutQuery()
+            .setQueryFlags(LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST)
+        val pm = context.packageManager
+        la.getShortcuts(query, Process.myUserHandle()).orEmpty()
+            .mapNotNull { si ->
+                val cn = si.activity ?: return@mapNotNull null
+                val appLabel = runCatching {
+                    pm.getApplicationLabel(pm.getApplicationInfo(cn.packageName, 0)).toString()
+                }.getOrNull() ?: cn.packageName
+                val label = si.longLabel?.toString() ?: si.shortLabel?.toString().orEmpty()
+                QsTileInfo(
+                    packageName = cn.packageName,
+                    className = cn.className,
+                    label = label.ifEmpty { appLabel },
+                    appLabel = appLabel
+                )
+            }
+            .sortedBy { it.appLabel.lowercase() }
+    }.getOrElse { e ->
+        Log.w(TAG, "loadManifestShortcuts failed: ${e.javaClass.simpleName}: ${e.message}")
+        emptyList()
+    }
+
+/**
+ * 快捷开关/应用快捷方式平铺选择页（用户 2026-09-05 拍板：添加入口与组件/Intent URI
+ * 同级，独立平铺不走"应用→服务"两级翻找）。两组：
+ * - 控制中心磁贴（TileService）：建 QS_TILE 快捷方式，root click-tile 触发（须已在 QS）
+ * - 应用快捷方式（manifest 静态）：建 COMPONENT 快捷方式，am start 直启目标 activity
+ * 选中回填编辑页。动态 shortcut 因平台约束（B2 归档）不在列。
  */
 @Composable
 internal fun QsTilePickerPage(
-    onSelected: (packageName: String, className: String, label: String) -> Unit,
+    onSelected: (item: QsTileInfo, isTile: Boolean) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -89,16 +125,26 @@ internal fun QsTilePickerPage(
     ) {
         value = withContext(Dispatchers.IO) { loadQsTiles(context) }
     }
+    val shortcuts by produceState<List<QsTileInfo>>(
+        initialValue = emptyList(),
+        key1 = context.applicationContext
+    ) {
+        value = withContext(Dispatchers.IO) { loadManifestShortcuts(context) }
+    }
 
     var searchQuery by remember { mutableStateOf("") }
-    val filtered = remember(tiles, searchQuery) {
-        if (searchQuery.isBlank()) tiles
-        else tiles.filter {
-            it.label.contains(searchQuery, ignoreCase = true) ||
-                it.appLabel.contains(searchQuery, ignoreCase = true) ||
-                it.packageName.contains(searchQuery, ignoreCase = true)
-        }
+    fun <T> List<T>.match(matcher: (T) -> Boolean) = if (searchQuery.isBlank()) this else filter(matcher)
+    val shownTiles = tiles.match {
+        it.label.contains(searchQuery, ignoreCase = true) ||
+            it.appLabel.contains(searchQuery, ignoreCase = true) ||
+            it.packageName.contains(searchQuery, ignoreCase = true)
     }
+    val shownShortcuts = shortcuts.match {
+        it.label.contains(searchQuery, ignoreCase = true) ||
+            it.appLabel.contains(searchQuery, ignoreCase = true) ||
+            it.packageName.contains(searchQuery, ignoreCase = true)
+    }
+    val loading = tiles.isEmpty() && shortcuts.isEmpty() && searchQuery.isEmpty()
 
     LazyColumn(
         modifier = Modifier
@@ -133,7 +179,7 @@ internal fun QsTilePickerPage(
             }
         }
 
-        if (tiles.isEmpty() && searchQuery.isEmpty()) {
+        if (loading) {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Text(
@@ -147,28 +193,59 @@ internal fun QsTilePickerPage(
 
         item {
             Text(
-                text = stringResource(R.string.qs_tile_picker_count, filtered.size),
+                text = stringResource(
+                    R.string.qs_tile_picker_count, shownTiles.size + shownShortcuts.size
+                ),
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 style = MiuixTheme.textStyles.footnote1,
                 modifier = Modifier.padding(vertical = 4.dp)
             )
         }
 
-        items(filtered, key = { it.packageName + "/" + it.className }) { tile ->
-            // 摘要=包名 · 类短名，>40 字符截断（§UI 规范：长文本摘要统一观感）
-            val raw = "${tile.packageName} · ${tile.className.substringAfterLast('.')}"
-            ArrowPreference(
-                title = tile.label,
-                summary = if (raw.length > 40) raw.take(38) + "…" else raw,
-                startAction = {
-                    SettingsAppIcon(
-                        packageName = tile.packageName,
-                        appName = tile.appLabel,
-                        size = 28f
-                    )
-                },
-                onClick = { onSelected(tile.packageName, tile.className, tile.label) }
-            )
+        if (shownTiles.isNotEmpty()) {
+            item {
+                Text(
+                    text = stringResource(R.string.qs_tile_group_tiles),
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    style = MiuixTheme.textStyles.footnote1,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+            items(shownTiles, key = { "t" + it.packageName + "/" + it.className }) { tile ->
+                PickerRow(tile) { onSelected(tile, true) }
+            }
+        }
+
+        if (shownShortcuts.isNotEmpty()) {
+            item {
+                Text(
+                    text = stringResource(R.string.qs_tile_group_shortcuts),
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    style = MiuixTheme.textStyles.footnote1,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+            items(shownShortcuts, key = { "s" + it.packageName + "/" + it.className + "/" + it.label }) { item ->
+                PickerRow(item) { onSelected(item, false) }
+            }
         }
     }
+}
+
+@Composable
+private fun PickerRow(item: QsTileInfo, onClick: () -> Unit) {
+    // 摘要=应用名 · 包名 · 类短名，>40 字符截断（§UI 规范：长文本摘要统一观感）
+    val raw = "${item.appLabel} · ${item.packageName} · ${item.className.substringAfterLast('.')}"
+    ArrowPreference(
+        title = item.label,
+        summary = if (raw.length > 40) raw.take(38) + "…" else raw,
+        startAction = {
+            SettingsAppIcon(
+                packageName = item.packageName,
+                appName = item.appLabel,
+                size = 28f
+            )
+        },
+        onClick = onClick
+    )
 }

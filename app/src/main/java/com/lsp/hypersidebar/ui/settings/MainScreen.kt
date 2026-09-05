@@ -280,19 +280,25 @@ internal fun MainScreen(
                     SettingsKey.QsTilePicker -> NavEntry(key) {
                         DetailPageContainer {
                             QsTilePickerPage(
-                                onSelected = { pkg, cls, label ->
-                                    // 与 ShortcutPicker 同款回填：原地替换栈中编辑键 + 弹出选择器
+                                onSelected = { item, isTile ->
+                                    // 与 ShortcutPicker 同款回填：原地替换栈中编辑键 + 弹出选择器。
+                                    // 磁贴→QS_TILE（类名存 serviceName）；应用快捷方式→COMPONENT
+                                    //（目标 activity am start 直启，C2 定案）
                                     val idx = settingsStack.indexOfLast { it is SettingsKey.ShortcutEdit }
                                     if (idx >= 0) {
                                         val cur = settingsStack[idx] as SettingsKey.ShortcutEdit
                                         settingsStack[idx] = cur.copy(
                                             shortcut = cur.shortcut.copy(
-                                                packageName = pkg,
-                                                serviceName = cls,
-                                                activityName = null,
-                                                kind = com.lsp.hypersidebar.util.ShortcutKind.QS_TILE,
-                                                label = cur.shortcut.label.ifEmpty { label },
-                                                iconPackageName = pkg
+                                                packageName = item.packageName,
+                                                activityName = if (isTile) null else item.className,
+                                                serviceName = if (isTile) item.className else null,
+                                                kind = if (isTile) {
+                                                    com.lsp.hypersidebar.util.ShortcutKind.QS_TILE
+                                                } else {
+                                                    com.lsp.hypersidebar.util.ShortcutKind.COMPONENT
+                                                },
+                                                label = cur.shortcut.label.ifEmpty { item.label },
+                                                iconPackageName = item.packageName
                                             )
                                         )
                                     }

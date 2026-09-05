@@ -1038,7 +1038,9 @@ object ShortcutLauncher {
                 if (!pkg.matches(PKG_ACTIVITY_REGEX) || !fullCls.matches(PKG_ACTIVITY_REGEX)) {
                     return null
                 }
-                arrayOf("statusbar", "click-tile", "$pkg/$fullCls")
+                // statusbar 是 cmd 的子命令而非独立二进制（漏掉 cmd 前缀 exit=127，
+                // 2026-09-05 编辑页测试实测）；绝对路径防 su 环境 PATH 不全
+                arrayOf("/system/bin/cmd", "statusbar", "click-tile", "$pkg/$fullCls")
             }
             ShortcutKind.TOOLBOX -> null
         }

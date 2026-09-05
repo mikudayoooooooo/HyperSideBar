@@ -124,7 +124,7 @@ class DirectLaunchStrategy(
             !full.matches(Regex("^[a-zA-Z_][a-zA-Z0-9_]*(?:[.][a-zA-Z_][a-zA-Z0-9_]*)+$"))
         ) return false
         return runCatching {
-            val proc = ProcessBuilder("cmd", "statusbar", "click-tile", "$pkg/$full").start()
+            val proc = ProcessBuilder("/system/bin/cmd", "statusbar", "click-tile", "$pkg/$full").start()
             val exit = proc.waitFor()
             if (exit == 0) {
                 Log.i(TAG, "clickTileDirect: ok $pkg/$full")

@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.util.RelayToken
@@ -80,7 +82,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                             }
                             val cn = intent.getStringExtra(PrefKeys.QS_TILE_CLICK_EXTRA)
                                 ?.let { ComponentName.unflattenFromString(it) } ?: return
-                            if (isOrderedBroadcast) resultCode = clickTile(cn)
+                            if (isOrderedBroadcast) resultCode = resolveAndClick(c, cn)
                         }
                     },
                     IntentFilter(PrefKeys.QS_TILE_CLICK_ACTION),
@@ -90,11 +92,16 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
             }
     }
 
-    /** 数据层直点磁贴；返回 1=已点击，0=未就绪/未找到/异常（发送端据此回退兜底）。
+    /** 数据层直点磁贴；返回 1=磁贴已定位（点击异步），0=未就绪/未找到/异常。
      *  纯反射（libxposed 新 API 无 XposedHelpers）。注意：jadx 反编译里的 Kotlin
      *  "属性"运行时不一定有 getter（11:36 实测 getInteractor NoSuchMethod），
-     *  字段一律 getField 直读。 */
-    private fun clickTile(cn: ComponentName): Int {
+     *  字段一律 getField 直读。
+     *
+     *  点击竞态（2026-09-06 用户实测 CaptureTileService 成功率低）：QS 收起时
+     *  TileService 处于解绑态，click() 派发后 onClick 偶发丢失。先
+     *  requestListeningState（公开 API）请求绑定进监听态，延迟 250ms 再点——
+     *  顺带给扇形收场/目标应用解冻留出时间窗。 */
+    private fun resolveAndClick(context: Context, cn: ComponentName): Int {
         val adapter = hostAdapter ?: run {
             Log.w(TAG, "clickTile: adapter not stashed yet")
             return 0
@@ -133,10 +140,25 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                 created
             }
 
-            tile.javaClass.methods
-                .firstOrNull { it.name == "click" && it.parameterCount == 1 }
-                ?.let { it.invoke(tile, null) }
-            Log.i(TAG, "clickTile: clicked $spec")
+            // listening 激活：TileService 未绑定时点击会丢（bind 竞态）
+            runCatching {
+                cl.loadClass("android.service.quicksettings.TileService")
+                    .getMethod(
+                        "requestListeningState",
+                        Context::class.java, ComponentName::class.java
+                    )
+                    .invoke(null, context.applicationContext, cn)
+            }.onFailure { Log.w(TAG, "requestListeningState failed: ${it.message}") }
+
+            Handler(Looper.getMainLooper()).postDelayed({
+                runCatching {
+                    tile.javaClass.methods
+                        .firstOrNull { it.name == "click" && it.parameterCount == 1 }
+                        ?.let { it.invoke(tile, null) }
+                    Log.i(TAG, "clickTile: clicked $spec")
+                }.onFailure { Log.w(TAG, "delayed click failed: ${it.message}") }
+            }, CLICK_DELAY_MS)
+            Log.i(TAG, "clickTile: scheduled $spec (+${CLICK_DELAY_MS}ms, listening primed)")
             SystemUiHookResult.RESULT_CLICKED
         }.getOrElse {
             Log.w(TAG, "clickTile failed: ${it.message}")
@@ -155,6 +177,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
         const val ADAPTER_CLASS =
             "com.android.systemui.qs.pipeline.domain.adapter.MiuiQSHostAdapter"
         const val CUSTOM_TILE_CLASS = "com.android.systemui.qs.external.CustomTile"
+        const val CLICK_DELAY_MS = 250L
 
         /** createTile 现场创建的实例按 spec 缓存复用（上界=用户添加的磁贴快捷方式数） */
         val createdTiles = java.util.concurrent.ConcurrentHashMap<String, Any>()

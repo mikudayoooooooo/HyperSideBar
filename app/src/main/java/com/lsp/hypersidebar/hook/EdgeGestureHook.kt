@@ -172,6 +172,7 @@ class EdgeGestureHook(
                     // 配置同步通道（批次 2）：收设置页全量推送，根治 hook 进程死快照
                     com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx)
                     Log.i(TAG, "config sync receiver registered (via Application.attach)")
+                    registerManifestShortcutsBridge(ctx)
                 } catch (e: Throwable) {
                     Log.e(TAG, "probe receiver registration failed: ${e.message}", e)
                 }
@@ -179,6 +180,60 @@ class EdgeGestureHook(
         if (hooked == null) {
             Log.e(TAG, "Application.attach hook failed（状态探针不可用，设置页将显示无应答）")
         }
+    }
+
+    /**
+     * manifest 快捷方式 launcher 桥（批次 3，2026-09-05 实锤）：LauncherApps.getShortcuts
+     * 对非默认桌面抛 SecurityException，而本进程恰是默认桌面（有访问权）。收设置页
+     * REQUEST → 查询 → JSON 应答给模块 App 的 ShortcutRelayReceiver（显式组件寻址+
+     * 令牌）。数据仅驱动选择器展示，伪造危害=列表造假，仍按令牌严格校验。
+     */
+    private fun registerManifestShortcutsBridge(ctx: Context) {
+        runCatching {
+            ctx.registerReceiver(
+                object : BroadcastReceiver() {
+                    override fun onReceive(c: Context, intent: Intent) {
+                        Thread {
+                            runCatching {
+                                val la = c.getSystemService(
+                                    android.content.pm.LauncherApps::class.java
+                                ) ?: return@runCatching
+                                val query = android.content.pm.LauncherApps.ShortcutQuery()
+                                    .setQueryFlags(
+                                        android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST
+                                    )
+                                val arr = org.json.JSONArray()
+                                la.getShortcuts(query, android.os.Process.myUserHandle()).orEmpty()
+                                    .forEach { si ->
+                                        val cn = si.activity ?: return@forEach
+                                        arr.put(
+                                            org.json.JSONObject()
+                                                .put("p", cn.packageName)
+                                                .put("c", cn.className)
+                                                .put("l", si.longLabel?.toString()
+                                                    ?: si.shortLabel?.toString().orEmpty())
+                                        )
+                                    }
+                                val reply = Intent(PrefKeys.MANIFEST_SHORTCUTS_REPLY)
+                                    .setClassName(
+                                        com.lsp.hypersidebar.util.FreeformLauncher.MODULE_PACKAGE,
+                                        com.lsp.hypersidebar.ShortcutRelayReceiver::class.java.name
+                                    )
+                                    .putExtra(PrefKeys.MANIFEST_SHORTCUTS_EXTRA, arr.toString())
+                                RelayToken.attach(reply, RelayToken.read(remotePrefs))
+                                c.sendBroadcast(reply)
+                                Log.i(TAG, "manifest shortcuts replied: ${arr.length()}")
+                            }.onFailure {
+                                Log.w(TAG, "manifest shortcuts query failed: ${it.message}")
+                            }
+                        }.start()
+                    }
+                },
+                IntentFilter(PrefKeys.MANIFEST_SHORTCUTS_REQUEST),
+                Context.RECEIVER_EXPORTED
+            )
+            Log.i(TAG, "manifest shortcuts request receiver registered (via Application.attach)")
+        }.onFailure { Log.e(TAG, "manifest shortcuts bridge register failed: ${it.message}") }
     }
 
     /** 记录层：触摸流入口，BeforeHook。返回 true = 消费（拦截原生处理）。 */

@@ -8,6 +8,7 @@ import io.github.kyuubiran.ezxhelper.xposed.EzXposed
 import com.lsp.hypersidebar.hook.BaseHook
 import com.lsp.hypersidebar.hook.EdgeGestureHook
 import com.lsp.hypersidebar.hook.FreeformRelayHook
+import com.lsp.hypersidebar.hook.SystemUiHook
 import com.lsp.hypersidebar.hook.TurboLayout
 
 class XposedInit : XposedModule() {
@@ -16,6 +17,7 @@ class XposedInit : XposedModule() {
     private var turboLayoutHook: TurboLayout? = null
     private var freeformRelayHook: FreeformRelayHook? = null
     private var edgeGestureHook: EdgeGestureHook? = null
+    private var systemUiHook: SystemUiHook? = null
 
     override fun onModuleLoaded(param: ModuleLoadedParam) {
         EzXposed.initOnModuleLoaded(this, param)
@@ -55,6 +57,15 @@ class XposedInit : XposedModule() {
                     )
                 }
                 initHooks(edgeGestureHook!!)
+            }
+            param.packageName == "com.android.systemui" -> {
+                // 批次 3：QS 磁贴数据层直点桥（click-tile 门禁在回调层，QSTile.click 无约束）
+                if (systemUiHook == null) {
+                    systemUiHook = SystemUiHook(
+                        com.lsp.hypersidebar.util.SyncedPrefs(remotePrefsWithProbe())
+                    )
+                }
+                initHooks(systemUiHook!!)
             }
             else -> Log.d(TAG, "Skip package/process: ${param.packageName} / $procName")
         }

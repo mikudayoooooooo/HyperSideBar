@@ -30,13 +30,25 @@ private const val TAG = "ShortcutRelay"
 class ShortcutRelayReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != PrefKeys.RELAY_LAUNCH_ACTION) return
+        when (intent.action) {
+            // manifest 快捷方式桥应答（launcher 进程查询结果，数据仅驱动选择器展示）
+            PrefKeys.MANIFEST_SHORTCUTS_REPLY -> {
+                val json = intent.getStringExtra(PrefKeys.MANIFEST_SHORTCUTS_EXTRA) ?: return
+                com.lsp.hypersidebar.ui.settings.ManifestShortcutsBridge.onReply(context, json)
+                return
+            }
+            PrefKeys.RELAY_LAUNCH_ACTION -> Unit
+            else -> return
+        }
         if (!RelayToken.verifyRelay(intent)) return
+        // 链路追踪（util/Trace）：relay 意图自带呼出链 id，写入本进程供日志前缀
+        val trace = intent.getStringExtra(com.lsp.hypersidebar.util.Trace.EXTRA)
+        com.lsp.hypersidebar.util.Trace.current = trace
         val json = intent.getStringExtra(PrefKeys.RELAY_LAUNCH_EXTRA_SHORTCUT) ?: return
         val shortcut = runCatching {
             ShortcutAction.fromJson(JSONObject(json))
         }.getOrNull() ?: run {
-            Log.w(TAG, "relay launch rejected: malformed shortcut json")
+            Log.w(TAG, "[${trace ?: "-"}] relay launch rejected: malformed shortcut json")
             return
         }
 
@@ -50,11 +62,34 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
                 // remotePrefs 并同步令牌（≤3s；LSPosed 死则超时按拒绝处理，安全档不变）
                 if (com.lsp.hypersidebar.util.RelayToken.current() == null) {
                     val provisioned = awaitTokenProvision()
-                    Log.i(TAG, "relay token cold-provision: ok=$provisioned")
+                    Log.i(TAG, "[${trace ?: "-"}] relay token cold-provision: ok=$provisioned")
                 }
-                Log.i(TAG, "relay launch: id=${shortcut.id} kind=${shortcut.kind}")
+                Log.i(TAG, "[${trace ?: "-"}] relay launch: id=${shortcut.id} kind=${shortcut.kind}")
                 val result = ShortcutLauncher.launch(context, shortcut, DefaultLaunchStrategy())
-                Log.i(TAG, "relay launch result: $result")
+                Log.i(TAG, "[${trace ?: "-"}] relay launch result: $result")
+
+                // 结果回执（2026-09-05）：①写 remotePrefs 供自检报告读取（远程排障
+                // 无需 adb）；②回告 :ui——失败 toast 到前台，成功静默
+                val ok = result is com.lsp.hypersidebar.util.LaunchResult.Success
+                val reason = (result as? com.lsp.hypersidebar.util.LaunchResult.Failure)
+                    ?.let { "${it.reason}: ${it.detail}" } ?: ""
+                val record = "trace=$trace|label=${shortcut.label}|ok=$ok|reason=$reason|ts=${System.currentTimeMillis()}"
+                runCatching {
+                    com.lsp.hypersidebar.util.RemotePrefsBridge.prefs?.edit()
+                        ?.putString(PrefKeys.LAST_RELAY_RESULT, record)?.apply()
+                }
+                runCatching {
+                    val reply = Intent(PrefKeys.ACTION_RELAY_RESULT)
+                        .setPackage("com.miui.securitycenter")
+                        .putExtra("ok", ok)
+                        .putExtra("label", shortcut.label)
+                        .putExtra("reason", reason)
+                        .putExtra(com.lsp.hypersidebar.util.Trace.EXTRA, trace)
+                    com.lsp.hypersidebar.util.RelayToken.attach(
+                        reply, com.lsp.hypersidebar.util.RelayToken.current()
+                    )
+                    context.sendBroadcast(reply)
+                }
             } finally {
                 pending.finish()
             }

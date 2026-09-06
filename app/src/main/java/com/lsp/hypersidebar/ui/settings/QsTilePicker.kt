@@ -1,13 +1,17 @@
 package com.lsp.hypersidebar.ui.settings
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.os.Process
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.util.RelayToken
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -47,7 +51,7 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 private const val TAG = "ShortcutSettings"
 
 /** C3（批次 3）：扫到的单个 TileService 或 manifest 静态快捷方式。 */
-internal data class QsTileInfo(
+data class QsTileInfo(
     val packageName: String,
     val className: String,
     val label: String,
@@ -125,9 +129,8 @@ internal fun loadManifestShortcuts(context: Context): List<QsTileInfo> =
         emptyList()
     }
 
-private fun buildTileApps(context: Context): List<QsTileAppInfo> {
+private fun buildTileApps(context: Context, shortcuts: List<QsTileInfo>): List<QsTileAppInfo> {
     val tiles = loadQsTiles(context)
-    val shortcuts = loadManifestShortcuts(context)
     val pkgs = LinkedHashSet<String>()
     tiles.forEach { pkgs.add(it.packageName) }
     shortcuts.forEach { pkgs.add(it.packageName) }
@@ -136,6 +139,83 @@ private fun buildTileApps(context: Context): List<QsTileAppInfo> {
         val s = shortcuts.filter { it.packageName == pkg }
         QsTileAppInfo(pkg, (t.firstOrNull() ?: s.first()).appLabel, t, s)
     }.sortedBy { it.appLabel.lowercase() }
+}
+
+/**
+ * manifest 快捷方式 launcher 桥（模块侧，2026-09-05 实锤方案）：模块 App 直查
+ * getShortcuts 抛 SecurityException（系统只授权默认桌面）→ 向 launcher 进程的
+ * hook 接收器发 REQUEST，应答 JSON 经 ShortcutRelayReceiver 回填本桥。
+ * 本地 prefs 缓存：冷启动先展示上次清单，应答到达后刷新。
+ */
+object ManifestShortcutsBridge {
+
+    var shortcuts by mutableStateOf(emptyList<QsTileInfo>())
+        private set
+
+    @Volatile private var registered = false
+
+    private const val LOCAL_PREFS = "hyperSidebar_prefs"
+    private const val CACHE_KEY = "manifest_shortcuts_cache"
+
+    fun ensureRegistered(context: Context) {
+        if (registered) return
+        registered = true
+        val appCtx = context.applicationContext
+        runCatching {
+            appCtx.getSharedPreferences(LOCAL_PREFS, Context.MODE_PRIVATE)
+                .getString(CACHE_KEY, null)?.let { json ->
+                    shortcuts = parse(json)
+                    Log.i(TAG, "manifest shortcuts cache loaded: ${shortcuts.size}")
+                }
+        }
+        runCatching {
+            appCtx.registerReceiver(
+                object : BroadcastReceiver() {
+                    override fun onReceive(c: Context, intent: Intent) {
+                        onReply(c, intent.getStringExtra(PrefKeys.MANIFEST_SHORTCUTS_EXTRA) ?: return)
+                    }
+                },
+                IntentFilter(PrefKeys.MANIFEST_SHORTCUTS_REPLY),
+                Context.RECEIVER_EXPORTED
+            )
+        }.onFailure { Log.w(TAG, "manifest bridge register failed: ${it.message}") }
+    }
+
+    /** 向 launcher 进程请求最新清单（后台查询+应答，到达后 shortcuts 状态驱动重组）。 */
+    fun request(context: Context) {
+        runCatching {
+            val intent = Intent(PrefKeys.MANIFEST_SHORTCUTS_REQUEST)
+            RelayToken.attach(intent, RelayToken.current())
+            context.sendBroadcast(intent)
+        }.onFailure { Log.w(TAG, "manifest bridge request failed: ${it.message}") }
+    }
+
+    fun onReply(context: Context, json: String) {
+        val list = runCatching { parse(json) }.getOrNull() ?: return
+        shortcuts = list
+        runCatching {
+            context.applicationContext
+                .getSharedPreferences(LOCAL_PREFS, Context.MODE_PRIVATE)
+                .edit().putString(CACHE_KEY, json).apply()
+        }
+        Log.i(TAG, "manifest shortcuts received: ${list.size}")
+    }
+
+    private fun parse(json: String): List<QsTileInfo> {
+        val arr = org.json.JSONArray(json)
+        return (0 until arr.length()).mapNotNull { i ->
+            val ob = arr.optJSONObject(i) ?: return@mapNotNull null
+            val pkg = ob.optString("p")
+            val cls = ob.optString("c")
+            if (pkg.isEmpty() || cls.isEmpty()) return@mapNotNull null
+            QsTileInfo(
+                packageName = pkg,
+                className = cls,
+                label = ob.optString("l").ifEmpty { pkg },
+                appLabel = pkg
+            )
+        }
+    }
 }
 
 /**
@@ -152,11 +232,21 @@ internal fun QsTilePickerPage(
 ) {
     val context = LocalContext.current
 
+    // manifest 快捷方式桥：注册应答接收器 + 请求 launcher 查询（到达后 key2 驱动重组）
+    DisposableEffect(Unit) {
+        ManifestShortcutsBridge.ensureRegistered(context)
+        ManifestShortcutsBridge.request(context)
+        onDispose { }
+    }
+    val bridgedShortcuts = ManifestShortcutsBridge.shortcuts
     val apps by produceState<List<QsTileAppInfo>>(
         initialValue = emptyList(),
-        key1 = context.applicationContext
+        key1 = context.applicationContext,
+        key2 = bridgedShortcuts
     ) {
-        value = withContext(Dispatchers.IO) { buildTileApps(context) }
+        value = withContext(Dispatchers.IO) {
+            buildTileApps(context, bridgedShortcuts.ifEmpty { loadManifestShortcuts(context) })
+        }
     }
 
     // 顶部同级类型 Tab（用户 2026-09-05：随时切换）+ 单级返回栈：L3 → L2 → 关闭选择器

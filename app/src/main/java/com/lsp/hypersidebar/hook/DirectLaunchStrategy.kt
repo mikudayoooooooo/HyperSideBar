@@ -13,7 +13,9 @@ import com.lsp.hypersidebar.ui.fan.FanLaunchStrategy
 import com.lsp.hypersidebar.util.FailureReason
 import com.lsp.hypersidebar.util.FreeformLauncher
 import com.lsp.hypersidebar.util.LaunchResult
+import com.lsp.hypersidebar.util.QsTileClickBridge
 import com.lsp.hypersidebar.util.RelayToken
+import com.lsp.hypersidebar.util.Trace
 import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutLauncher
@@ -62,20 +64,33 @@ class DirectLaunchStrategy(
     }
 
     override fun launchShortcut(context: Context, shortcut: ShortcutAction) {
-        // QS_TILE 统一走模块 App root 代发。曾试过 :ui 直发 `cmd statusbar click-tile`：
-        // exit=0 但 uid 1000 对磁贴静默无效果（root uid 0 同命令才真生效，2026-09-05
-        // 真机三次实证）——exit code 无法区分"成功"与"假成功"，故不回退直发。
-        // 代发链已补冷启动令牌（ShortcutRelayReceiver.awaitTokenProvision）。
+        // QS_TILE 首选 SystemUI hook 直点（数据层 QSTile.click，无面板状态门禁、
+        // 零可见动作；2026-09-05 源码定位+真机测试矩阵定案）。hook 不在（未加作用域/
+        // ROM 漂移）或磁贴不在当前 QS → 回退模块 App root 代发（expand-settings 三连，
+        // QS 闪现，仅兜底）。后台线程执行避免阻塞接收器主线程。
         if (shortcut.kind == ShortcutKind.QS_TILE) {
-            if (relayLaunchToModule(context, shortcut)) {
-                runCatching {
-                    // click-tile 是 fire-and-forget（任何良构组件都返回成功，磁贴是否真
-                    // 切换取决于 SystemUI 侧 QS 状态/目标应用是否被冻结）——文案不承诺结果
-                    Toast.makeText(context, "已发送磁贴指令：${shortcut.label}", Toast.LENGTH_SHORT).show()
-                }
+            val pkg = shortcut.packageName ?: ""
+            val cls = shortcut.serviceName ?: ""
+            if (pkg.isNotEmpty() && cls.isNotEmpty()) {
+                val full = if (cls.startsWith(".")) "$pkg$cls" else cls
+                val appCtx = context.applicationContext
+                Thread {
+                    val viaHook = QsTileClickBridge.sendBlocking(
+                        appCtx, "$pkg/$full", RelayToken.read(remotePrefs)
+                    )
+                    if (!viaHook) {
+                        relayLaunchToModule(appCtx, shortcut)
+                    }
+                    Handler(Looper.getMainLooper()).post {
+                        runCatching {
+                            val msg = if (viaHook) "已触发磁贴：${shortcut.label}"
+                            else "已发送磁贴指令：${shortcut.label}"
+                            Toast.makeText(appCtx, msg, Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }.start()
                 return
             }
-            Log.w(TAG, "QS_TILE relay failed, falling through to local launch")
         }
 
         // 非 exported 目标预检失败时直接转发模块 App 代发（§2.4 实测定案）：
@@ -123,10 +138,11 @@ class DirectLaunchStrategy(
                     PrefKeys.RELAY_LAUNCH_EXTRA_SHORTCUT,
                     shortcut.toJson().toString()
                 )
+                putExtra(com.lsp.hypersidebar.util.Trace.EXTRA, com.lsp.hypersidebar.util.Trace.current)
                 RelayToken.attach(this, RelayToken.read(remotePrefs))
             }
             context.sendBroadcast(intent)
-            Log.i(TAG, "relay launch to module app sent: id=${shortcut.id} kind=${shortcut.kind}")
+            Log.i(TAG, "[${Trace.current ?: "-"}] relay launch to module app sent: id=${shortcut.id} kind=${shortcut.kind}")
             true
         }.getOrElse {
             Log.e(TAG, "relay launch to module app failed", it)

@@ -53,10 +53,29 @@ object PrefKeys {
     const val RELAY_LAUNCH_ACTION = "com.lsp.hypersidebar.action.RELAY_LAUNCH_SHORTCUT"
     const val RELAY_LAUNCH_EXTRA_SHORTCUT = "shortcut"
     const val RELAY_LAUNCH_EXTRA_TOKEN = "token"
+    /** root 代发结果回告（模块 App → :ui，失败 toast 前台；内容同时落 LAST_RELAY_RESULT 供自检报告） */
+    const val ACTION_RELAY_RESULT = "com.lsp.hypersidebar.action.RELAY_RESULT"
+    /** 上次 root 代发结果（模块 App 写 remotePrefs）：trace|label|ok|reason|ts */
+    const val LAST_RELAY_RESULT = "lastRelayResult"
 
     /** 跨进程广播防伪令牌（运行期随机生成，存 remotePrefs，见 util/RelayToken）。
      *  原硬编码常量 RELAY_LAUNCH_TOKEN 已废止——反编译即可读出，等同零校验。 */
     const val RELAY_TOKEN = "relayToken"
+
+    // ===== manifest 快捷方式 launcher 桥（批次 3）=====
+    // 背景（2026-09-05 实锤）：LauncherApps.getShortcuts 对非默认桌面应用抛
+    // SecurityException（Caller can't access shortcut information）——模块 App 无法直查。
+    // 而 hook 的 com.miui.home 恰是默认桌面（有 shortcut 访问权）→ 请求/应答桥：
+    // 设置页发 REQUEST，launcher 进程 hook 接收器查询后把 JSON 清单应答给模块 App。
+    const val MANIFEST_SHORTCUTS_REQUEST = "com.lsp.hypersidebar.action.MANIFEST_SHORTCUTS_REQUEST"
+    const val MANIFEST_SHORTCUTS_REPLY = "com.lsp.hypersidebar.action.MANIFEST_SHORTCUTS_REPLY"
+    const val MANIFEST_SHORTCUTS_EXTRA = "list"
+
+    // ===== QS 磁贴 SystemUI 直点桥（批次 3，SystemUiHook）=====
+    // click-tile 门禁在 CommandQueue 回调层（控制中心样式早退），QSTile.click 无约束——
+    // 有序广播进 SystemUI 进程按 spec 从数据层直点；resultCode 1=已点击 0=未就绪/未找到
+    const val QS_TILE_CLICK_ACTION = "com.lsp.hypersidebar.action.QS_TILE_CLICK"
+    const val QS_TILE_CLICK_EXTRA = "cn"
 
     // ===== hook 状态探针（§2.5.4：设置页打开时有序 ping，hook 侧接收器回 resultCode） =====
     // 背景（1C 实测实锤）：hook 进程的 remotePrefs 只读（写抛 "Read only implementation"），
@@ -74,6 +93,9 @@ object PrefKeys {
     const val PROBE_CODE_CIRCUIT = 3
     /** 双端（推荐数据源死亡停摆，迭代四 §1.3）：扇形已停用、hook 让位原生，重启恢复 */
     const val PROBE_CODE_DATA_DEAD = 4
+    /** 仅 :ui（自检报告令牌握手，2026-09-05）：probe 附带发送端令牌且校验不通过——
+     *  区分 ":ui 进程死" 与 ":ui 活但持有旧令牌快照拒收" 这对同症（都表现为 relay dead） */
+    const val PROBE_CODE_TOKEN_MISMATCH = 5
 
     // ===== 固定应用选择页准入列表（设置页 ← :ui，探针同款有序广播信道） =====
     // 背景：选择页此前走 PM 全列表，违反 PRD §7.3.3"无小窗资格的应用在数据源层面

@@ -11,6 +11,7 @@ import android.util.Log
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import com.lsp.hypersidebar.util.RelayToken
+import com.lsp.hypersidebar.util.Trace
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHook
 import org.json.JSONObject
@@ -61,9 +62,23 @@ class FreeformRelayHook(
         try {
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(ctx: Context, intent: Intent) {
-                    // 设置页状态探针（§2.5.4）：短路在一切动作分支之前——只应答，不执行任何动作
+                    // 链路追踪（util/Trace）：relay 意图自带呼出链 id，写入本进程供代发透传
+                    val trace = intent.getStringExtra(Trace.EXTRA)
+                    Trace.current = trace
+                    // 设置页状态探针（§2.5.4）：短路在一切动作分支之前——只应答，不执行任何动作。
+                    // 自检报告（2026-09-05）：probe 附带发送端令牌时先做令牌握手——
+                    // 真实启动广播在下方 verifyFan 失败即静默 return（resultCode 留 0），
+                    // 与 ":ui 进程死" 同症；探针带令牌握手把这对同症拆开（code 5）
                     if (intent.getBooleanExtra(PrefKeys.PROBE_EXTRA, false)) {
-                        if (isOrderedBroadcast) resultCode = HookProbeState.uiCode()
+                        if (isOrderedBroadcast) {
+                            resultCode = if (intent.hasExtra(PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN) &&
+                                !RelayToken.verifyFan(intent, RelayToken.read(remotePrefs))
+                            ) {
+                                PrefKeys.PROBE_CODE_TOKEN_MISMATCH
+                            } else {
+                                HookProbeState.uiCode()
+                            }
+                        }
                         return
                     }
                     // 批次 0 安全修复：本接收器 RECEIVER_EXPORTED 注册（发送端是不同 uid，
@@ -95,24 +110,24 @@ class FreeformRelayHook(
                     if (isOrderedBroadcast) resultCode = 1
                     when {
                         intent.getBooleanExtra("openPanel", false) -> {
-                            Log.i(TAG, "relay: openPanel")
+                            Log.i(TAG, "[${trace ?: "-"}] relay: openPanel")
                             strategy.openNativePanel(ctx)
                         }
                         intent.getBooleanExtra("allApps", false) -> {
-                            Log.i(TAG, "relay: allApps")
+                            Log.i(TAG, "[${trace ?: "-"}] relay: allApps")
                             strategy.launchAllApps(ctx)
                         }
                         intent.getStringExtra("shortcut") != null -> {
                             val json = intent.getStringExtra("shortcut") ?: return
                             runCatching {
                                 val action = com.lsp.hypersidebar.util.ShortcutAction.fromJson(JSONObject(json))
-                                Log.i(TAG, "relay: shortcut id=${action.id}")
+                                Log.i(TAG, "[${trace ?: "-"}] relay: shortcut id=${action.id}")
                                 strategy.launchShortcut(ctx, action)
                             }.onFailure { Log.e(TAG, "relay: bad shortcut payload: ${it.message}") }
                         }
                         intent.getStringExtra("pkg") != null -> {
                             val pkg = intent.getStringExtra("pkg") ?: return
-                            Log.i(TAG, "relay: freeform pkg=$pkg")
+                            Log.i(TAG, "[${trace ?: "-"}] relay: freeform pkg=$pkg")
                             strategy.launchFreeform(ctx, pkg)
                         }
                     }
@@ -127,6 +142,32 @@ class FreeformRelayHook(
                 Context.RECEIVER_EXPORTED
             )
             Log.i(TAG, "ACTION_FAN_LAUNCH/REQUEST_SUGGESTIONS receiver registered (via Application.attach)")
+            // root 代发结果回告接收器（2026-09-05）：模块 App 执行完代发（su 链）后把
+            // 结果发回本进程——失败 toast 到前台（成功静默，只进日志与自检报告）。
+            // 校验用 verifyFan 对 :ui 快照（模块 App 是令牌权威，快照即真值）
+            context.registerReceiver(
+                object : BroadcastReceiver() {
+                    override fun onReceive(ctx: Context, intent: Intent) {
+                        if (!RelayToken.verifyFan(intent, RelayToken.read(remotePrefs))) return
+                        val trace = intent.getStringExtra(Trace.EXTRA)
+                        val ok = intent.getBooleanExtra("ok", false)
+                        val label = intent.getStringExtra("label") ?: ""
+                        val reason = intent.getStringExtra("reason") ?: ""
+                        Log.i(TAG, "[${trace ?: "-"}] relay result: ok=$ok label=$label reason=$reason")
+                        if (!ok) {
+                            runCatching {
+                                android.widget.Toast.makeText(
+                                    ctx, "快捷方式执行失败：$label（$reason）",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                },
+                IntentFilter(PrefKeys.ACTION_RELAY_RESULT),
+                Context.RECEIVER_EXPORTED
+            )
+            Log.i(TAG, "ACTION_RELAY_RESULT receiver registered (via Application.attach)")
         } catch (e: Throwable) {
             Log.e(TAG, "receiver registration failed: ${e.message}", e)
         }

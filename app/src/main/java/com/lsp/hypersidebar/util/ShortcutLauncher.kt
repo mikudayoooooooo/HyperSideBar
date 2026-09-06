@@ -550,12 +550,11 @@ object ShortcutLauncher {
     }
 
     /**
-     * QS_TILE 启动路径：root 复合命令（轻拉 shade 激活 → click-tile）。
-     * TileService 类存储在 serviceName 字段（与 SERVICE 同构）。
-     * 真机定案（2026-09-05）：`cmd statusbar click-tile` 仅在 shade 处于交互态时
-     * 真正生效（顶部轻拉即可、无须展开；与调用 uid 无关，fire-and-forget——QS 收起时
-     * 静默丢弃且 exit=0）。故先 `input swipe` 复现一次顶部轻拉，停顿后点击。
-     * 无 root 直接失败。
+     * QS_TILE 启动路径：首选 SystemUI hook 直点（数据层 QSTile.click，无面板门禁、
+     * 零可见动作）；hook 不在 → root 三连兜底（expand-settings 唤醒 → click-tile →
+     * collapse，QS 闪现）。TileService 类存储在 serviceName 字段（与 SERVICE 同构）。
+     * 真机定案（2026-09-05）：`cmd statusbar click-tile` 仅在 QS 交互/展开态时真正
+     * 生效（与调用 uid 无关，fire-and-forget——QS 收起时静默丢弃且 exit=0）。
      */
     private fun launchQsTile(
         context: Context,
@@ -564,6 +563,18 @@ object ShortcutLauncher {
     ): LaunchResult {
         val validation = validateQsTile(context, action)
         if (validation is LaunchResult.Failure) return validation
+        val pkg = action.packageName ?: return LaunchResult.Failure(
+            FailureReason.INVALID_CONFIG, "packageName is empty"
+        )
+        val cls = action.serviceName ?: return LaunchResult.Failure(
+            FailureReason.INVALID_CONFIG, "serviceName is empty"
+        )
+        val fullCls = if (cls.startsWith(".")) "$pkg$cls" else cls
+        // 首选 SystemUI hook 直点（模块 App 也直接可广播，与 :ui 同一接收器）
+        if (QsTileClickBridge.sendBlocking(context, "$pkg/$fullCls", RelayToken.current())) {
+            return LaunchResult.Success(ComponentName(pkg, cls))
+        }
+        // 回退：root 三连（编辑页测试可见 QS 闪现，属可接受代价）
         if (!allowRootFallback) {
             return LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, "QS tile requires root fallback disabled")
         }
@@ -584,10 +595,12 @@ object ShortcutLauncher {
         if (!pkg.matches(PKG_ACTIVITY_REGEX) || !fullCls.matches(PKG_ACTIVITY_REGEX)) {
             return LaunchResult.Failure(FailureReason.INVALID_CONFIG, "Invalid tile component")
         }
-        // 组合脚本：顶部轻拉（shade 进入交互态）→ 停顿 → click-tile。
-        // 组件名已过 PKG_ACTIVITY_REGEX 白名单（仅字母数字点），无注入面
-        val script = "input swipe 300 2 300 80 120; sleep 0.2; " +
-            "/system/bin/cmd statusbar click-tile $pkg/$fullCls"
+        // 组合脚本（2026-09-05 用户 T4 实测定稿）：expand-settings 唤醒 QS → click-tile
+        // → collapse 还原。input swipe 轻拉方案（e92d1be）被 T1 推翻——轻拉激活不持久；
+        // click-tile 必须 QS 处于交互态才真生效，expanded 态最可靠。组件名已过正则白名单
+        val script = "/system/bin/cmd statusbar expand-settings; sleep 0.3; " +
+            "/system/bin/cmd statusbar click-tile $pkg/$fullCls; sleep 0.2; " +
+            "/system/bin/cmd statusbar collapse"
         val cmd = listOf("su", "-c", shellQuote(script))
         Log.i(TAG, "launchQsTileViaRoot: $script")
         return try {

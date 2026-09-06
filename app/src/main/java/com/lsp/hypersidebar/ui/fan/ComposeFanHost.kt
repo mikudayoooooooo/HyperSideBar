@@ -107,7 +107,9 @@ class ComposeFanHost(
         Log.i(
             TAG,
             "config: icon=${config.iconSizeDp} inner=${config.innerRadiusDp}d outer=${config.outerRadiusDp}d " +
-                "dead=${config.deadZoneDp}d outerN=${config.maxAppsOuter} innerN=${config.maxAppsInner} landscape=$isLandscape"
+                "dead=${config.deadZoneDp}d outerN=${config.maxAppsOuter} innerN=${config.maxAppsInner} landscape=$isLandscape " +
+                "fog=${readFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)} " +
+                "dim=${readBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)}"
         )
         pendingInput = GeometryInput(anchorX, anchorY, apps, quickApps, isLandscape)
         resetInteractionState()
@@ -189,6 +191,14 @@ class ComposeFanHost(
                             geometry = g,
                             touchState = touchState,
                             colors = themeColors,
+                            // 路线 C 视觉参数：逐呼出随重组重读（几何状态变化驱动），
+                            // 与 extractFanThemeColors 同一读取模式
+                            fogIntensity = readFloat(
+                                PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY
+                            ),
+                            dimEnabled = readBoolean(
+                                PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED
+                            ),
                             onAppSelected = { app -> onAppSelected?.invoke(app) },
                             onQuickAppSelected = { app -> onQuickAppSelected?.invoke(app) },
                             // compose 内部请求收起 → 走同一 dismiss 语义（摘窗口+通知 controller）
@@ -601,6 +611,10 @@ class ComposeFanHost(
 
     private fun readInt(key: String, default: Int): Int {
         return try { prefs.getInt(key, default) } catch (_: Exception) { default }
+    }
+
+    private fun readBoolean(key: String, default: Boolean): Boolean {
+        return try { prefs.getBoolean(key, default) } catch (_: Exception) { default }
     }
 
     @Composable

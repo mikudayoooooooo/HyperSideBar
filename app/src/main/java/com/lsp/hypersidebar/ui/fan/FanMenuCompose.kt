@@ -20,10 +20,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.runtime.MutableState
@@ -33,6 +35,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.lsp.hypersidebar.prefs.LayoutDefaults
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -44,6 +47,8 @@ fun FanMenuCompose(
     geometry: FanGeometry,
     touchState: MutableState<FanTouchState>,
     colors: FanThemeColors,
+    fogIntensity: Float,
+    dimEnabled: Boolean,
     onAppSelected: (FanAppInfo) -> Unit,
     onQuickAppSelected: (FanAppInfo) -> Unit,
     onDismiss: () -> Unit
@@ -85,7 +90,16 @@ fun FanMenuCompose(
     )
 
     Box(modifier = Modifier.fillMaxSize()) {
-        FanBackground(geometry, colors, menuAlpha, Modifier.scale(scale))
+        // 压暗 scrim（用户开关）：全屏纯黑罩在窗口内容最底层——呼出时随 menuAlpha 淡入，
+        // 视觉等价 FLAG_DIM_BEHIND 但可动画且不碰窗口参数。只压暗背景，扇形内容画在其上
+        if (dimEnabled) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = LayoutDefaults.FAN_DIM_AMOUNT * menuAlpha))
+            )
+        }
+        FanBackground(geometry, colors, menuAlpha, fogIntensity, Modifier.scale(scale))
 
         geometry.items.forEachIndexed { index, item ->
             FanAppIcon(
@@ -121,27 +135,61 @@ private fun FanBackground(
     geometry: FanGeometry,
     colors: FanThemeColors,
     alpha: Float,
+    fogIntensity: Float,
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
+        // 雾化层（路线 C）：径向渐变填充（锚点浓→外弧淡）+ 粗弧光晕，整层 6dp blur 羽化。
+        // RenderEffect 走 GPU，窗口 FLAG_HARDWARE_ACCELERATED + minSdk 33 恒可用；
+        // 浓度 0 = 无填充无光晕（裸弧线），滑条可在线 A/B
+        androidx.compose.foundation.Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .blur(6.dp)
+        ) {
+            val topLeft = Offset(
+                geometry.anchor.x - geometry.outerRadius,
+                geometry.anchor.y - geometry.outerRadius
+            )
+            val arcSize = androidx.compose.ui.geometry.Size(
+                geometry.outerRadius * 2,
+                geometry.outerRadius * 2
+            )
+            if (fogIntensity > 0.01f) {
+                val fog = colors.surfaceContainer
+                drawArc(
+                    brush = Brush.radialGradient(
+                        colorStops = arrayOf(
+                            0f to fog.copy(alpha = fogIntensity),
+                            0.6f to fog.copy(alpha = fogIntensity * 0.35f),
+                            1f to fog.copy(alpha = fogIntensity * 0.12f)
+                        ),
+                        center = geometry.anchor,
+                        radius = geometry.outerRadius
+                    ),
+                    startAngle = geometry.startAngle,
+                    sweepAngle = geometry.spanAngle,
+                    useCenter = true,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    alpha = alpha
+                )
+                drawArc(
+                    color = colors.outline.copy(alpha = 0.18f),
+                    startAngle = geometry.startAngle,
+                    sweepAngle = geometry.spanAngle,
+                    useCenter = false,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    style = Stroke(width = 8.dp.toPx()),
+                    alpha = alpha
+                )
+            }
+        }
+        // 锐利外弧描边：不参与 blur，始终清晰——边界感的锚
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
             drawArc(
-                color = colors.surfaceContainer.copy(alpha = 0.15f * alpha),
-                startAngle = geometry.startAngle,
-                sweepAngle = geometry.spanAngle,
-                useCenter = true,
-                topLeft = Offset(
-                    geometry.anchor.x - geometry.outerRadius,
-                    geometry.anchor.y - geometry.outerRadius
-                ),
-                size = androidx.compose.ui.geometry.Size(
-                    geometry.outerRadius * 2,
-                    geometry.outerRadius * 2
-                ),
-                alpha = alpha
-            )
-            drawArc(
-                color = colors.outline.copy(alpha = 0.2f * alpha),
+                color = colors.outline.copy(alpha = 0.45f),
                 startAngle = geometry.startAngle,
                 sweepAngle = geometry.spanAngle,
                 useCenter = false,
@@ -153,7 +201,7 @@ private fun FanBackground(
                     geometry.outerRadius * 2,
                     geometry.outerRadius * 2
                 ),
-                style = Stroke(width = 1.dp.toPx()),
+                style = Stroke(width = 2.dp.toPx()),
                 alpha = alpha
             )
         }

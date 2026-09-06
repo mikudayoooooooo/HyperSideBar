@@ -231,26 +231,57 @@ internal fun SettingsPage(
         // 取消 0 档（极易误触）、上限 500→350 收窄；150ms 快松预选锁死是独立硬编码守卫不受影响。
         // 拖动只改本地 state，松手才落盘（=一次 ConfigSync 广播）；restoreDefaults 后经
         // revision 通道回读默认值（D4 复原审计 ✓）
+        // 路线 C 视觉（用户 2026-09-06 拍板）：扇形雾化浓度滑条（0=关闭填充可在线 A/B）
+        // + 背景压暗 opt-in 开关；同 Card 同款"拖动暂存、松手落盘"节奏
         item { SmallTitle(text = stringResource(R.string.interaction_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                var dwellMs by remember(effectivePrefs, effectiveRepo.revision) {
-                    mutableStateOf(effectiveRepo.triggerDwellMs())
+                Column {
+                    var dwellMs by remember(effectivePrefs, effectiveRepo.revision) {
+                        mutableStateOf(effectiveRepo.triggerDwellMs())
+                    }
+                    SettingsSliderItem(
+                        title = stringResource(R.string.trigger_dwell_title),
+                        summary = stringResource(R.string.trigger_dwell_summary, dwellMs),
+                        value = dwellMs.toFloat(),
+                        valueRange = 150f..350f,
+                        steps = 3,
+                        onValueChange = {
+                            dwellMs = ((it / 50f).roundToInt() * 50).coerceIn(150, 350)
+                        },
+                        onValueChangeFinished = {
+                            effectiveRepo.save(PrefKeys.TRIGGER_DWELL_MS, dwellMs)
+                        },
+                        compact = true
+                    )
+                    var fog by remember(effectivePrefs, effectiveRepo.revision) {
+                        mutableStateOf(effectiveRepo.fanFogIntensity())
+                    }
+                    SettingsSliderItem(
+                        title = stringResource(R.string.fan_fog_title),
+                        summary = stringResource(R.string.fan_fog_summary, (fog * 100).roundToInt()),
+                        value = fog,
+                        valueRange = 0f..0.70f,
+                        steps = 13,
+                        onValueChange = { fog = (it * 20f).roundToInt() / 20f },
+                        onValueChangeFinished = {
+                            effectiveRepo.save(PrefKeys.FAN_FOG_INTENSITY, fog)
+                        },
+                        compact = true
+                    )
+                    var dimOn by remember(effectivePrefs, effectiveRepo.revision) {
+                        mutableStateOf(effectiveRepo.fanDimEnabled())
+                    }
+                    SwitchPreference(
+                        title = stringResource(R.string.fan_dim_title),
+                        summary = stringResource(R.string.fan_dim_summary),
+                        checked = dimOn,
+                        onCheckedChange = {
+                            dimOn = it
+                            effectiveRepo.save(PrefKeys.FAN_DIM_ENABLED, it)
+                        }
+                    )
                 }
-                SettingsSliderItem(
-                    title = stringResource(R.string.trigger_dwell_title),
-                    summary = stringResource(R.string.trigger_dwell_summary, dwellMs),
-                    value = dwellMs.toFloat(),
-                    valueRange = 150f..350f,
-                    steps = 3,
-                    onValueChange = {
-                        dwellMs = ((it / 50f).roundToInt() * 50).coerceIn(150, 350)
-                    },
-                    onValueChangeFinished = {
-                        effectiveRepo.save(PrefKeys.TRIGGER_DWELL_MS, dwellMs)
-                    },
-                    compact = true
-                )
             }
         }
 

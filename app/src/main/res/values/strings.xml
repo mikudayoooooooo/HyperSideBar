@@ -55,6 +55,10 @@
     <string name="interaction_section">交互</string>
     <string name="trigger_dwell_title">呼出停顿</string>
     <string name="trigger_dwell_summary">贴边停顿 %1$d ms 后展开扇形</string>
+    <string name="fan_fog_title">扇形背景雾化</string>
+    <string name="fan_fog_summary">雾化浓度 %1$d%%（0 为关闭填充）</string>
+    <string name="fan_dim_title">背景压暗</string>
+    <string name="fan_dim_summary">呼出扇形时全屏压暗 24%，随菜单淡入</string>
     <string name="defaults_section">重置</string>
     <string name="restore_defaults">恢复默认值</string>
     <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，立即生效</string>

@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -23,16 +22,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.runtime.MutableState
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+/** 选中态图标放大倍数（PRD §7.3.2"图标放大1.25倍"）；SelectedLabel 避让计算同源。 */
+internal const val SELECTED_ICON_SCALE = 1.25f
 
 @Composable
 fun FanMenuCompose(
@@ -56,9 +61,12 @@ fun FanMenuCompose(
 
     LaunchedEffect(touchState.value) {
         val state = touchState.value
-        val pos = Offset(state.x, state.y)
-        val dist = distance(anchor, pos)
-        if (dist <= geometry.activeZonePx && state.touchAction != 2 && state.touchAction != 3) {
+        // 预选反馈直接跟随命中结果（PRD §7.3.2 框选放大+应用名）。原 activeZone 距离门控
+        // 会被设备上残留的旧参数（60dp=180px < 图标距圆心 280-390px）整体关闭——高亮
+        // 永不出现，实测"完全没有选中反馈"。该参数已于 1B 废弃删除（PRD"30~120dp 可调"
+        // 与"至少覆盖扇形"自相矛盾且任何距离门控都会复活此 bug），选中语义由
+        // 死区+内外取消区派生
+        if (state.touchAction != 2 && state.touchAction != 3) {
             selectedIndex = state.selectedIndex
             selectedQuickIndex = state.selectedQuickIndex
         } else {
@@ -165,7 +173,7 @@ private fun FanAppIcon(
     val (drawable, fallbackColor) = rememberAppIcon(context, item.app)
     val density = LocalDensity.current.density
     val pxIconSize = iconSize * density
-    val targetScale = if (isSelected) 1.15f else 1f
+    val targetScale = if (isSelected) SELECTED_ICON_SCALE else 1f
     val targetAlpha = if (isSelected) 1f else 0.75f
     val iconScale by animateFloatAsState(targetValue = targetScale, animationSpec = tween(100))
     val iconAlpha by animateFloatAsState(targetValue = targetAlpha, animationSpec = tween(100))
@@ -180,27 +188,34 @@ private fun FanAppIcon(
             }
             .size(iconSize.dp)
             .scale(scale * iconScale)
-            .alpha(alpha * iconAlpha)
-            .clip(CircleShape)
-            .background(
-                if (isSelected) colors.primaryContainer.copy(alpha = 0.9f)
-                else colors.surfaceContainer.copy(alpha = 0.85f)
-            ),
+            .alpha(alpha * iconAlpha),
         contentAlignment = Alignment.Center
     ) {
+        // 选中高亮板仅选中态绘制：常态无底框——原生应用图标自带形状边界，
+        // 常驻托底 + 0.7 缩放会造成"双层方框夹空隙"（用户反馈空隙大）
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape((iconSize * 0.25f).dp))
+                    .background(colors.primaryContainer.copy(alpha = 0.9f))
+            )
+        }
         AppIconImage(
             drawable = drawable,
             fallbackColor = fallbackColor,
             appName = item.app.appName,
-            size = iconSize * 0.7f,
+            // 0.7（圆形托底时代遗留）→ 0.92：图标几乎占满，与 AllApps 去托底一致
+            size = iconSize * 0.92f,
             colors = colors
         )
 
         if (isSelected) {
             androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                drawCircle(
+                // B1：描边随 mask 同形状（圆角方）
+                drawRoundRect(
                     color = colors.primary,
-                    radius = size.minDimension / 2f,
+                    cornerRadius = CornerRadius(size.minDimension * 0.25f, size.minDimension * 0.25f),
                     style = Stroke(width = 2.dp.toPx()),
                     alpha = alpha
                 )
@@ -217,14 +232,21 @@ private fun SelectedLabel(
 ) {
     val density = LocalDensity.current.density
     val pxIconSize = iconSize * density
+    // 实测量标签尺寸再定位：水平以图标圆心真居中（硬编码偏移在长应用名下会偏出圆心），
+    // 垂直贴"放大后图标顶边"再留 10dp——此前按估算高度写死偏移，图标被弦长钳制到
+    // 最小生效尺寸且选中放大 1.25 后，标签底边会压住图标顶边
+    var labelSize by remember { mutableStateOf(IntSize.Zero) }
     Box(
         modifier = Modifier
             .offset {
                 IntOffset(
-                    (item.centerX - 60f).toInt(),
-                    (item.centerY - pxIconSize * 0.9f - 28f).toInt()
+                    (item.centerX - labelSize.width / 2f).toInt(),
+                    (item.centerY - pxIconSize * SELECTED_ICON_SCALE / 2f -
+                        labelSize.height - 10.dp.roundToPx()).toInt()
                 )
             }
+            .alpha(if (labelSize == IntSize.Zero) 0f else 1f)
+            .onSizeChanged { labelSize = it }
             .clip(RoundedCornerShape(12.dp))
             .background(colors.surfaceContainerHigh.copy(alpha = 0.95f))
             .padding(horizontal = 10.dp, vertical = 4.dp),

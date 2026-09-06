@@ -23,11 +23,12 @@ import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfte
  * CentralSurfacesCommandQueueCallbacks）在"使用控制中心"时早退，门禁全在回调层，
  * `QSTile.click()` 本身无任何面板状态约束。
  *
- * 方案：本进程注册令牌校验的点击接收器，从数据层（MiuiQSHostAdapter.interactor
- * .getCurrentQSTiles()）按 spec 找到磁贴实例直接 click(null)——绕过一切面板状态门禁，
- * QS 收起也能触发，零可见动作。
+ * 方案：本进程注册令牌校验的点击接收器，从数据层按 spec 找磁贴实例直接 click(null)
+ * ——绕过一切面板状态门禁，QS 收起也能触发，零可见动作。**未固定在 QS 的磁贴**
+ * 经 `MiuiQSHostAdapter.createTile(spec)`（QSHost 接口方法，QS 磁贴建议同机制）现场
+ * 创建实例后点击，同样不依赖固定状态。
  *
- * resultCode 协议（有序广播）：1=已点击；0=适配器未就绪/磁贴不在当前 QS/异常，
+ * resultCode 协议（有序广播）：1=已点击；0=适配器未就绪/createTile 失败/异常，
  * 发送端据此回退 root 三连兜底。
  */
 class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
@@ -87,7 +88,9 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
     }
 
     /** 数据层直点磁贴；返回 1=已点击，0=未就绪/未找到/异常（发送端据此回退兜底）。
-     *  纯反射（libxposed 新 API 无 XposedHelpers），字段/方法均为 public。 */
+     *  纯反射（libxposed 新 API 无 XposedHelpers），字段/方法均为 public。
+     *  未固定在 QS 的磁贴：getCurrentQSTiles 找不到时经 adapter.createTile(spec)
+     *  现场创建实例再点（QSHost 接口方法，QS 建议磁贴同机制）——不依赖固定状态。 */
     private fun clickTile(cn: ComponentName): Int {
         val adapter = hostAdapter ?: run {
             Log.w(TAG, "clickTile: adapter not stashed yet")
@@ -103,16 +106,28 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
             val toSpec = cl.loadClass(CUSTOM_TILE_CLASS)
                 .methods.first { it.name == "toSpec" && it.parameterCount == 1 }
             val spec = toSpec.invoke(null, cn) as? String ?: return@runCatching 0
+
             val tile = tiles.firstOrNull { t ->
                 t != null && runCatching {
                     t.javaClass.methods
                         .first { it.name == "getTileSpec" && it.parameterCount == 0 }
                         .invoke(t) == spec
                 }.getOrNull() == true
-            } ?: run {
-                Log.w(TAG, "clickTile: tile not in current QS: $spec")
-                return@runCatching 0
+            } ?: createdTiles[spec]
+            ?: run {
+                // 未固定磁贴：现场创建（createTile 返回 null 则彻底不可触发）
+                val created = adapter.javaClass.methods
+                    .firstOrNull { it.name == "createTile" && it.parameterCount == 1 }
+                    ?.invoke(adapter, spec)
+                    ?: run {
+                        Log.w(TAG, "clickTile: createTile returned null: $spec")
+                        return@runCatching 0
+                    }
+                Log.i(TAG, "clickTile: tile created on demand: $spec")
+                createdTiles[spec] = created
+                created
             }
+
             tile.javaClass.methods
                 .firstOrNull { it.name == "click" && it.parameterCount == 1 }
                 ?.let { it.invoke(tile, null) }
@@ -128,5 +143,8 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
         const val ADAPTER_CLASS =
             "com.android.systemui.qs.pipeline.domain.adapter.MiuiQSHostAdapter"
         const val CUSTOM_TILE_CLASS = "com.android.systemui.qs.external.CustomTile"
+
+        /** createTile 现场创建的实例按 spec 缓存复用（上界=用户添加的磁贴快捷方式数） */
+        val createdTiles = java.util.concurrent.ConcurrentHashMap<String, Any>()
     }
 }

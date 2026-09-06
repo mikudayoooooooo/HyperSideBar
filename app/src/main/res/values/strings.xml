@@ -137,6 +137,10 @@
     <string name="debug_relay_confirm_ready">倒计时结束，可以确认了</string>
     <string name="debug_relay_confirm_action">确认开启</string>
     <string name="debug_relay_confirm_action_counting">确认开启（%d）</string>
+    <string name="selfcheck_export">导出自检报告</string>
+    <string name="selfcheck_export_summary">生成探针双路应答、调试开关实值与配置快照的文本报告，保存到下载目录（不含令牌等敏感信息）</string>
+    <string name="selfcheck_exporting">正在生成探针与报告…</string>
+    <string name="selfcheck_export_done">自检报告已保存：下载/%s</string>
 
     <!-- Shortcut -->
     <string name="shortcut_count_format">已添加 %1$d · 启用 %2$d</string>
@@ -211,6 +215,6 @@
     <string name="qs_tile_item_count">%1$d 个磁贴</string>
     <string name="qs_shortcut_item_count">%1$d 个快捷方式</string>
     <string name="shortcut_qs_tile_target">磁贴组件</string>
-    <string name="shortcut_qs_tile_note">通过 root 触发系统快捷开关（cmd statusbar click-tile）；磁贴须已加入控制中心，否则触发无效</string>
+    <string name="shortcut_qs_tile_note">通过 SystemUI 直接触发系统快捷开关（无须加入控制中心）；需 LSPosed 勾选系统界面作用域，否则自动回退 root 兜底</string>
     <string name="all_apps_title">全部应用</string>
 </resources>

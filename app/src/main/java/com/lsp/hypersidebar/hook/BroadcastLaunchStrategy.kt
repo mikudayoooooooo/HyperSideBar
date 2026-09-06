@@ -9,6 +9,7 @@ import android.util.Log
 import android.widget.Toast
 import com.lsp.hypersidebar.ui.fan.FanLaunchStrategy
 import com.lsp.hypersidebar.util.RelayToken
+import com.lsp.hypersidebar.util.Trace
 import com.lsp.hypersidebar.util.ShortcutAction
 
 private const val TAG = "FanLaunch"
@@ -64,6 +65,8 @@ class BroadcastLaunchStrategy(
         val intent = Intent(launchAction).apply {
             setPackage("com.miui.securitycenter")
             configure()
+            // 链路追踪（util/Trace）：单次呼出的 id 随 relay 过 :ui，日志按 id 串全链
+            Trace.current?.let { putExtra(Trace.EXTRA, it) }
             RelayToken.attach(this, relayToken())
         }
         context.sendOrderedBroadcast(

@@ -44,6 +44,7 @@ import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.savePref
 import com.lsp.hypersidebar.util.RemotePrefsBridge
+import com.lsp.hypersidebar.util.SelfCheck
 import com.lsp.hypersidebar.util.UpdateChecker
 import io.github.libxposed.service.XposedService
 import kotlinx.coroutines.Dispatchers
@@ -290,6 +291,33 @@ internal fun AboutPage(
         item { SmallTitle(text = stringResource(R.string.debug_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
+                var selfCheckBusy by remember { mutableStateOf(false) }
+                BasicComponent(
+                    title = stringResource(R.string.selfcheck_export),
+                    summary = if (selfCheckBusy) {
+                        stringResource(R.string.selfcheck_exporting)
+                    } else {
+                        stringResource(R.string.selfcheck_export_summary)
+                    },
+                    onClick = {
+                        if (selfCheckBusy) return@BasicComponent
+                        selfCheckBusy = true
+                        updateScope.launch {
+                            val path = runCatching {
+                                val content = SelfCheck.generate(context, service, effectivePrefs)
+                                SelfCheck.export(context, content)
+                            }.getOrElse { context.getString(R.string.unknown) + " (${it.message})" }
+                            selfCheckBusy = false
+                            runCatching {
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.selfcheck_export_done, path),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                )
                 SwitchPreference(
                     title = stringResource(R.string.debug_relay_blackhole),
                     summary = stringResource(R.string.debug_relay_blackhole_summary),

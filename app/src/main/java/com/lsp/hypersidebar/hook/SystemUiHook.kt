@@ -91,9 +91,9 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
     }
 
     /** 数据层直点磁贴；返回 1=已点击，0=未就绪/未找到/异常（发送端据此回退兜底）。
-     *  纯反射（libxposed 新 API 无 XposedHelpers），字段/方法均为 public。
-     *  未固定在 QS 的磁贴：getCurrentQSTiles 找不到时经 adapter.createTile(spec)
-     *  现场创建实例再点（QSHost 接口方法，QS 建议磁贴同机制）——不依赖固定状态。 */
+     *  纯反射（libxposed 新 API 无 XposedHelpers）。注意：jadx 反编译里的 Kotlin
+     *  "属性"运行时不一定有 getter（11:36 实测 getInteractor NoSuchMethod），
+     *  字段一律 getField 直读。 */
     private fun clickTile(cn: ComponentName): Int {
         val adapter = hostAdapter ?: run {
             Log.w(TAG, "clickTile: adapter not stashed yet")
@@ -101,11 +101,12 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
         }
         return runCatching {
             val cl = adapter.javaClass.classLoader
-            val interactor = adapter.javaClass.getMethod("getInteractor").invoke(adapter)
+            val interactor = readField(adapter, "interactor")
             val tiles = interactor.javaClass.methods
                 .first { it.name == "getCurrentQSTiles" && it.parameterCount == 0 }
                 .invoke(interactor) as? List<*>
                 ?: return@runCatching 0
+            Log.i(TAG, "clickTile: current tiles=${tiles.size}")
             val toSpec = cl.loadClass(CUSTOM_TILE_CLASS)
                 .methods.first { it.name == "toSpec" && it.parameterCount == 1 }
             val spec = toSpec.invoke(null, cn) as? String ?: return@runCatching 0
@@ -141,6 +142,13 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
             0
         }
     }
+
+    /** 公有字段直读，非 public 回退 declared+accessible（反射容错统一入口） */
+    private fun readField(obj: Any, name: String): Any? =
+        runCatching { obj.javaClass.getField(name).get(obj) }
+            .getOrElse {
+                obj.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(obj)
+            }
 
     private companion object {
         const val ADAPTER_CLASS =

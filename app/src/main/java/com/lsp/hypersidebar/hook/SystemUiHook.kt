@@ -102,6 +102,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
         return runCatching {
             val cl = adapter.javaClass.classLoader
             val interactor = readField(adapter, "interactor")
+                ?: error("interactor field is null")
             val tiles = interactor.javaClass.methods
                 .first { it.name == "getCurrentQSTiles" && it.parameterCount == 0 }
                 .invoke(interactor) as? List<*>

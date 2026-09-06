@@ -1,126 +1,216 @@
 package com.lsp.hypersidebar.util
 
 import android.content.Context
-import android.net.Uri
-import android.os.Bundle
 import android.util.Log
-import org.json.JSONArray
-import org.json.JSONObject
 
+/**
+ * 扇形菜单数据源（2026-08-25 决策：provider 整条路径退役）。
+ *
+ * 可打开应用统一取自系统准入列表 `MiuiMultiWindowUtils.getFreeformSuggestionList`
+ * （即 PRD §3.2 准入规则的产物——无小窗资格的应用天然不在其中，无需二次过滤）。
+ * 快捷栏数据（用户 shortcut_actions）不经此类（Phase 3 接入）。
+ *
+ * 缓存策略（三层，1B 增补周期兜底）：反射调用实测 ~0.7-1s，绝不允许出现在呼出关键路径。
+ * - 惰性层：[loadApps] 永远同步返回缓存（冷缓存时为空，扇形只显示用户固定应用，推荐位
+ *   下次呼出补齐，PRD"用户固定优先"），距上次成功拉取 ≥30s 触发后台刷新；
+ * - 预热层：hook init 调 [prewarm]，首呼出大概率命中缓存（修 S6：停顿→扇形可见
+ *   间歇性 ~950ms 超标）；
+ * - 周期兜底层：每 [BACKSTOP_INTERVAL_MS] 自续排后台刷新（1B 2026-08-30）——消灭
+ *   "长期闲置后首呼出显示旧数据"（惰性层只惠及下一次呼出）与"prewarm 因 context
+ *   未就绪被跳过后永不刷新"（[loadApps] 也会补启循环）。数据源为使用习惯驱动的
+ *   系统建议列表，5 分钟远超其真实变化速度；成本 ~1s 后台 binder/次，常驻进程可忽略。
+ *   周期挂主线程 handler（仅 postDelayed 微秒级），刷新在后台 executor（[refreshing]
+ *   标志防重入，fixed-rate 循环安全）。
+ * - 落盘持久层（迭代四 §1.2，修冷启动推荐竞态窗）：每次成功刷新把列表 JSON 写宿主进程
+ *   本地 prefs（hook 进程 remotePrefs 只读不适用；列表没变化不写、空列表不覆盖）；
+ *   首次刷新前先从盘同步灌缓存（后台线程，不设 lastFetchTime→TTL 视为过期必刷）。
+ *   进程重启后首呼出即显示上次会话的推荐，竞态窗（冷 binder ~3.5s）实际消失。
+ */
 object DataLoader {
 
     private const val TAG = "DataLoader"
-    private const val PROVIDER_URI = "content://com.miui.securitycenter.remoteprovider"
-    private const val KEY = "global_dock_apps"
     private const val CACHE_TTL_MS = 30_000L
+    private const val BACKSTOP_INTERVAL_MS = 5 * 60_000L
+    private const val DISK_PREFS_NAME = "hyperSidebar_data"
+    private const val DISK_KEY_SUGGESTIONS = "suggestions"
 
-    private var cachedResult: List<String>? = null
-    private var cachedQuickActions: List<QuickAction>? = null
-    private var lastFetchTime = 0L
+    /**
+     * 数据源死亡回调（迭代四 §1.3，PRD §9.4 用户加强：获取失败→取消所有 hook、
+     * 扇形不再展示）：连续失败 ≥[DEAD_THRESHOLD] 次且缓存仍空（含盘）=ROM 不兼容信号。
+     * hook 进程 init 时注册（注册后恰触发一次）；模块进程不注册，无副作用。
+     */
+    @Volatile var onDataSourceDead: (() -> Unit)? = null
 
-    data class QuickAction(
-        val id: String,
-        val name: String,
-        val action: String,
-        val uri: String,
-        val packageName: String,
-        val className: String
-    )
+    @Volatile private var cachedResult: List<String>? = null
+    @Volatile private var lastFetchTime = 0L
+    @Volatile private var refreshing = false
+    @Volatile private var backstopStarted = false
+    @Volatile private var prewarmed = false
+    @Volatile private var hydrated = false
+    @Volatile private var lastPersistedJson: String? = null
+
+    // 连续失败计数（1C，PRD §9.4"推荐数据获取失败→toast"）：数据源是系统 API，
+    // 连续失败通常=ROM 更新后反射签名失效（模块与该 ROM 根本不兼容的信号）——
+    // 达 5 次且缓存仍为空（含盘，落盘层灌入也算"有过数据"）时 toast 一次并触发
+    // [onDataSourceDead]（进程生命周期内至多一次；成功即清零且缓存非空后不再触发）
+    @Volatile private var consecutiveFailures = 0
+    @Volatile private var failureToastShown = false
+
+    private val executor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "FanDataLoader").apply { isDaemon = true }
+    }
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     fun loadApps(context: Context): List<String> {
-        return try {
-            loadAppsInternal(context)
-        } catch (e: Throwable) {
-            cachedResult ?: emptyList()
-        }
-    }
-
-    fun loadQuickActions(context: Context): List<QuickAction> {
-        return try {
-            loadDockData(context)
-            cachedQuickActions ?: emptyList()
-        } catch (e: Throwable) {
-            cachedQuickActions ?: emptyList()
-        }
-    }
-
-    private fun loadAppsInternal(context: Context): List<String> {
+        val appContext = context.applicationContext
+        startBackstop(appContext)
         val now = System.currentTimeMillis()
-        if (cachedResult != null && (now - lastFetchTime) < CACHE_TTL_MS) {
-            return cachedResult!!
+        if (cachedResult == null || (now - lastFetchTime) >= CACHE_TTL_MS) {
+            refreshAsync(appContext)
         }
-
-        loadDockData(context)
-        val suggestion = loadSuggestionApps(context)
-        val merged = linkedSetOf<String>()
-        merged.addAll(cachedResult ?: emptyList())
-        merged.addAll(suggestion)
-
-        cachedResult = merged.toList()
-        lastFetchTime = now
-        return cachedResult!!
+        return cachedResult ?: emptyList()
     }
 
-    private fun loadDockData(context: Context) {
-        try {
-            val bundle = Bundle().apply {
-                putString("key", KEY)
-                putString("default", "")
+    /** hook init 时调用：进程存活期间提前把推荐列表拉进缓存，并启动周期兜底循环。 */
+    fun prewarm(context: Context) {
+        val appContext = context.applicationContext
+        refreshAsync(appContext)
+        startBackstop(appContext)
+    }
+
+    /**
+     * 带重试的预热（修"首次呼出只有固定应用"）：hook init 时宿主 appContext 可能未就绪
+     * （launcher 实测直接抛 NPE，prewarm skipped），首轮呼出必然冷缓存。此方法每 intervalMs
+     * 重试 provider 直到拿到上下文或耗尽次数，成功即 prewarm（刷新+兜底循环）。
+     */
+    fun prewarmWithRetry(provider: () -> Context?, maxAttempts: Int = 12, intervalMs: Long = 5000L) {
+        val task = object : Runnable {
+            var attempt = 0
+            override fun run() {
+                if (prewarmed) return
+                val ctx = runCatching { provider() }.getOrNull()?.applicationContext
+                if (ctx != null) {
+                    prewarmed = true
+                    Log.i(TAG, "prewarm ok (attempt ${attempt + 1})")
+                    prewarm(ctx)
+                } else if (++attempt < maxAttempts) {
+                    mainHandler.postDelayed(this, intervalMs)
+                } else {
+                    Log.w(TAG, "prewarm gave up after $maxAttempts attempts")
+                }
             }
-            val result = context.contentResolver.call(
-                Uri.parse(PROVIDER_URI),
-                "callPreference",
-                "GET",
-                bundle
-            ) ?: return
-            val jsonStr = result.getString(KEY, "") ?: return
-            if (jsonStr.isEmpty()) return
+        }
+        mainHandler.post(task)
+    }
 
-            val jsonArray = JSONArray(jsonStr)
-            val apps = mutableListOf<String>()
-            val actions = mutableListOf<QuickAction>()
+    /**
+     * 周期兜底循环（每进程一次）：自续排而非 fixed-rate 定时器框架，每轮独立容错——
+     * 单次失败不杀循环。挂主线程 handler，触发成本微秒级；实际刷新走后台 executor。
+     */
+    private fun startBackstop(appContext: Context) {
+        if (backstopStarted) return
+        backstopStarted = true
+        mainHandler.postDelayed(object : Runnable {
+            override fun run() {
+                runCatching { refreshAsync(appContext) }
+                    .onFailure { Log.w(TAG, "backstop dispatch failed: ${it.message}") }
+                mainHandler.postDelayed(this, BACKSTOP_INTERVAL_MS)
+            }
+        }, BACKSTOP_INTERVAL_MS)
+    }
 
-            for (i in 0 until jsonArray.length()) {
-                when (val entry = jsonArray.get(i)) {
-                    is String -> apps.add(entry.split(",,").first())
-                    is JSONObject -> {
-                        val action = entry.optString("action", "none")
-                        if (action == "none") continue
-                        actions.add(QuickAction(
-                            id = entry.optString("id", ""),
-                            name = entry.optString("name", entry.optString("title", "")),
-                            action = action,
-                            uri = entry.optString("uri", ""),
-                            packageName = entry.optString("packageName", ""),
-                            className = entry.optString("className", "")
-                        ))
+    private fun refreshAsync(context: Context) {
+        if (refreshing) return
+        refreshing = true
+        executor.execute {
+            try {
+                hydrateFromDisk(context)
+                val t0 = android.os.SystemClock.elapsedRealtime()
+                val suggestion = loadSuggestionApps(context)
+                cachedResult = suggestion
+                lastFetchTime = System.currentTimeMillis()
+                consecutiveFailures = 0
+                persistToDisk(context, suggestion)
+                // label 预热（1C P3）：扇形呼出主线程逐 pkg 调 AppMetaCache.label，miss 即
+                // PM binder（首呼出最多 14 次）——后台刷新顺带灌缓存，呼出路径恒命中
+                suggestion.forEach { AppMetaCache.label(context, it) }
+                Log.i(TAG, "refreshed ${suggestion.size} suggestion apps in ${android.os.SystemClock.elapsedRealtime() - t0}ms (background)")
+            } catch (e: Throwable) {
+                Log.w(TAG, "refresh failed: ${e.message}")
+                consecutiveFailures++
+                if (!failureToastShown && cachedResult == null && consecutiveFailures >= DEAD_THRESHOLD) {
+                    failureToastShown = true
+                    mainHandler.post {
+                        runCatching {
+                            android.widget.Toast.makeText(
+                                context,
+                                "推荐数据获取失败",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        onDataSourceDead?.invoke()
                     }
                 }
+            } finally {
+                refreshing = false
             }
-
-            cachedResult = apps
-            cachedQuickActions = actions
-        } catch (e: Throwable) {
-            Log.w(TAG, "loadDockData: ${e.message}")
         }
     }
 
-    private fun loadSuggestionApps(context: Context): List<String> {
-        return try {
-            val cls = Class.forName("android.util.MiuiMultiWindowUtils")
-            val method = try {
-                cls.getMethod("getFreeformSuggestionList", Context::class.java)
-            } catch (_: NoSuchMethodException) {
-                cls.getDeclaredMethod("getFreeformSuggestionList", Context::class.java).apply {
-                    isAccessible = true
+    /** 数据源死亡阈值（同机制熔断口径；缓存含盘灌入，"从未有过数据"才计） */
+    private const val DEAD_THRESHOLD = 5
+
+    /**
+     * 盘灌缓存（迭代四 §1.2）：首次刷新前从宿主本地 prefs 读上次会话的推荐列表。
+     * 只灌 cachedResult 不设 lastFetchTime——TTL 视为过期，本次/下次刷新照常拉新覆盖。
+     * executor 单线程调用，无并发。
+     */
+    private fun hydrateFromDisk(context: Context) {
+        if (hydrated) return
+        hydrated = true
+        if (cachedResult != null) return
+        runCatching {
+            val json = context.applicationContext
+                .getSharedPreferences(DISK_PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(DISK_KEY_SUGGESTIONS, null)
+            if (json != null) {
+                lastPersistedJson = json
+                val arr = org.json.JSONArray(json)
+                val list = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+                if (list.isNotEmpty()) {
+                    cachedResult = list
+                    Log.i(TAG, "hydrated ${list.size} suggestions from disk (stale, refresh pending)")
                 }
             }
-            @Suppress("UNCHECKED_CAST")
-            val rawList = method.invoke(null, context) as? List<String> ?: emptyList()
-            rawList.map { it.split(",,").first() }
-        } catch (e: Throwable) {
-            Log.w(TAG, "loadSuggestionApps: ${e.message}")
-            emptyList()
+        }.onFailure { Log.w(TAG, "hydrate failed: ${it.message}") }
+    }
+
+    /** 成功刷新落盘：列表没变不写（推荐列表日常稳定，实际写盘趋近于零）；空列表不覆盖。 */
+    private fun persistToDisk(context: Context, list: List<String>) {
+        if (list.isEmpty()) return
+        val json = org.json.JSONArray(list).toString()
+        if (json == lastPersistedJson) return
+        lastPersistedJson = json
+        runCatching {
+            context.applicationContext
+                .getSharedPreferences(DISK_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(DISK_KEY_SUGGESTIONS, json).apply()
+        }.onFailure { Log.w(TAG, "persist failed: ${it.message}") }
+    }
+
+    /** 反射失败直接抛（1C：失败计数/兜底 toast 需要区分"拉取失败"与"合法空列表"）。 */
+    private fun loadSuggestionApps(context: Context): List<String> {
+        val cls = Class.forName("android.util.MiuiMultiWindowUtils")
+        val method = try {
+            cls.getMethod("getFreeformSuggestionList", Context::class.java)
+        } catch (_: NoSuchMethodException) {
+            cls.getDeclaredMethod("getFreeformSuggestionList", Context::class.java).apply {
+                isAccessible = true
+            }
         }
+        @Suppress("UNCHECKED_CAST")
+        val rawList = method.invoke(null, context) as? List<String>
+            ?: throw IllegalStateException("getFreeformSuggestionList returned ${method.returnType}")
+        return rawList.map { it.split(",,").first() }
     }
 }

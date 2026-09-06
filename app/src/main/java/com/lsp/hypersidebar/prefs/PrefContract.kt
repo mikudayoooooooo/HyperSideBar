@@ -141,9 +141,10 @@ object LayoutDefaults {
     const val TRIGGER_DWELL_MS = 250
     const val TRIGGER_MIN_DISTANCE_DP = 30f
 
-    // 扇形背景视觉（路线 C）：雾化默认 0.40 = 示意图 C1 档（锚点 40% → 外弧 6% 渐隐）；
-    // 压暗默认关（opt-in 开关），压暗量固定不做成滑条
-    const val FAN_FOG_INTENSITY = 0.40f
+    // 扇形背景视觉（路线 C）：雾化默认 0.55（弧缘 100% → 锚点 35% 反向渐变，2026-09-06
+    // 用户拍板：暗色主题下正向渐变的密度落在屏边不可见区，观感"没区别"）；压暗默认关
+    // （opt-in 开关），压暗量固定不做成滑条
+    const val FAN_FOG_INTENSITY = 0.55f
     const val FAN_DIM_ENABLED = false
     const val FAN_DIM_AMOUNT = 0.24f
 

@@ -84,22 +84,18 @@ fun FanMenuCompose(
         targetValue = if (isVisible) 1f else 0.7f,
         animationSpec = tween(200)
     )
-    val menuAlpha by animateFloatAsState(
-        targetValue = if (isVisible) 1f else 0f,
-        animationSpec = tween(200)
-    )
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // 压暗 scrim（用户开关）：全屏纯黑罩在窗口内容最底层——呼出时随 menuAlpha 淡入，
-        // 视觉等价 FLAG_DIM_BEHIND 但可动画且不碰窗口参数。只压暗背景，扇形内容画在其上
+        // 压暗 scrim（用户开关）：全屏纯黑罩在窗口内容最底层——呼出即终态（背景硬着陆，
+        // 用户 2026-09-06 拍板不做淡入），视觉等价 FLAG_DIM_BEHIND 但不碰窗口参数
         if (dimEnabled) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = LayoutDefaults.FAN_DIM_AMOUNT * menuAlpha))
+                    .background(Color.Black.copy(alpha = LayoutDefaults.FAN_DIM_AMOUNT))
             )
         }
-        FanBackground(geometry, colors, menuAlpha, fogIntensity, Modifier.scale(scale))
+        FanBackground(geometry, colors, fogIntensity, Modifier.scale(scale))
 
         geometry.items.forEachIndexed { index, item ->
             FanAppIcon(
@@ -108,7 +104,6 @@ fun FanMenuCompose(
                 isSelected = index == selectedIndex,
                 iconSize = geometry.iconSize,
                 colors = colors,
-                alpha = menuAlpha,
                 scale = scale
             )
         }
@@ -134,14 +129,14 @@ fun FanMenuCompose(
 private fun FanBackground(
     geometry: FanGeometry,
     colors: FanThemeColors,
-    alpha: Float,
     fogIntensity: Float,
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
-        // 雾化层（路线 C）：径向渐变填充（锚点浓→外弧淡）+ 粗弧光晕，整层 6dp blur 羽化。
-        // RenderEffect 走 GPU，窗口 FLAG_HARDWARE_ACCELERATED + minSdk 33 恒可用；
-        // 浓度 0 = 无填充无光晕（裸弧线），滑条可在线 A/B
+        // 雾化层（路线 C）：径向渐变填充——弧缘最浓（=滑条值）向锚点渐弱到 35%（反向渐变，
+        // 2026-09-06 用户拍板：密度落在可见的弧线边界与图标环带上，而非屏边不可见区），
+        // 整层 6dp blur 羽化 + 粗弧光晕。RenderEffect 走 GPU，窗口 FLAG_HARDWARE_ACCELERATED
+        // + minSdk 33 恒可用；浓度 0 = 无填充无光晕（裸弧线），滑条可在线 A/B
         androidx.compose.foundation.Canvas(
             modifier = Modifier
                 .fillMaxSize()
@@ -160,9 +155,8 @@ private fun FanBackground(
                 drawArc(
                     brush = Brush.radialGradient(
                         colorStops = arrayOf(
-                            0f to fog.copy(alpha = fogIntensity),
-                            0.6f to fog.copy(alpha = fogIntensity * 0.35f),
-                            1f to fog.copy(alpha = fogIntensity * 0.12f)
+                            0f to fog.copy(alpha = fogIntensity * 0.35f),
+                            1f to fog.copy(alpha = fogIntensity)
                         ),
                         center = geometry.anchor,
                         radius = geometry.outerRadius
@@ -171,8 +165,7 @@ private fun FanBackground(
                     sweepAngle = geometry.spanAngle,
                     useCenter = true,
                     topLeft = topLeft,
-                    size = arcSize,
-                    alpha = alpha
+                    size = arcSize
                 )
                 drawArc(
                     color = colors.outline.copy(alpha = 0.18f),
@@ -181,8 +174,7 @@ private fun FanBackground(
                     useCenter = false,
                     topLeft = topLeft,
                     size = arcSize,
-                    style = Stroke(width = 8.dp.toPx()),
-                    alpha = alpha
+                    style = Stroke(width = 8.dp.toPx())
                 )
             }
         }
@@ -201,8 +193,7 @@ private fun FanBackground(
                     geometry.outerRadius * 2,
                     geometry.outerRadius * 2
                 ),
-                style = Stroke(width = 2.dp.toPx()),
-                alpha = alpha
+                style = Stroke(width = 2.dp.toPx())
             )
         }
     }
@@ -215,7 +206,6 @@ private fun FanAppIcon(
     isSelected: Boolean,
     iconSize: Float,
     colors: FanThemeColors,
-    alpha: Float,
     scale: Float
 ) {
     val (drawable, fallbackColor) = rememberAppIcon(context, item.app)
@@ -236,7 +226,7 @@ private fun FanAppIcon(
             }
             .size(iconSize.dp)
             .scale(scale * iconScale)
-            .alpha(alpha * iconAlpha),
+            .alpha(iconAlpha),
         contentAlignment = Alignment.Center
     ) {
         // 选中高亮板仅选中态绘制：常态无底框——原生应用图标自带形状边界，
@@ -264,8 +254,7 @@ private fun FanAppIcon(
                 drawRoundRect(
                     color = colors.primary,
                     cornerRadius = CornerRadius(size.minDimension * 0.25f, size.minDimension * 0.25f),
-                    style = Stroke(width = 2.dp.toPx()),
-                    alpha = alpha
+                    style = Stroke(width = 2.dp.toPx())
                 )
             }
         }

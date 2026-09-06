@@ -10,6 +10,7 @@ import android.util.Log
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.util.RelayToken
 import com.lsp.hypersidebar.util.SystemUiHookResult
+import io.github.kyuubiran.ezxhelper.core.ClassLoaderProvider
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHook
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHooks
@@ -46,8 +47,10 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
     }
 
     private fun hookAdapterStash() {
+        // 类解析必须走宿主 classloader（EzXHelper ClassLoaderProvider）——
+        // javaClass.classLoader 是模块自身的，看不到 SystemUI 类（11:22 实测 not found）
         val adapterClass = runCatching {
-            javaClass.classLoader.loadClass(ADAPTER_CLASS)
+            ClassLoaderProvider.safeClassLoader.loadClass(ADAPTER_CLASS)
         }.getOrNull() ?: run {
             Log.w(TAG, "MiuiQSHostAdapter not found (ROM drift?)")
             return

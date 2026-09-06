@@ -596,12 +596,13 @@ object ShortcutLauncher {
             return LaunchResult.Failure(FailureReason.INVALID_CONFIG, "Invalid tile component")
         }
         // 组合脚本（2026-09-05 用户 T4 实测定稿）：expand-settings 唤醒 QS → click-tile
-        // → collapse 还原。input swipe 轻拉方案（e92d1be）被 T1 推翻——轻拉激活不持久；
-        // click-tile 必须 QS 处于交互态才真生效，expanded 态最可靠。组件名已过正则白名单
+        // → collapse 还原。组件名已过正则白名单（仅字母数字点），脚本为常量组合——
+        // 整串作为单个 -c 参数裸传（不可再 shellQuote：su 内层 sh 会把引号包裹的
+        // 整串当成一个命令名，exit=127 "not found"，11:22 实测）
         val script = "/system/bin/cmd statusbar expand-settings; sleep 0.3; " +
             "/system/bin/cmd statusbar click-tile $pkg/$fullCls; sleep 0.2; " +
             "/system/bin/cmd statusbar collapse"
-        val cmd = listOf("su", "-c", shellQuote(script))
+        val cmd = listOf("su", "-c", script)
         Log.i(TAG, "launchQsTileViaRoot: $script")
         return try {
             val process = ProcessBuilder(cmd).start()

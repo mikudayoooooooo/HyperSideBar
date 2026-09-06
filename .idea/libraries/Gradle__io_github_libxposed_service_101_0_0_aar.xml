@@ -1,0 +1,12 @@
+<component name="libraryTable">
+  <library name="Gradle: io.github.libxposed:service:101.0.0@aar" external-system-id="GRADLE">
+    <CLASSES>
+      <root url="file://$USER_HOME$/.gradle/caches/9.3.1/transforms/37ac9b89aeb67bd6fea8f8c0a5808d03/workspace/transformed/service-101.0.0/AndroidManifest.xml" />
+      <root url="jar://$USER_HOME$/.gradle/caches/9.3.1/transforms/37ac9b89aeb67bd6fea8f8c0a5808d03/workspace/transformed/service-101.0.0/jars/classes.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES>
+      <root url="jar://$USER_HOME$/.gradle/caches/modules-2/files-2.1/io.github.libxposed/service/101.0.0/5fd489685e490edd38df8a9e090285c6250ae6f5/service-101.0.0-sources.jar!/" />
+    </SOURCES>
+  </library>
+</component>

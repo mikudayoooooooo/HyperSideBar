@@ -1,0 +1,13 @@
+<component name="libraryTable">
+  <library name="Gradle: androidx.print:print:1.0.0@aar" external-system-id="GRADLE">
+    <ANNOTATIONS>
+      <root url="jar://$USER_HOME$/.gradle/caches/9.3.1/transforms/9ecdad06d4e3ceb999fb63fcf9b258e8/workspace/transformed/print-1.0.0/annotations.zip!/" />
+    </ANNOTATIONS>
+    <CLASSES>
+      <root url="file://$USER_HOME$/.gradle/caches/9.3.1/transforms/9ecdad06d4e3ceb999fb63fcf9b258e8/workspace/transformed/print-1.0.0/AndroidManifest.xml" />
+      <root url="jar://$USER_HOME$/.gradle/caches/9.3.1/transforms/9ecdad06d4e3ceb999fb63fcf9b258e8/workspace/transformed/print-1.0.0/jars/classes.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

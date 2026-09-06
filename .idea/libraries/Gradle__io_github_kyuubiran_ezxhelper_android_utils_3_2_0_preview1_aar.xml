@@ -1,0 +1,12 @@
+<component name="libraryTable">
+  <library name="Gradle: io.github.kyuubiran.ezxhelper:android-utils:3.2.0-preview1@aar" external-system-id="GRADLE">
+    <CLASSES>
+      <root url="file://$USER_HOME$/.gradle/caches/9.3.1/transforms/4c7783ff5a6b97be1fd6e593a495ca25/workspace/transformed/android-utils-3.2.0-preview1/AndroidManifest.xml" />
+      <root url="jar://$USER_HOME$/.gradle/caches/9.3.1/transforms/4c7783ff5a6b97be1fd6e593a495ca25/workspace/transformed/android-utils-3.2.0-preview1/jars/classes.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES>
+      <root url="jar://$USER_HOME$/.gradle/caches/modules-2/files-2.1/io.github.kyuubiran.ezxhelper/android-utils/3.2.0-preview1/176dfca9c049081c8a123b7d45e917d49b6f10c3/android-utils-3.2.0-preview1-sources.jar!/" />
+    </SOURCES>
+  </library>
+</component>

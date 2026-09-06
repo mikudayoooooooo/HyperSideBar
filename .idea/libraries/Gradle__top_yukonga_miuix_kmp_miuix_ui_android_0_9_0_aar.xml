@@ -1,0 +1,12 @@
+<component name="libraryTable">
+  <library name="Gradle: top.yukonga.miuix.kmp:miuix-ui-android:0.9.0@aar" external-system-id="GRADLE">
+    <CLASSES>
+      <root url="file://$USER_HOME$/.gradle/caches/9.3.1/transforms/ae19974d76cb63d291d327cc2844b9a9/workspace/transformed/miuix-ui/AndroidManifest.xml" />
+      <root url="jar://$USER_HOME$/.gradle/caches/9.3.1/transforms/ae19974d76cb63d291d327cc2844b9a9/workspace/transformed/miuix-ui/jars/classes.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES>
+      <root url="jar://$USER_HOME$/.gradle/caches/modules-2/files-2.1/top.yukonga.miuix.kmp/miuix-ui-android/0.9.0/33492a75bf75e4fe49c36adb9df005186543a8be/miuix-ui-android-0.9.0-sources.jar!/" />
+    </SOURCES>
+  </library>
+</component>

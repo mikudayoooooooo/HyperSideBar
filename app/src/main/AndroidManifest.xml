@@ -2,6 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
@@ -10,12 +11,11 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
-    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
-
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:description="@string/module_description"
+        android:enableOnBackInvokedCallback="true"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -36,6 +36,26 @@
                 <category android:name="de.robv.android.xposed.category.MODULE_SETTINGS" />
             </intent-filter>
         </activity>
+
+        <!-- 全部应用面板（fan 圈内末位入口）：:ui/launcher 经 FreeformLauncher 启动，
+             freeform 小窗形态（PRD §7.3.2）；exported 供 :ui（system uid）跨进程拉起。
+             taskAffinity 独立=修"打开目标后小窗不关"：默认 affinity 会命中设置主任务
+             （NEW_TASK 按 affinity 归任务），finish() 后主任务顶上是 MainActivity、
+             任务非空窗口不收；独立 affinity 保证面板任务只有自己，finish 即空即关 -->
+        <activity
+            android:name=".ui.allapps.AllAppsActivity"
+            android:taskAffinity="com.lsp.hypersidebar.allapps_panel"
+            android:exported="true"
+            android:resizeableActivity="true"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:label="@string/all_apps_title" />
+
+        <!-- :ui → 模块 App 快捷方式 root 代发（§2.4）：非 exported 目标 :ui 静默假成功
+             且无 su；模块进程持 root 代发。令牌校验见 ShortcutRelayReceiver -->
+        <receiver
+            android:name=".ShortcutRelayReceiver"
+            android:exported="true" />
 
     </application>
 

@@ -18,6 +18,13 @@ val dailySeq = if (lastCode / 100 == todayPrefix.toInt()) {
 }
 val computedVersionCode = todayPrefix.toInt() * 100 + dailySeq
 
+// release 签名（迭代四收尾）：keystore.properties 不入库（.gitignore），缺失时
+// release 保持未签名（assembleRelease 产 app-release-unsigned.apk）
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -28,11 +35,18 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.lsp.hypersidebar"
-        minSdk = 26
+        // 迭代五批次 0：LSPosed 仓库自动审批要求提交者能证明包名所属域名的控制权，
+        // com.lsp.*（lsp.com 非本人所有）不可批 → 迁到 io.github.<user>.<module>。
+        // 仅改 applicationId（APK 身份）；namespace/目录树/类路径保持 com.lsp.hypersidebar 不动。
+        applicationId = "io.github.mikudayoooooooo.hypersidebar"
+        // 迭代五批次 1（2026-09-04 用户拍板）：26 → 33，直接支持 miuix-blur
+        // （RuntimeShader 自 API 33 起，模糊/混合/噪点/高光全部依赖）——
+        // 免去全库 blur 路径的 capability 门控；要求 Android 13+（HyperOS 全系满足）
+        minSdk = 33
         targetSdk = 36
         versionCode = computedVersionCode
-        versionName = "0.1"
+        // 三段式语义化版本；2.0.0 = 包名断代标记（旧包名无法覆盖安装，需卸载重装）
+        versionName = "2.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -41,13 +55,27 @@ android {
         buildConfigField("String", "EZXHELPER_VERSION", "\"3.2.0-preview1\"")
     }
 
+    signingConfigs {
+        create("release") {
+            if (keystorePropsFile.exists()) {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 混淆+压缩+资源收缩（Xposed 入口类经 proguard-rules.pro 必保）
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -89,8 +117,9 @@ dependencies {
     implementation(libs.miuix.ui)
     implementation(libs.miuix.preference)
     implementation(libs.miuix.icons)
-    implementation(libs.miuix.blur)
     implementation(libs.miuix.navigation3.ui)
+    // miuix-navigation3-ui 只内嵌 ui/scene 包，runtime（NavKey/NavBackStack/NavEntry）需显式引入
+    implementation(libs.androidx.navigation3.runtime)
 
     // Xposed/LSPosed
     compileOnly(libs.libxposed.api)

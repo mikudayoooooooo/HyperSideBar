@@ -1,0 +1,12 @@
+<component name="libraryTable">
+  <library name="Gradle: io.github.kyuubiran.ezxhelper:core:3.2.0-preview1" type="java-imported" external-system-id="GRADLE">
+    <properties groupId="io.github.kyuubiran.ezxhelper" artifactId="core" version="3.2.0-preview1" baseVersion="3.2.0-preview1" />
+    <CLASSES>
+      <root url="jar://$USER_HOME$/.gradle/caches/modules-2/files-2.1/io.github.kyuubiran.ezxhelper/core/3.2.0-preview1/72fd7566e683322c6364b87885d076dd814acefe/core-3.2.0-preview1.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES>
+      <root url="jar://$USER_HOME$/.gradle/caches/modules-2/files-2.1/io.github.kyuubiran.ezxhelper/core/3.2.0-preview1/d3c060ef0652a4db9087ff83619deea91b0ba438/core-3.2.0-preview1-sources.jar!/" />
+    </SOURCES>
+  </library>
+</component>

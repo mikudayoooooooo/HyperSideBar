@@ -97,10 +97,10 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
      *  "属性"运行时不一定有 getter（11:36 实测 getInteractor NoSuchMethod），
      *  字段一律 getField 直读。
      *
-     *  点击竞态（2026-09-06 用户实测 CaptureTileService 成功率低）：QS 收起时
-     *  TileService 处于解绑态，click() 派发后 onClick 偶发丢失。先
-     *  requestListeningState（公开 API）请求绑定进监听态，延迟 250ms 再点——
-     *  顺带给扇形收场/目标应用解冻留出时间窗。 */
+     *  点击竞态（2026-09-06 用户实测 CaptureTileService 成功率低 + 12:20 日志实锤）：
+     *  QS 收起时 TileService 解绑，click 被 MIUI 挂起（pendingBind）等绑定，而绑定
+     *  只在面板打开时发生=延迟投递。修复=反射 setBindRequested(true) 强制立即绑定，
+     *  延迟 250ms 再点——顺带给扇形收场/目标应用解冻留出时间窗。 */
     private fun resolveAndClick(context: Context, cn: ComponentName): Int {
         val adapter = hostAdapter ?: run {
             Log.w(TAG, "clickTile: adapter not stashed yet")
@@ -140,15 +140,20 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                 created
             }
 
-            // listening 激活：TileService 未绑定时点击会丢（bind 竞态）
+            // 强制绑定：QS 收起时 TileService 解绑，click 会被 MIUI 挂起（pendingBind，
+            // 绑定只在面板打开时发生→延迟投递=用户感知的"成功率低"）。setBindRequested(true)
+            // 立即触发绑定（TileServiceManager.setBindRequested，public 源码确认），250ms 后
+            // 的点击落在已绑定态即投即达；若仍未连上，pendingBind 队列也会在连接后立即投递。
+            // requestListeningState 在 HyperOS 实测抛 NPE（12:20 日志），弃用
             runCatching {
-                cl.loadClass("android.service.quicksettings.TileService")
-                    .getMethod(
-                        "requestListeningState",
-                        Context::class.java, ComponentName::class.java
-                    )
-                    .invoke(null, context.applicationContext, cn)
-            }.onFailure { Log.w(TAG, "requestListeningState failed: ${it.message}") }
+                val mgr = readField(tile, "mServiceManager")
+                    ?: error("mServiceManager field is null")
+                mgr.javaClass.methods
+                    .first { it.name == "setBindRequested" && it.parameterCount == 1 }
+                    .invoke(mgr, true)
+            }.onFailure {
+                Log.w(TAG, "setBindRequested failed: ${it.javaClass.simpleName}: ${it.message}")
+            }
 
             Handler(Looper.getMainLooper()).postDelayed({
                 runCatching {

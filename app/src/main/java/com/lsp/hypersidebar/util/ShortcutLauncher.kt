@@ -150,6 +150,12 @@ object ShortcutLauncher {
             return LaunchResult.Failure(FailureReason.INVALID_CONFIG, "TOOLBOX should be handled by broadcast")
         }
 
+        // QS_TILE 独立路径：root `cmd statusbar click-tile`（不走 Intent 管线）。
+        // 磁贴须已加入 QS，否则系统侧静默无动作（2026-09-04 spike 实测）
+        if (action.kind == ShortcutKind.QS_TILE) {
+            return launchQsTile(context, action, allowRootFallback)
+        }
+
         // SERVICE 有独立的启动路径（startService），不走 Activity 管线
         if (action.kind == ShortcutKind.SERVICE) {
             return launchService(context, action, allowRootFallback)
@@ -172,10 +178,12 @@ object ShortcutLauncher {
         // 3-4. 解析并验证
         val validation = validateIntent(context, intent, action)
         if (validation is LaunchResult.Failure) {
-            // 兜底：validateIntent 对非 exported Activity 可能误判 ACTIVITY_NOT_FOUND，
-            // 若 packageName 存在且包名可解析，跳过验证直接尝试启动。
+            // 兜底：queryIntentActivities 会过滤其他包的非 exported Activity（API 30+），
+            // intent 里带 package=（URI 形式）或表单包名存在时，直试启动——
+            // ActivityNotFoundException 再落 root（shell 权限可启动非导出组件）
+            val targetPkg = action.packageName ?: intent.`package`
             if (validation.reason == FailureReason.ACTIVITY_NOT_FOUND &&
-                !action.packageName.isNullOrEmpty()
+                !targetPkg.isNullOrEmpty()
             ) {
                 Log.w(TAG, "launch: validateIntent refused (${validation.detail}), but package exists, trying direct launch")
                 return tryLaunchDirect(context, intent, strategy, action, allowRootFallback)
@@ -184,8 +192,9 @@ object ShortcutLauncher {
             if (allowRootFallback && isRootAvailable() &&
                 validation.reason == FailureReason.NOT_EXPORTED) {
                 Log.i(TAG, "launch: exported check failed, trying ROOT fallback")
-                return launchViaRoot(action)
+                return launchViaRoot(action, intent)
             }
+            Log.w(TAG, "launch: validation failed: ${validation.reason}: ${validation.detail}")
             return validation
         }
 
@@ -198,7 +207,7 @@ object ShortcutLauncher {
         } catch (e: SecurityException) {
             Log.w(TAG, "launch: SecurityException via ${strategy.name}, trying ROOT", e)
             if (allowRootFallback && isRootAvailable()) {
-                launchViaRoot(action)
+                launchViaRoot(action, intent)
             } else {
                 LaunchResult.Failure(FailureReason.SECURITY_EXCEPTION, e.message ?: "Permission denied")
             }
@@ -208,7 +217,7 @@ object ShortcutLauncher {
         } catch (e: Exception) {
             Log.e(TAG, "launch: exception via ${strategy.name}", e)
             if (allowRootFallback && isRootAvailable()) {
-                launchViaRoot(action)
+                launchViaRoot(action, intent)
             } else {
                 LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, e.message ?: "Unknown error")
             }
@@ -226,6 +235,12 @@ object ShortcutLauncher {
         // SERVICE 用 Service 专用解析，不走 Activity 管线
         if (action.kind == ShortcutKind.SERVICE) {
             return validateService(context, action)
+        }
+
+        // QS_TILE 轻量验证：包已安装即可——磁贴是否在 QS 无法静态判断，
+        // click-tile 对不在 QS 的磁贴静默失败（spike 定案），留给运行时观察
+        if (action.kind == ShortcutKind.QS_TILE) {
+            return validateQsTile(context, action)
         }
 
         // COMPONENT 自动探测后分发验证
@@ -534,10 +549,106 @@ object ShortcutLauncher {
         }
     }
 
+    /**
+     * QS_TILE 启动路径：首选 SystemUI hook 直点（数据层 QSTile.click，无面板门禁、
+     * 零可见动作）；hook 不在 → root 三连兜底（expand-settings 唤醒 → click-tile →
+     * collapse，QS 闪现）。TileService 类存储在 serviceName 字段（与 SERVICE 同构）。
+     * 真机定案（2026-09-05）：`cmd statusbar click-tile` 仅在 QS 交互/展开态时真正
+     * 生效（与调用 uid 无关，fire-and-forget——QS 收起时静默丢弃且 exit=0）。
+     */
+    private fun launchQsTile(
+        context: Context,
+        action: ShortcutAction,
+        allowRootFallback: Boolean
+    ): LaunchResult {
+        val validation = validateQsTile(context, action)
+        if (validation is LaunchResult.Failure) return validation
+        val pkg = action.packageName ?: return LaunchResult.Failure(
+            FailureReason.INVALID_CONFIG, "packageName is empty"
+        )
+        val cls = action.serviceName ?: return LaunchResult.Failure(
+            FailureReason.INVALID_CONFIG, "serviceName is empty"
+        )
+        val fullCls = if (cls.startsWith(".")) "$pkg$cls" else cls
+        // 首选 SystemUI hook 直点（模块 App 也直接可广播，与 :ui 同一接收器）
+        if (QsTileClickBridge.sendBlocking(context, "$pkg/$fullCls", RelayToken.current())) {
+            return LaunchResult.Success(ComponentName(pkg, cls))
+        }
+        // 回退：root 三连（编辑页测试可见 QS 闪现，属可接受代价）
+        if (!allowRootFallback) {
+            return LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, "QS tile requires root fallback disabled")
+        }
+        if (!isRootAvailable()) {
+            return LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, "QS tile requires root (su)")
+        }
+        return launchQsTileViaRoot(action)
+    }
+
+    private fun launchQsTileViaRoot(action: ShortcutAction): LaunchResult {
+        val pkg = action.packageName ?: return LaunchResult.Failure(
+            FailureReason.INVALID_CONFIG, "packageName is empty"
+        )
+        val cls = action.serviceName ?: return LaunchResult.Failure(
+            FailureReason.INVALID_CONFIG, "serviceName is empty"
+        )
+        val fullCls = if (cls.startsWith(".")) "$pkg$cls" else cls
+        if (!pkg.matches(PKG_ACTIVITY_REGEX) || !fullCls.matches(PKG_ACTIVITY_REGEX)) {
+            return LaunchResult.Failure(FailureReason.INVALID_CONFIG, "Invalid tile component")
+        }
+        // 组合脚本（2026-09-05 用户 T4 实测定稿）：expand-settings 唤醒 QS → click-tile
+        // → collapse 还原。组件名已过正则白名单（仅字母数字点），脚本为常量组合——
+        // 整串作为单个 -c 参数裸传（不可再 shellQuote：su 内层 sh 会把引号包裹的
+        // 整串当成一个命令名，exit=127 "not found"，11:22 实测）
+        val script = "/system/bin/cmd statusbar expand-settings; sleep 0.3; " +
+            "/system/bin/cmd statusbar click-tile $pkg/$fullCls; sleep 0.2; " +
+            "/system/bin/cmd statusbar collapse"
+        val cmd = listOf("su", "-c", script)
+        Log.i(TAG, "launchQsTileViaRoot: $script")
+        return try {
+            val process = ProcessBuilder(cmd).start()
+            try {
+                val exitCode = process.waitFor()
+                val errorOutput = BufferedReader(InputStreamReader(process.errorStream)).use {
+                    it.readText().trim()
+                }
+                if (exitCode == 0) {
+                    Log.i(TAG, "launchQsTileViaRoot: SUCCESS")
+                    LaunchResult.Success(null)
+                } else {
+                    Log.w(TAG, "launchQsTileViaRoot: exit=$exitCode, error=$errorOutput")
+                    LaunchResult.Failure(FailureReason.ROOT_EXEC_FAILED, "exit=$exitCode: $errorOutput")
+                }
+            } finally {
+                process.destroy()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "launchQsTileViaRoot: exception", e)
+            LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, e.message ?: "su exec failed")
+        }
+    }
+
+    /** QS_TILE 轻量验证：包已安装 + 字段齐全即可（QS 归属无法静态判断）。 */
+    private fun validateQsTile(context: Context, action: ShortcutAction): LaunchResult {
+        val pkg = action.packageName
+        val cls = action.serviceName
+        if (pkg.isNullOrEmpty() || cls.isNullOrEmpty()) {
+            return LaunchResult.Failure(FailureReason.INVALID_CONFIG, "packageName or serviceName is empty")
+        }
+        return try {
+            context.packageManager.getPackageInfo(pkg, 0)
+            LaunchResult.Success(ComponentName(pkg, cls))
+        } catch (e: PackageManager.NameNotFoundException) {
+            LaunchResult.Failure(FailureReason.APP_NOT_INSTALLED, "Package not found: $pkg")
+        }
+    }
+
     private fun buildIntent(action: ShortcutAction): BuildIntentResult = when (action.kind) {
         ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> buildActivityIntent(action)
         ShortcutKind.INTENT_URI -> buildIntentUri(action)
         ShortcutKind.SERVICE -> buildServiceIntent(action)
+        ShortcutKind.QS_TILE -> BuildIntentResult.Failure(
+            FailureReason.INVALID_CONFIG, "QS_TILE is dispatched via statusbar command, not Intent"
+        )
         ShortcutKind.TOOLBOX -> BuildIntentResult.Failure(
             FailureReason.INVALID_CONFIG, "TOOLBOX cannot be built as Intent"
         )
@@ -631,7 +742,12 @@ object ShortcutLauncher {
         return try {
             // 使用 URI_INTENT_SCHEME 解析（不支持 intent:// 以外的 scheme 时走 VIEW）
             val intent = if (uriStr.startsWith("intent://") || uriStr.startsWith("#Intent")) {
-                Intent.parseUri(uriStr, Intent.URI_INTENT_SCHEME)
+                val parsed = Intent.parseUri(uriStr, Intent.URI_INTENT_SCHEME)
+                // parseUri(URI_INTENT_SCHEME) 会自动追加 CATEGORY_BROWSABLE（浏览器链接语义），
+                // 导致只声明 DEFAULT 的目标（如微信快捷动作派发 Activity）resolveActivity 必然
+                // 落空——剥离该类别使解析行为与 am start 一致（2026-08-31 微信快捷方式实测定位）
+                parsed.removeCategory(Intent.CATEGORY_BROWSABLE)
+                parsed
             } else {
                 // 普通 URI (如 weixin://, alipays://) 走 ACTION_VIEW
                 Intent(Intent.ACTION_VIEW, Uri.parse(uriStr))
@@ -660,13 +776,14 @@ object ShortcutLauncher {
      * - 清除 FLAG_GRANT_* 权限位
      * - 剥离 selector
      * - 清除 grants
+     *
+     * extras 不清洗（2026-08-31 修订）：INTENT_URI 快捷方式的载荷（如微信快捷动作的
+     * LaunchType/digest/token）就在 extras 里，清空=目标收到空 intent 无动作；
+     * 本模块为个人自用配置，intent 内容即用户本人输入，非不可信来源。
      */
     private fun sanitizeIntent(intent: Intent) {
         intent.clipData = null
         intent.selector = null
-
-        // 清除所有 extras 防止恶意 payload
-        intent.extras?.clear()
 
         // 清除所有 grant 标志
         intent.flags = intent.flags and
@@ -702,10 +819,14 @@ object ShortcutLauncher {
         if (resolveInfo == null) {
             // resolveActivity 对非 exported Activity 返回 null，
             // 回退用 getActivityInfo 探测：如果 Activity 确实存在，放行让 launch() 去试。
-            val component = intent.component ?: return LaunchResult.Failure(
-                FailureReason.ACTIVITY_NOT_FOUND,
-                "No component set and resolveActivity returned null"
-            )
+            val component = intent.component ?: run {
+                Log.w(TAG, "validateIntent: resolveActivity null and no component: " +
+                    "action=${intent.action} pkg=${intent.`package`} categories=${intent.categories}")
+                return LaunchResult.Failure(
+                    FailureReason.ACTIVITY_NOT_FOUND,
+                    "No component set and resolveActivity returned null"
+                )
+            }
             // 第一层：直接 getActivityInfo（对 exported Activity 有效）
             try {
                 @Suppress("DEPRECATION")
@@ -756,14 +877,22 @@ object ShortcutLauncher {
     /**
      * ROOT 启动：通过 su -c "am start ..." 绕过 exported 限制。
      */
-    private fun launchViaRoot(action: ShortcutAction): LaunchResult {
-        val cmdArgs = buildAmCommand(action) ?: return LaunchResult.Failure(
+    private fun launchViaRoot(action: ShortcutAction, intent: Intent? = null): LaunchResult {
+        // INTENT_URI 优先从已解析的 Intent 生成 am 旗标命令（-a/--es 形式）：
+        // 位置参数传 intent:// URI 会在 am 内部再走一次 parseUri（追加 BROWSABLE，
+        // 真机实测 shell 也解析失败）；buildAmCommand 的 URI 分支会因 ';' 直接拒绝。
+        val cmdArgs: List<String> = when (action.kind) {
+            ShortcutKind.INTENT_URI ->
+                intent?.let { intentToAmArgs(it) } ?: buildAmCommand(action)?.toList()
+            else -> buildAmCommand(action)?.toList()
+        } ?: return LaunchResult.Failure(
             FailureReason.INVALID_CONFIG,
             "Cannot build am command for kind=${action.kind}"
         )
 
-        // su -c expects a single command string, not individual arguments
-        val fullCmd = listOf("su", "-c", cmdArgs.joinToString(" "))
+        // su -c expects a single command string, not individual arguments；
+        // 参数值可能含 shell 元字符（intent URI 里的 # ; & 空格等），逐参单引号包裹
+        val fullCmd = listOf("su", "-c", cmdArgs.joinToString(" ") { shellQuote(it) })
         Log.i(TAG, "launchViaRoot: ${fullCmd.joinToString(" ")}")
 
         return try {
@@ -797,6 +926,39 @@ object ShortcutLauncher {
     }
 
     /**
+     * 把已解析的 Intent 转成 am start 旗标参数（root 路径用）。
+     * 基本类型 extras 逐项输出；am CLI 表达不了的类型（Bundle/Serializable 等）跳过。
+     */
+    private fun intentToAmArgs(intent: Intent): List<String> {
+        val args = mutableListOf("am", "start")
+        intent.action?.let { args += listOf("-a", it) }
+        intent.`package`?.let { args += listOf("-p", it) }
+        intent.component?.let { args += listOf("-n", it.flattenToShortString()) }
+        intent.categories?.filter { it != Intent.CATEGORY_BROWSABLE }?.forEach {
+            args += listOf("-c", it)
+        }
+        val extras = intent.extras
+        if (extras != null) {
+            for (key in extras.keySet()) {
+                when (val v: Any? = extras[key]) {
+                    null -> {}
+                    is String -> args += listOf("--es", key, v)
+                    is Int -> args += listOf("--ei", key, v.toString())
+                    is Long -> args += listOf("--el", key, v.toString())
+                    is Boolean -> args += listOf("--ez", key, v.toString())
+                    is Float -> args += listOf("--ef", key, v.toString())
+                    is Double -> args += listOf("--ef", key, v.toString())
+                    else -> Log.w(TAG, "intentToAmArgs: skip unsupported extra $key=${v::class.java.simpleName}")
+                }
+            }
+        }
+        return args
+    }
+
+    /** su -c 单命令串的参数安全引用（POSIX 单引号包裹，内部单引号转义）。 */
+    private fun shellQuote(arg: String): String = "'" + arg.replace("'", "'\\''") + "'"
+
+    /**
      * 兜底启动：跳过 validateIntent 的 exported/not-found 检查，直接 try-catch 启动。
      * 用于 validateIntent 误判非 exported Activity 的场景。
      */
@@ -815,7 +977,7 @@ object ShortcutLauncher {
         } catch (e: SecurityException) {
             Log.w(TAG, "tryLaunchDirect: SecurityException via ${strategy.name}, trying ROOT", e)
             if (allowRootFallback && isRootAvailable()) {
-                launchViaRoot(action)
+                launchViaRoot(action, intent)
             } else {
                 LaunchResult.Failure(FailureReason.SECURITY_EXCEPTION, e.message ?: "Permission denied")
             }
@@ -823,11 +985,12 @@ object ShortcutLauncher {
             // Android 对非 exported Activity 在 Instrumentation 层面抛 ANF 而非 SecurityException
             // 预检区分"包存在但 exported=false"（可 ROOT fallback）vs "真不存在"
             val comp = intent.component
-            if (comp != null && allowRootFallback) {
-                val pkgInstalled = runCatching { context.packageManager.getPackageInfo(comp.packageName, 0) }.isSuccess
+            val pkg = comp?.packageName ?: intent.`package`
+            if (pkg != null && allowRootFallback) {
+                val pkgInstalled = runCatching { context.packageManager.getPackageInfo(pkg, 0) }.isSuccess
                 if (pkgInstalled && isRootAvailable()) {
                     Log.w(TAG, "tryLaunchDirect: ActivityNotFoundException but package exists, trying ROOT fallback", e)
-                    return launchViaRoot(action)
+                    return launchViaRoot(action, intent)
                 }
             }
             Log.e(TAG, "tryLaunchDirect: ActivityNotFoundException via ${strategy.name}", e)
@@ -835,7 +998,7 @@ object ShortcutLauncher {
         } catch (e: Exception) {
             Log.e(TAG, "tryLaunchDirect: exception via ${strategy.name}", e)
             if (allowRootFallback && isRootAvailable()) {
-                launchViaRoot(action)
+                launchViaRoot(action, intent)
             } else {
                 LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, e.message ?: "Unknown error")
             }
@@ -924,6 +1087,17 @@ object ShortcutLauncher {
                     return null
                 }
                 arrayOf("am", "startservice", "-n", "$pkg/$fullSvc")
+            }
+            ShortcutKind.QS_TILE -> {
+                val pkg = action.packageName ?: return null
+                val cls = normalizeServiceName(pkg, action.serviceName ?: return null)
+                val fullCls = if (cls.startsWith(".")) "$pkg$cls" else cls
+                if (!pkg.matches(PKG_ACTIVITY_REGEX) || !fullCls.matches(PKG_ACTIVITY_REGEX)) {
+                    return null
+                }
+                // statusbar 是 cmd 的子命令而非独立二进制（漏掉 cmd 前缀 exit=127，
+                // 2026-09-05 编辑页测试实测）；绝对路径防 su 环境 PATH 不全
+                arrayOf("/system/bin/cmd", "statusbar", "click-tile", "$pkg/$fullCls")
             }
             ShortcutKind.TOOLBOX -> null
         }

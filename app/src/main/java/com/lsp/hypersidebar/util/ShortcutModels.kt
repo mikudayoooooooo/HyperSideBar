@@ -14,13 +14,16 @@ private const val TAG = "ShortcutModels"
  * - SERVICE: 显式 Service（向后兼容旧数据）
  * - INTENT_URI: Intent URI (deep link / action / data)
  * - TOOLBOX: 内置视频/游戏面板快捷项（不占用户名额）
+ * - QS_TILE: 快捷开关磁贴（TileService 类，root `cmd statusbar click-tile` 触发；
+ *   磁贴须已加入控制中心 QS，否则系统侧静默无动作——2026-09-04 spike 实测定案）
  */
 enum class ShortcutKind {
     COMPONENT,
     ACTIVITY,
     INTENT_URI,
     TOOLBOX,
-    SERVICE
+    SERVICE,
+    QS_TILE
 }
 
 /**
@@ -86,14 +89,23 @@ data class ShortcutAction(
 /**
  * 快捷方式持久化管理。
  * 使用 JSON 数组存储在 SharedPreferences 的单个 key 中。
- * 用户自定义项最多 5 个，TOOLBOX 内置项不计入配额。
+ * 存储不设上限（§2.4 解耦拍板）：扇形只展示 enabled 且按 order 排序的前
+ * MAX_USER_SHORTCUTS 个（占位在场少 1），用户通过启用开关与排序控制上栏项。
  */
 object ShortcutStore {
 
-    private const val KEY = "shortcut_actions"
+    private val KEY = com.lsp.hypersidebar.prefs.PrefKeys.SHORTCUT_ACTIONS
     private const val TOOLBOX_PACKAGE = "com.miui.securitycenter"
     private const val TOOLBOX_ID = "__toolbox__"
-    const val MAX_USER_SHORTCUTS = 5
+
+    /**
+     * 扇形快捷栏展示上限（PRD §7.1：6 个**含面板占位**——占位在场时运行时
+     * 只取前 5 个用户项，占位隐藏时 6 个全上）。仅约束展示，不约束存储。
+     */
+    const val MAX_USER_SHORTCUTS = 6
+
+    /** 存储上限（§2.4 用户定值：最多可添加 10 个，超出部分仅存储不上栏）。 */
+    const val MAX_STORED_SHORTCUTS = 10
 
     /**
      * 从 SharedPreferences 读取所有用户快捷方式（按 order 排序）。
@@ -125,12 +137,11 @@ object ShortcutStore {
 
     /**
      * 保存用户快捷方式列表到 SharedPreferences。
-     * 自动截断到 MAX_USER_SHORTCUTS 个。
+     * 存储不截断（§2.4 解耦）；order 按当前列表序整体重排。
      */
     fun saveUserShortcuts(prefs: SharedPreferences, shortcuts: List<ShortcutAction>) {
         val userItems = shortcuts
             .filter { it.source == ShortcutSource.USER }
-            .take(MAX_USER_SHORTCUTS)
             .mapIndexed { index, item -> item.copy(order = index) }
 
         val arr = JSONArray()
@@ -138,18 +149,21 @@ object ShortcutStore {
 
         try {
             prefs.edit().putString(KEY, arr.toString()).apply()
+            // 诊断锚点：快捷栏缺失问题时区分"保存没落盘"（无此行/条目缺）vs"扇形没读到"
+            Log.i(TAG, "saved ${userItems.size} shortcuts: " +
+                userItems.joinToString { "${it.kind}:${it.label}(${if (it.enabled) "on" else "off"})" })
         } catch (e: Exception) {
             Log.e(TAG, "saveUserShortcuts: write failed", e)
         }
     }
 
     /**
-     * 添加一个用户快捷方式。如果已达上限则返回 false。
+     * 添加一个用户快捷方式（存储上限 MAX_STORED_SHORTCUTS=10）。
      * NOTE: Must be called from main thread (not thread-safe).
      */
     fun addShortcut(prefs: SharedPreferences, shortcut: ShortcutAction): Boolean {
         val current = loadUserShortcuts(prefs).toMutableList()
-        if (current.size >= MAX_USER_SHORTCUTS) return false
+        if (current.size >= MAX_STORED_SHORTCUTS) return false
         val newItem = shortcut.copy(
             source = ShortcutSource.USER,
             order = current.size
@@ -203,8 +217,8 @@ object ShortcutStore {
     }
 
     /**
-     * 构建运行时快捷栏完整列表：
-     * 用户启用的快捷方式 + 条件性 TOOLBOX 内置项。
+     * 构建运行时快捷栏完整列表（PRD §7.1：面板占位固定第一位，无面板时用户项前移）：
+     * 条件性 TOOLBOX 内置项（第一位）+ 用户启用的快捷方式。
      *
      * @param toolboxAvailable 当前场景是否支持视频/游戏面板
      * @param toolboxLabel 面板显示名称（游戏工具箱/视频工具箱/打开面板）
@@ -216,12 +230,7 @@ object ShortcutStore {
     ): List<ShortcutAction> {
         val result = mutableListOf<ShortcutAction>()
 
-        // 用户启用的快捷方式
-        loadUserShortcuts(prefs)
-            .filter { it.enabled }
-            .forEach { result.add(it) }
-
-        // 条件性内置 TOOLBOX 项
+        // 条件性内置 TOOLBOX 项（第一位）
         if (toolboxAvailable) {
             result.add(ShortcutAction(
                 id = TOOLBOX_ID,
@@ -232,6 +241,16 @@ object ShortcutStore {
                 packageName = TOOLBOX_PACKAGE
             ))
         }
+
+        // 用户启用的快捷方式：栏上限 6 含占位（PRD §7.1）——占位在场取 5 个，隐藏时 6 个全上
+        val maxUser = if (toolboxAvailable) 5 else 6
+        val userEnabled = loadUserShortcuts(prefs).filter { it.enabled }
+        val picked = userEnabled.take(maxUser)
+        // 诊断锚点：与 saveUserShortcuts 的 "saved N" 配对——读端缓存陈旧时
+        // enabled 数与最近一次 saved 数不一致
+        Log.i(TAG, "runtimeQuick: user=${userEnabled.size} out=${picked.size} " +
+            "kinds=${picked.joinToString { it.kind.name }}")
+        picked.forEach { result.add(it) }
 
         return result
     }

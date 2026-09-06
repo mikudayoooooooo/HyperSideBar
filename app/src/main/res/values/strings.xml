@@ -8,15 +8,23 @@
     <string name="back">返回</string>
 
     <string name="module_section">模块</string>
-    <string name="module_enabled">启用超级侧边栏</string>
+    <string name="module_enabled">启用 HyperSideBar</string>
     <string name="module_enabled_summary">替换原生侧边栏为扇形菜单</string>
-    <string name="module_active">已激活</string>
-    <string name="module_active_summary">模块作用域已正确配置</string>
+    <string name="status_running">模块运行中</string>
+    <string name="status_normal_summary">手势与执行通道工作正常</string>
+    <string name="status_abnormal">模块通道异常</string>
     <string name="module_inactive">未激活</string>
     <string name="deactivation_hint">请在 LSPosed Manager 中启用模块并勾选作用域</string>
     <string name="checking_module">正在检测</string>
     <string name="checking_module_summary">正在连接 LSPosed 服务</string>
     <string name="lsposed_not_found">未找到 LSPosed Manager</string>
+    <string name="probe_end_home">边缘手势</string>
+    <string name="probe_end_ui">执行通道</string>
+    <string name="probe_state_ok">正常</string>
+    <string name="probe_state_circuit">已熔断 · 点按重试，或重启手机</string>
+    <string name="probe_state_data_dead">推荐数据源不可用 · 已停用扇形并恢复原生侧边栏，重启手机恢复</string>
+    <string name="probe_state_degraded">已降级 · 重启手机或重启模块后恢复</string>
+    <string name="probe_state_dead">无应答 · 请检查 LSPosed 作用域或重启手机</string>
 
     <string name="effect_preview">效果预览</string>
     <string name="portrait_preview">竖屏</string>
@@ -28,6 +36,7 @@
     <string name="select_apps">扇形应用</string>
     <string name="select_shortcut_apps">快捷应用</string>
     <string name="selected_apps_summary">已选择 %1$d 个应用</string>
+    <string name="selected_apps_group">已选（%1$d）</string>
     <string name="selected_apps_count">已选择 %1$d 个</string>
     <string name="search_apps_hint">搜索应用…</string>
     <string name="user_apps">用户应用</string>
@@ -43,14 +52,22 @@
     <string name="theme_dark">深色</string>
     <string name="system_colors">系统配色</string>
     <string name="system_colors_summary">使用 HyperOS 系统动态颜色</string>
-    <string name="layout_settings">布局设置</string>
-    <string name="layout_settings_summary">竖屏与横屏的图标、半径和内外圈数量</string>
-
-    <string name="interaction">交互</string>
-    <string name="interaction_settings">手势与反馈</string>
-    <string name="interaction_settings_summary">灵敏度、死区与触觉反馈</string>
+    <string name="interaction_section">交互</string>
+    <string name="trigger_dwell_title">呼出停顿</string>
+    <string name="trigger_dwell_summary">贴边停顿 %1$d ms 后展开扇形</string>
+    <string name="defaults_section">重置</string>
+    <string name="restore_defaults">恢复默认值</string>
+    <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，立即生效</string>
+    <string name="restore_defaults_confirm">将全部布局与交互参数恢复为默认值，应用选择与快捷方式不受影响。</string>
+    <string name="restore_defaults_done">已恢复默认布局与参数</string>
+    <string name="reset_confirm">确认</string>
     <string name="portrait_layout">竖屏布局</string>
     <string name="landscape_layout">横屏布局</string>
+    <string name="layout_sheet_cancel">取消</string>
+    <string name="layout_sheet_save">保存</string>
+    <string name="layout_sheet_restore_default">恢复默认</string>
+    <string name="layout_inner_clamped">已按“内圈 ≤ 外圈×80%”上限钳制</string>
+    <string name="layout_preview_hint">拖动滑条实时预览，保存后生效</string>
 
     <string name="icon_size">图标大小</string>
     <string name="inner_radius">内圈半径</string>
@@ -58,6 +75,8 @@
     <string name="outer_apps_count">外圈应用数</string>
     <string name="inner_apps_count">内圈应用数</string>
     <string name="icon_size_summary">%1$d dp</string>
+    <string name="icon_size_effective">当前 %1$d dp · 实际生效 %2$d dp</string>
+    <string name="icon_size_limited">当前 %1$d dp · 实际生效 %2$d dp（图标过大或数量过多）</string>
     <string name="inner_radius_summary">%1$d dp</string>
     <string name="outer_radius_summary">%1$d dp</string>
     <string name="outer_apps_summary">%1$d 个</string>
@@ -65,13 +84,11 @@
 
     <string name="stick_sensitivity">摇杆灵敏度</string>
     <string name="stick_sensitivity_description">%1$d dp，数值越小越灵敏</string>
-    <string name="dead_zone">触发死区</string>
-    <string name="dead_zone_description">%1$d dp，避免靠近锚点时误选</string>
-    <string name="vibrate_feedback">触觉反馈</string>
-    <string name="vibrate_feedback_summary">选中应用时轻微震动</string>
 
     <string name="landscape_icon_size">图标大小</string>
     <string name="landscape_icon_size_summary">%1$d dp</string>
+    <string name="landscape_icon_size_effective">当前 %1$d dp · 实际生效 %2$d dp</string>
+    <string name="landscape_icon_size_limited">当前 %1$d dp · 实际生效 %2$d dp（图标过大或数量过多）</string>
     <string name="landscape_outer_apps_count">外圈应用数</string>
     <string name="landscape_outer_apps_summary">%1$d 个</string>
     <string name="landscape_inner_apps_count">内圈应用数</string>
@@ -89,17 +106,54 @@
     <string name="about_based_on">基于</string>
     <string name="about_based_on_value">LSPosed API %1$s · EzXHelper %2$s</string>
     <string name="about_sdk">编译 SDK</string>
-    <string name="framework_info">框架信息</string>
+    <string name="about_sdk_value">37</string>
+    <string name="framework_info">设备与框架</string>
+    <string name="device_model">设备型号</string>
+    <string name="system_version">系统版本</string>
     <string name="framework_name">框架名称</string>
     <string name="framework_version">框架版本</string>
     <string name="api_version">API 版本</string>
+    <string name="about_links">相关链接</string>
+    <string name="about_author">作者</string>
+    <string name="about_project_url">项目地址</string>
+    <string name="open_link_failed">无法打开链接</string>
+    <string name="update_check">检查更新</string>
+    <string name="update_check_idle">点击检查最新版本</string>
+    <string name="update_checking">正在检查…</string>
+    <string name="update_up_to_date">已是最新版本</string>
+    <string name="update_available">发现新版本 %1$s，点击前往下载</string>
+    <string name="update_check_failed">检查失败（网络原因），点击重试</string>
     <string name="about_module_scope">模块作用域</string>
     <string name="scope_configured">已包含 com.miui.securitycenter</string>
     <string name="unknown">未知</string>
 
+    <!-- Debug -->
+    <string name="debug_section">调试</string>
+    <string name="debug_relay_blackhole">模拟执行端失联</string>
+    <string name="debug_relay_blackhole_summary">所有执行广播按失联处理，用于验证熔断链路；测完务必关闭</string>
+    <string name="debug_relay_confirm_title">开启模拟执行端失联？</string>
+    <string name="debug_relay_confirm_summary">开启后扇形的所有点击都会被人为拦截：提示"服务不可用"，连续 5 次后触发真实熔断，症状与真实故障完全相同。此设置卸载重装后仍会保留，只能回到本页关闭。</string>
+    <string name="debug_relay_confirm_countdown">%d 秒后可确认</string>
+    <string name="debug_relay_confirm_ready">倒计时结束，可以确认了</string>
+    <string name="debug_relay_confirm_action">确认开启</string>
+    <string name="debug_relay_confirm_action_counting">确认开启（%d）</string>
+    <string name="selfcheck_export">导出自检报告</string>
+    <string name="selfcheck_export_summary">生成探针双路应答、调试开关实值与配置快照的文本报告，保存到下载目录（不含令牌等敏感信息）</string>
+    <string name="selfcheck_exporting">正在生成探针与报告…</string>
+    <string name="selfcheck_export_done">自检报告已保存：下载/%s</string>
+
     <!-- Shortcut -->
-    <string name="shortcut_count_format">%1$d / %2$d</string>
+    <string name="shortcut_count_format">已添加 %1$d · 启用 %2$d</string>
+    <string name="shortcut_display_overflow">扇形快捷栏最多展示 %2$d 个（含面板占位时再少 1）；当前启用 %1$d 个，上栏按排序取前 %2$d，禁用至 %2$d 个以内可全部显示</string>
+    <string name="shortcut_drag_handle">拖动排序</string>
+    <string name="shortcut_selected_count">已选 %d 项</string>
+    <string name="shortcut_batch_delete">删除（%d）</string>
+    <string name="shortcut_select_all">全选</string>
+    <string name="shortcut_batch_delete_confirm">将删除已选的 %d 个快捷方式。</string>
+    <string name="shortcuts_at_store_limit">最多可添加 %d 个快捷方式</string>
+    <string name="shortcut_entry_summary">已添加 %1$d · 启用 %2$d</string>
     <string name="shortcut_unnamed">未命名</string>
+    <string name="shortcut_enabled">启用</string>
     <string name="shortcut_new">新建快捷方式</string>
     <string name="shortcut_edit">编辑快捷方式</string>
     <string name="shortcut_save">保存</string>
@@ -108,6 +162,9 @@
     <string name="shortcut_label">名称</string>
     <string name="shortcut_label_hint">输入快捷方式名称</string>
     <string name="shortcut_target_config">目标配置</string>
+    <string name="shortcut_target_component">目标组件</string>
+    <string name="shortcut_component_hint">com.tencent.mm.plugin.xxx.Activity</string>
+    <string name="shortcut_component_desc">粘贴完整类名，自动推导包名并识别 Activity/Service</string>
     <string name="shortcut_package_activity">包名 / Activity</string>
     <string name="shortcut_package_activity_hint">如 com.example/.MainActivity</string>
     <string name="shortcut_pick_activity">从已安装应用选择</string>
@@ -117,6 +174,7 @@
     <string name="shortcut_package_optional_hint">目标应用包名</string>
     <string name="shortcut_service_name">服务名称</string>
     <string name="shortcut_service_name_hint">输入服务类名</string>
+    <string name="shortcut_service_root_note">非导出 Service 需通过 ROOT 启动</string>
     <string name="shortcut_toolbox_desc">内置面板</string>
     <string name="shortcut_test_section">测试</string>
     <string name="shortcut_test">测试启动</string>
@@ -128,14 +186,35 @@
 
     <!-- Shortcuts list -->
     <string name="shortcuts_add_section">添加快捷方式</string>
+    <string name="shortcuts_add_component">添加组件</string>
+    <string name="shortcuts_add_component_summary">Activity / Service，自动识别类型</string>
     <string name="shortcuts_add_intent_uri">Intent URI</string>
     <string name="shortcuts_add_intent_uri_summary">通过 Intent URI 启动目标</string>
     <string name="shortcuts_empty_hint">暂无快捷方式，点击下方添加</string>
-    <string name="shortcuts_at_limit">已达上限（%d 个）</string>
+    <string name="shortcut_uri_unset">（未设置 URI）</string>
+    <string name="shortcut_component_count">%1$s · %2$d 个组件</string>
+    <string name="shortcut_components_info">%1$d 个组件（%2$d 个非导出）</string>
 
     <!-- Activity picker -->
     <string name="activity_picker_title">选择活动</string>
     <string name="activity_picker_search">搜索活动…</string>
     <string name="activity_picker_loading">正在加载…</string>
     <string name="activity_picker_count">%d 个活动</string>
+    <string name="activity_picker_filter_targets">只看快捷方式 (%1$d)</string>
+    <string name="activity_picker_filter_all">显示全部 (%1$d)</string>
+    <string name="shortcuts_add_qs_tile">添加快捷开关</string>
+    <string name="shortcuts_add_qs_tile_summary">选择系统控制中心磁贴（root 触发）</string>
+    <string name="qs_tile_picker_title">选择快捷开关</string>
+    <string name="qs_tile_picker_search">搜索磁贴…</string>
+    <string name="qs_tile_picker_loading">正在扫描磁贴服务…</string>
+    <string name="qs_tile_picker_count">%d 个应用</string>
+    <string name="qs_tile_pick">选择磁贴</string>
+    <string name="qs_tile_group_tiles">控制中心磁贴</string>
+    <string name="qs_tile_group_shortcuts">应用快捷方式</string>
+    <string name="qs_tile_group_apps_count">%1$d 个应用可用</string>
+    <string name="qs_tile_item_count">%1$d 个磁贴</string>
+    <string name="qs_shortcut_item_count">%1$d 个快捷方式</string>
+    <string name="shortcut_qs_tile_target">磁贴组件</string>
+    <string name="shortcut_qs_tile_note">通过 SystemUI 直接触发系统快捷开关（无须加入控制中心）；需 LSPosed 勾选系统界面作用域，否则自动回退 root 兜底</string>
+    <string name="all_apps_title">全部应用</string>
 </resources>

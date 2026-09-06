@@ -58,7 +58,9 @@ class XposedInit : XposedModule() {
                 }
                 initHooks(edgeGestureHook!!)
             }
-            param.packageName == "com.android.systemui" -> {
+            // 仅主进程：SystemUI 子进程（截图等）若也注册接收器，有序广播可能被
+            // 子进程抢答 resultCode=0 覆盖主进程的点击结果
+            param.packageName == "com.android.systemui" && procName == "com.android.systemui" -> {
                 // 批次 3：QS 磁贴数据层直点桥（click-tile 门禁在回调层，QSTile.click 无约束）
                 if (systemUiHook == null) {
                     systemUiHook = SystemUiHook(

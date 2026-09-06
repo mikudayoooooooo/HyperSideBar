@@ -150,8 +150,8 @@ object ShortcutLauncher {
             return LaunchResult.Failure(FailureReason.INVALID_CONFIG, "TOOLBOX should be handled by broadcast")
         }
 
-        // QS_TILE 独立路径：root `cmd statusbar click-tile`（不走 Intent 管线）。
-        // 磁贴须已加入 QS，否则系统侧静默无动作（2026-09-04 spike 实测）
+        // QS_TILE 独立路径：SystemUI hook 直点（无须 root、无须固定在控制中心），
+        // hook 缺席时回退 root 兜底（见 launchQsTile）
         if (action.kind == ShortcutKind.QS_TILE) {
             return launchQsTile(context, action, allowRootFallback)
         }

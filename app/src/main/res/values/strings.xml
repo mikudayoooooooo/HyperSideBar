@@ -55,6 +55,10 @@
     <string name="interaction_section">交互</string>
     <string name="trigger_dwell_title">呼出停顿</string>
     <string name="trigger_dwell_summary">贴边停顿 %1$d ms 后展开扇形</string>
+    <string name="fan_fog_title">扇形背景雾化</string>
+    <string name="fan_fog_summary">雾化浓度 %1$d%%（0 为关闭填充）</string>
+    <string name="fan_dim_title">背景压暗</string>
+    <string name="fan_dim_summary">呼出扇形时全屏压暗 24%，突出菜单</string>
     <string name="defaults_section">重置</string>
     <string name="restore_defaults">恢复默认值</string>
     <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，立即生效</string>
@@ -203,13 +207,13 @@
     <string name="activity_picker_filter_targets">只看快捷方式 (%1$d)</string>
     <string name="activity_picker_filter_all">显示全部 (%1$d)</string>
     <string name="shortcuts_add_qs_tile">添加快捷开关</string>
-    <string name="shortcuts_add_qs_tile_summary">选择系统控制中心磁贴（root 触发）</string>
+    <string name="shortcuts_add_qs_tile_summary">选择系统快捷开关磁贴（无须 root，无须加入控制中心）</string>
     <string name="qs_tile_picker_title">选择快捷开关</string>
     <string name="qs_tile_picker_search">搜索磁贴…</string>
     <string name="qs_tile_picker_loading">正在扫描磁贴服务…</string>
     <string name="qs_tile_picker_count">%d 个应用</string>
     <string name="qs_tile_pick">选择磁贴</string>
-    <string name="qs_tile_group_tiles">控制中心磁贴</string>
+    <string name="qs_tile_group_tiles">系统磁贴</string>
     <string name="qs_tile_group_shortcuts">应用快捷方式</string>
     <string name="qs_tile_group_apps_count">%1$d 个应用可用</string>
     <string name="qs_tile_item_count">%1$d 个磁贴</string>

@@ -78,6 +78,11 @@ class SettingsRepository(val prefs: SharedPreferences) {
     fun triggerMinDistanceDp(): Float =
         prefs.getFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
 
+    fun fanFogIntensity(): Float =
+        prefs.getFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
+    fun fanDimEnabled(): Boolean =
+        prefs.getBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)
+
     fun customApps(): Set<String> = prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty()
 
     // ===== 草稿/提交层（迭代二 §4 地基，供迭代三 OverlayBottomSheet 消费） =====
@@ -133,7 +138,7 @@ class SettingsRepository(val prefs: SharedPreferences) {
     fun save(key: String, value: Any) = prefs.savePref(key, value)
 
     /**
-     * 一键恢复默认（§2.5.3，PRD"默认值且可重置"）：全部布局（10）+ 交互（3）参数写回默认值。
+     * 一键恢复默认（§2.5.3，PRD"默认值且可重置"）：全部布局（10）+ 交互（5）参数写回默认值。
      * 写盘即经 LSPosed 推送同步 hook 侧，下次呼出生效（无需重启）。不动用户数据（应用/快捷方式）。
      */
     fun restoreAllDefaults() {
@@ -151,6 +156,8 @@ class SettingsRepository(val prefs: SharedPreferences) {
             putFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)
             putInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
             putFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
+            putFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
+            putBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)
         }.apply()
     }
 }

@@ -243,7 +243,7 @@ internal fun ShortcutEditPage(
                             )
                         }
                         ShortcutKind.QS_TILE -> {
-                            // 磁贴组件只读展示（由选择器扫描回填，root click-tile 触发）
+                            // 磁贴组件只读展示（由选择器扫描回填，SystemUI hook 直点触发）
                             Text(text = stringResource(R.string.shortcut_qs_tile_target), style = MiuixTheme.textStyles.body1)
                             Spacer(Modifier.height(8.dp))
                             Text(

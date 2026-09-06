@@ -27,6 +27,11 @@ object PrefKeys {
     const val TRIGGER_DWELL_MS = "triggerDwellMs"
     const val TRIGGER_MIN_DISTANCE = "triggerMinDistance"
 
+    /** 扇形背景雾化浓度（0~0.70，0=关闭填充；路线 C 纯视觉增强，无真模糊） */
+    const val FAN_FOG_INTENSITY = "fanFogIntensity"
+    /** 呼出扇形时全屏压暗开关（Compose scrim 24% 黑，与菜单同步淡入） */
+    const val FAN_DIM_ENABLED = "fanDimEnabled"
+
     const val CUSTOM_APPS = "customApps"
     // 已选固定应用的拖动排序（JSON 数组字符串，仅含已选包名；StringSet 不保序，
     // 扇形/面板按此键排序，缺失项排尾部）
@@ -135,6 +140,12 @@ object LayoutDefaults {
     const val DEAD_ZONE = 12f
     const val TRIGGER_DWELL_MS = 250
     const val TRIGGER_MIN_DISTANCE_DP = 30f
+
+    // 扇形背景视觉（路线 C）：雾化默认 0.40 = 示意图 C1 档（锚点 40% → 外弧 6% 渐隐）；
+    // 压暗默认关（opt-in 开关），压暗量固定不做成滑条
+    const val FAN_FOG_INTENSITY = 0.40f
+    const val FAN_DIM_ENABLED = false
+    const val FAN_DIM_AMOUNT = 0.24f
 
     /** 所有布局相关键。恢复默认时批量写回。 */
     val layoutKeys = listOf(

@@ -221,7 +221,8 @@ object ManifestShortcutsBridge {
 /**
  * 快捷开关/应用快捷方式三级选择器（用户 2026-09-05 定稿：
  * L1 类型分组「磁贴/快捷方式」→ L2 应用列表 → L3 可用条目）。
- * 磁贴选中→QS_TILE（root click-tile 触发，须已在 QS）；快捷方式选中→
+ * 磁贴选中→QS_TILE（SystemUI hook 数据层直点，无须 root、无须固定在控制中心）；
+ * 快捷方式选中→
  * COMPONENT（am start 直启目标 activity）。动态 shortcut 因平台约束
  * （B2 归档）不在列。
  */

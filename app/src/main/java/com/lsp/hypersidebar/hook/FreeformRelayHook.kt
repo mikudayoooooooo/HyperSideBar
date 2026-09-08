@@ -82,14 +82,14 @@ class FreeformRelayHook(
                         return
                     }
                     // 批次 0 安全修复：本接收器 RECEIVER_EXPORTED 注册（发送端是不同 uid，
-                    // 无法用非导出），此前零校验——任意 App 都能发广播借 system uid 拉起
+                    // 无法用非导出），此前零校验——任意 App 都能发广播借 :ui 特权拉起
                     // 任意应用小窗。改为校验运行期随机令牌（remotePrefs 分发）。
                     // 令牌未配置时按 RelayToken.verifyFan 兼容放行，保证全新安装期主链路可用。
                     if (!RelayToken.verifyFan(intent, RelayToken.read(remotePrefs))) return
                     // 固定应用选择页准入列表请求（设置页 ← :ui，探针同款有序广播信道）：
                     // resultExtras 回带 DataLoader 缓存（同步读，陈旧即触发后台刷新，不阻塞
                     // 应答）。模块进程被 blocklist 拒绝调 getFreeformSuggestionList，只能
-                    // 向本进程（system uid）要；空列表也照答（模块侧空判定自行兜底）
+                    // 向本进程（:ui，特权宿主）要；空列表也照答（模块侧空判定自行兜底）
                     if (intent.action == PrefKeys.ACTION_REQUEST_SUGGESTIONS) {
                         if (isOrderedBroadcast) {
                             resultCode = 1

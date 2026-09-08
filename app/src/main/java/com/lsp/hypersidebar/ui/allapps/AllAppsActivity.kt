@@ -100,7 +100,7 @@ private val BUBBLE_SHAPE = RoundedCornerShape(24.dp)
 class AllAppsActivity : ComponentActivity() {
 
     companion object {
-        /** :ui（system uid）启动时经 intent 传入的准入应用列表——模块进程被 hidden API
+        /** :ui（特权宿主）启动时经 intent 传入的准入应用列表——模块进程被 hidden API
          *  blocklist 拒绝（getFreeformSuggestionList denied），自取数据不可行。 */
         const val EXTRA_SUGGESTIONS = "suggestions"
     }
@@ -137,7 +137,7 @@ class AllAppsActivity : ComponentActivity() {
                     prefsIsFallback = remotePrefs == null,
                     initialSuggestions = suggestions,
                     onLaunch = { pkg ->
-                        // 打开目标一律经 :ui 中继（system uid 才能算小窗 options 并
+                        // 打开目标一律经 :ui 中继（特权进程才能算小窗 options 并
                         // startActivityAsUser）；本进程直启必降级全屏（blocklist）
                         runCatching {
                             Intent(ACTION_FAN_LAUNCH).apply {

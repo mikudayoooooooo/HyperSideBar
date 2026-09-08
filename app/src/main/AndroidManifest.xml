@@ -57,6 +57,13 @@
             android:name=".ShortcutRelayReceiver"
             android:exported="true" />
 
+        <!-- :ui → 模块 App 解冻 relay（方案 2 bind 唤醒）：bind 本身唤醒冻结/已死的
+             模块进程（SmartPower THAW/冷启动），连上后 su 解冻磁贴宿主。
+             防伪=服务内 Binder uid + 令牌双重校验 -->
+        <service
+            android:name=".UnfreezeRelayService"
+            android:exported="true" />
+
     </application>
 
 </manifest>

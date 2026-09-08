@@ -168,6 +168,13 @@ class FanMenuController(
             host = fanHost
             fanHost.show(anchorX, anchorY, apps, allQuick, isLandscape)
             touchHeartbeat()
+            // 呼出即预热（2026-09-07 预热制）：QS_TILE 目标包 kill+预 bind、图标缓存预灌。
+            // 策略差异：仅 :ui 的 DirectLaunchStrategy 覆写有动作，launcher 空实现
+            launchStrategy.onFanShown(
+                context,
+                runtimeQuick,
+                apps.map { it.packageName }.filter { it != ALL_APPS_PKG }
+            )
             onMechanismResult?.invoke(true, "show ok")
             Log.i(TAG, tl() + "show: fan overlay added (pooled), ${allQuick.size} quick actions, landscape=$isLandscape, " +
                 "cost=${android.os.SystemClock.elapsedRealtime() - t0}ms, firstAssembly=$firstAssembly")

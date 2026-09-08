@@ -28,11 +28,22 @@ object QsTileClickBridge {
      * 须在后台线程调用。token = 调用方进程各自读取的 remotePrefs 令牌
      * （:ui=RelayToken.read(remotePrefs)，模块=RelayToken.current()）。
      */
-    fun sendBlocking(context: Context, componentName: String, token: String?): Boolean {
+    fun sendBlocking(context: Context, componentName: String, token: String?): Boolean =
+        send(context, componentName, token, prebind = false)
+
+    /**
+     * 预热模式（2026-09-07 fan 呼出预热制）：SystemUI 侧只 prime（绑定+listening+豁免）
+     * 不投递点击——fan 呼出时由 FanPrewarmer 调用，用户点击时 TileService 已连接直连。
+     */
+    fun sendPrebindBlocking(context: Context, componentName: String, token: String?): Boolean =
+        send(context, componentName, token, prebind = true)
+
+    private fun send(context: Context, componentName: String, token: String?, prebind: Boolean): Boolean {
         val latch = CountDownLatch(1)
         var delivered = false
         val intent = Intent(PrefKeys.QS_TILE_CLICK_ACTION)
             .putExtra(PrefKeys.QS_TILE_CLICK_EXTRA, componentName)
+            .putExtra(PrefKeys.QS_TILE_PREBIND_EXTRA, prebind)
         RelayToken.attach(intent, token)
         try {
             context.sendOrderedBroadcast(
@@ -52,7 +63,7 @@ object QsTileClickBridge {
             return false
         }
         latch.await(RESULT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        Log.i(TAG, "click sent: cn=$componentName delivered=$delivered")
+        Log.i(TAG, "${if (prebind) "prebind" else "click"} sent: cn=$componentName delivered=$delivered")
         return delivered
     }
 }

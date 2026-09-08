@@ -11,9 +11,11 @@ import com.lsp.hypersidebar.ShortcutRelayReceiver
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.FanLaunchStrategy
 import com.lsp.hypersidebar.util.FailureReason
+import com.lsp.hypersidebar.util.FanPrewarmer
 import com.lsp.hypersidebar.util.FreeformLauncher
 import com.lsp.hypersidebar.util.LaunchResult
 import com.lsp.hypersidebar.util.QsTileClickBridge
+import com.lsp.hypersidebar.util.UnfreezeBridge
 import com.lsp.hypersidebar.util.RelayToken
 import com.lsp.hypersidebar.util.Trace
 import com.lsp.hypersidebar.util.ShortcutAction
@@ -37,7 +39,7 @@ class DirectLaunchStrategy(
     }
 
     override fun launchAllApps(context: Context) {
-        // 面板数据在启动时经 intent 传递：:ui 是 system uid，getFreeformSuggestionList
+        // 面板数据在启动时经 intent 传递：:ui 平台签名特权不受 hidden API 限制，getFreeformSuggestionList
         // 反射可用；模块进程是普通 App，被 hidden API blocklist 拒绝（实测 denied），
         // 面板进程内的 DataLoader 永远拿不到建议列表
         val list = ArrayList(com.lsp.hypersidebar.util.DataLoader.loadApps(context))
@@ -75,6 +77,16 @@ class DirectLaunchStrategy(
                 val full = if (cls.startsWith(".")) "$pkg$cls" else cls
                 val appCtx = context.applicationContext
                 Thread {
+                    // 冻结防线（2026-09-07 方案 2 bind 唤醒 relay）：bind 模块 App 的
+                    // UnfreezeRelayService——bind 本身唤醒冻结/已死的模块进程（uid 1000
+                    // 服务调用 → SmartPower THAW / 冷启动），连上后模块 su 解冻磁贴宿主，
+                    // 回执后 :ui 再发点击。解冻失败（无 su/超时）不阻塞点击——目标未必
+                    // 冻结，此步只是防线；3s 节流内跳过（tobg 重冻以秒计，relay 常开换确定性）。
+                    // 退役记录：广播 relay（冻结进程收不到广播，靠白名单续命）→
+                    // kill 预热（误伤目标进程状态）→ 现方案（su 直写 freeze=0，状态零损失）
+                    UnfreezeBridge.unfreezeBlocking(
+                        appCtx, pkg, RelayToken.read(remotePrefs), Trace.current
+                    )
                     val viaHook = QsTileClickBridge.sendBlocking(
                         appCtx, "$pkg/$full", RelayToken.read(remotePrefs)
                     )
@@ -93,11 +105,33 @@ class DirectLaunchStrategy(
             }
         }
 
+        // SHORTCUT_ID（动态/固定快捷方式，2026-09-08）：目标 intent 对非桌面不可见，
+        // validate 无从谈起；本进程无桌面角色——launcher 进程桥 startShortcut 代发
+        if (shortcut.kind == ShortcutKind.SHORTCUT_ID) {
+            val appCtx0 = context.applicationContext
+            Thread {
+                val result = ShortcutLauncher.launchShortcutId(
+                    appCtx0, shortcut, RelayToken.read(remotePrefs)
+                )
+                Handler(Looper.getMainLooper()).post {
+                    runCatching {
+                        Toast.makeText(
+                            appCtx0,
+                            if (result is LaunchResult.Success) "已启动：${shortcut.label}"
+                            else "无法启动：${shortcut.label}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }.start()
+            return
+        }
+
         // 非 exported 目标预检失败时直接转发模块 App 代发（§2.4 实测定案）：
-        // 本进程（system uid）startActivityAsUser 对启动不了的目标静默假成功
+        // 本进程（:ui，平台签名特权；注意并非 uid 1000）startActivityAsUser 对启动不了的目标静默假成功
         // （不抛异常、实际不启动，无法靠异常触发 root 回退），且本进程无 su 授权；
         // 模块 App 进程持 root，其 validate→直试→ANF→su 链路已被编辑页测试验证。
-        if (shortcut.kind != ShortcutKind.SERVICE) {
+        if (shortcut.kind != ShortcutKind.SERVICE && shortcut.kind != ShortcutKind.SHORTCUT_ID) {
             val check = ShortcutLauncher.validate(context, shortcut)
             if (check is LaunchResult.Failure &&
                 (check.reason == FailureReason.ACTIVITY_NOT_FOUND ||
@@ -120,6 +154,28 @@ class DirectLaunchStrategy(
                 Toast.makeText(context, "activity/Service无法正常启动", Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    /** fan 呼出预热（2026-09-07 预热制，替代 unfreeze relay 的免 root 方案）：
+     *  ① QS_TILE 目标包：呼出后 ~150ms kill 冻结进程 + 方案 B 预 bind（只 prime 不点击），
+     *     AMS 拉全新进程（不在 frozen cgroup），点击时 TileService 已连接直连零延迟；
+     *  ② 图标缓存预灌（扇形固定应用 + AllApps 首屏），面板打开无图标闪现。 */
+    override fun onFanShown(context: Context, quickActions: List<ShortcutAction>, fanAppPkgs: List<String>) {
+        // 预 bind 走 SystemUI hook，cn 必须是扁平组件名（unflattenFromString 对裸包名
+        // 返回 null → 接收端早退，预热静默空转）——与点击路径 sendBlocking 的 "$pkg/$full" 同构
+        val tileTargets = quickActions
+            .filter {
+                it.kind == ShortcutKind.QS_TILE &&
+                    !it.packageName.isNullOrEmpty() && !it.serviceName.isNullOrEmpty()
+            }
+            .map { sa ->
+                val pkg = sa.packageName!!
+                val cls = sa.serviceName!!
+                val full = if (cls.startsWith(".")) "$pkg$cls" else cls
+                pkg to "$pkg/$full"
+            }
+            .distinctBy { it.second }
+        FanPrewarmer.onFanShown(context, tileTargets, fanAppPkgs, RelayToken.read(remotePrefs))
     }
 
     /** :ui → 模块 App root 代发：完整 ShortcutAction JSON 随广播携带（接收端无需读 prefs）。

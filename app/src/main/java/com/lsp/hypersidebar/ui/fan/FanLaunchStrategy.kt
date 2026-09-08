@@ -23,4 +23,11 @@ interface FanLaunchStrategy {
     fun launchAllApps(context: Context)
     fun openNativePanel(context: Context)
     fun launchShortcut(context: Context, shortcut: ShortcutAction)
+
+    /**
+     * fan 呼出后的预热钩子（2026-09-07 预热制）：show 成功后调用，主线程、立即返回。
+     * 默认空实现（launcher 侧无预热语义）；仅 :ui 的 DirectLaunchStrategy 覆写——
+     * QS_TILE 目标包 kill+预 bind（FanPrewarmer）、图标缓存预灌（AppIconCache）。
+     */
+    fun onFanShown(context: Context, quickActions: List<ShortcutAction>, fanAppPkgs: List<String>) {}
 }

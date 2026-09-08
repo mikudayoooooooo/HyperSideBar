@@ -216,6 +216,16 @@ internal fun ShortcutEditPage(
                                 label = stringResource(R.string.shortcut_package_optional_hint)
                             )
                         }
+                        ShortcutKind.SHORTCUT_ID -> {
+                            // 动态/固定快捷方式：目标 intent 非桌面不可见，只读展示 id
+                            Text(text = stringResource(R.string.shortcut_package_optional), style = MiuixTheme.textStyles.body1)
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = shortcut.shortcutId ?: "?",
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                style = MiuixTheme.textStyles.footnote1
+                            )
+                        }
                         ShortcutKind.TOOLBOX -> {
                             Text(text = stringResource(R.string.shortcut_toolbox_desc))
                         }

@@ -198,22 +198,54 @@ class EdgeGestureHook(
                                 val la = c.getSystemService(
                                     android.content.pm.LauncherApps::class.java
                                 ) ?: return@runCatching
-                                val query = android.content.pm.LauncherApps.ShortcutQuery()
-                                    .setQueryFlags(
-                                        android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST
-                                    )
+                                // 2026-09-08 扩展：+DYNAMIC/PINNED（微信扫一扫/收付款等
+                                // runtime 推送项 dumpsys 实锤全为 dynamic，原 MANIFEST-only
+                                // 导致微信列表为空）。manifest 项走原 COMPONENT 路径（t=m），
+                                // 动态/固定项走 startShortcut 代发（t=d，s=shortcutId）——
+                                // 仅默认桌面可调 startShortcut，本进程恰是其宿主
                                 val arr = org.json.JSONArray()
-                                la.getShortcuts(query, android.os.Process.myUserHandle()).orEmpty()
-                                    .forEach { si ->
-                                        val cn = si.activity ?: return@forEach
-                                        arr.put(
-                                            org.json.JSONObject()
-                                                .put("p", cn.packageName)
-                                                .put("c", cn.className)
-                                                .put("l", si.longLabel?.toString()
-                                                    ?: si.shortLabel?.toString().orEmpty())
-                                        )
+                                val seen = java.util.HashSet<String>()
+                                val user = android.os.Process.myUserHandle()
+                                // 两遍式查询：分类由 query 旗标决定而非读 ShortcutInfo 旗标位
+                                //（manifest 项走原 COMPONENT 路径 t=m；动态/固定项 t=d，
+                                // startShortcut 代发——它同样能启 manifest 项，误分类也安全）
+                                fun queryShortcuts(flags: Int, isManifest: Boolean) {
+                                    val q = android.content.pm.LauncherApps.ShortcutQuery()
+                                        .setQueryFlags(flags)
+                                    la.getShortcuts(q, user).orEmpty().forEach { si ->
+                                        val key = si.`package` + "/" + si.id
+                                        if (!seen.add(key)) return@forEach
+                                        val label = si.longLabel?.toString()
+                                            ?: si.shortLabel?.toString().orEmpty()
+                                        if (isManifest) {
+                                            val cn = si.activity ?: return@forEach
+                                            arr.put(
+                                                org.json.JSONObject()
+                                                    .put("p", cn.packageName)
+                                                    .put("c", cn.className)
+                                                    .put("l", label)
+                                                    .put("t", "m")
+                                            )
+                                        } else {
+                                            arr.put(
+                                                org.json.JSONObject()
+                                                    .put("p", si.`package`)
+                                                    .put("s", si.id)
+                                                    .put("l", label)
+                                                    .put("t", "d")
+                                            )
+                                        }
                                     }
+                                }
+                                queryShortcuts(
+                                    android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST,
+                                    true
+                                )
+                                queryShortcuts(
+                                    android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or
+                                        android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED,
+                                    false
+                                )
                                 val reply = Intent(PrefKeys.MANIFEST_SHORTCUTS_REPLY)
                                     .setClassName(
                                         com.lsp.hypersidebar.util.FreeformLauncher.MODULE_PACKAGE,
@@ -234,6 +266,59 @@ class EdgeGestureHook(
             )
             Log.i(TAG, "manifest shortcuts request receiver registered (via Application.attach)")
         }.onFailure { Log.e(TAG, "manifest shortcuts bridge register failed: ${it.message}") }
+
+        // 动态/固定快捷方式 startShortcut 代发（2026-09-08）：有序广播进本进程（默认桌面，
+        // 桌面角色现成——B2 归档"startShortcut 需桌面角色"的前提在此成立而非阻塞），
+        // resultCode 1=已启动 0=失败/令牌拒绝。防伪=令牌严格档（借桌面身份启动任意
+        // shortcut，与 root 代发同危害级）
+        runCatching {
+            ctx.registerReceiver(
+                object : BroadcastReceiver() {
+                    override fun onReceive(c: Context, intent: Intent) {
+                        val pkg = intent.getStringExtra(PrefKeys.SHORTCUT_ID_LAUNCH_EXTRA_PKG) ?: return
+                        val sid = intent.getStringExtra(PrefKeys.SHORTCUT_ID_LAUNCH_EXTRA_ID) ?: return
+                        val pending = goAsync()
+                        Thread {
+                            var ok = false
+                            var why = ""
+                            runCatching {
+                                val expected = RelayToken.read(remotePrefs)
+                                val got = intent.getStringExtra(
+                                    com.lsp.hypersidebar.prefs.PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN
+                                )
+                                if (expected.isNullOrEmpty() || got.isNullOrEmpty() || got != expected) {
+                                    why = "token rejected"
+                                } else if (!pkg.matches(Regex("[A-Za-z0-9._]+"))) {
+                                    why = "malformed pkg"
+                                } else {
+                                    val la: android.content.pm.LauncherApps? = c.getSystemService(
+                                        android.content.pm.LauncherApps::class.java
+                                    )
+                                    val user: android.os.UserHandle = android.os.Process.myUserHandle()
+                                    if (la == null) {
+                                        why = "LauncherApps unavailable"
+                                    } else {
+                                        // API 35+ 起 startShortcut 返回 void，失败抛异常
+                                        //（runCatching 外层兜住 SecurityException 等）
+                                        la.startShortcut(
+                                            pkg, sid, null as android.graphics.Rect?,
+                                            null as android.os.Bundle?, user
+                                        )
+                                        ok = true
+                                    }
+                                }
+                            }.onFailure { why = "exception: ${it.message}" }
+                            Log.i(TAG, "startShortcut launch: pkg=$pkg id=$sid ok=$ok $why")
+                            pending.resultCode = if (ok) 1 else 0
+                            pending.finish()
+                        }.start()
+                    }
+                },
+                IntentFilter(PrefKeys.SHORTCUT_ID_LAUNCH_REQUEST),
+                Context.RECEIVER_EXPORTED
+            )
+            Log.i(TAG, "shortcut-id launch receiver registered (via Application.attach)")
+        }.onFailure { Log.e(TAG, "shortcut-id launch register failed: ${it.message}") }
     }
 
     /** 记录层：触摸流入口，BeforeHook。返回 true = 消费（拦截原生处理）。 */

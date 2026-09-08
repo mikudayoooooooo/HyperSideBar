@@ -16,6 +16,8 @@ private const val TAG = "ShortcutModels"
  * - TOOLBOX: 内置视频/游戏面板快捷项（不占用户名额）
  * - QS_TILE: 快捷开关磁贴（TileService 类，SystemUI hook 数据层直点触发——无须 root、
  *   无须固定在控制中心，2026-09-05 定稿；hook 缺席时自动回退 root 兜底）
+ * - SHORTCUT_ID: 动态/固定快捷方式（微信扫一扫等 runtime 推送项，2026-09-08 定稿）——
+ *   仅默认桌面可 startShortcut，经 launcher 进程桥代发（B2 归档结论因桌面桥的存在过时）
  */
 enum class ShortcutKind {
     COMPONENT,
@@ -23,7 +25,8 @@ enum class ShortcutKind {
     INTENT_URI,
     TOOLBOX,
     SERVICE,
-    QS_TILE
+    QS_TILE,
+    SHORTCUT_ID
 }
 
 /**
@@ -51,6 +54,7 @@ data class ShortcutAction(
     val serviceName: String? = null,
     val intentUri: String? = null,
     val iconPackageName: String? = null,
+    val shortcutId: String? = null,
     val order: Int = 0
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
@@ -64,6 +68,7 @@ data class ShortcutAction(
         putOpt("serviceName", serviceName)
         putOpt("intentUri", intentUri)
         putOpt("iconPackageName", iconPackageName)
+        putOpt("shortcutId", shortcutId)
         put("order", order)
     }
 
@@ -81,6 +86,7 @@ data class ShortcutAction(
             serviceName = json.optString("serviceName", "").ifEmpty { null },
             intentUri = json.optString("intentUri", "").ifEmpty { null },
             iconPackageName = json.optString("iconPackageName", "").ifEmpty { null },
+            shortcutId = json.optString("shortcutId", "").ifEmpty { null },
             order = json.optInt("order", 0)
         )
     }

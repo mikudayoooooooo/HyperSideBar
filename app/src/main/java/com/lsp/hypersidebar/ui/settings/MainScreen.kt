@@ -287,15 +287,20 @@ internal fun MainScreen(
                                     val idx = settingsStack.indexOfLast { it is SettingsKey.ShortcutEdit }
                                     if (idx >= 0) {
                                         val cur = settingsStack[idx] as SettingsKey.ShortcutEdit
+                                        // 快捷方式三分：动态/固定项（shortcutId 非空）→ SHORTCUT_ID
+                                        //（startShortcut 桌面桥代发，目标 intent 非桌面不可见）；
+                                        // manifest 项 → COMPONENT（activity am start 直启）
+                                        val dynamic = !isTile && item.shortcutId != null
                                         settingsStack[idx] = cur.copy(
                                             shortcut = cur.shortcut.copy(
                                                 packageName = item.packageName,
-                                                activityName = if (isTile) null else item.className,
+                                                activityName = if (isTile || dynamic) null else item.className,
                                                 serviceName = if (isTile) item.className else null,
-                                                kind = if (isTile) {
-                                                    com.lsp.hypersidebar.util.ShortcutKind.QS_TILE
-                                                } else {
-                                                    com.lsp.hypersidebar.util.ShortcutKind.COMPONENT
+                                                shortcutId = if (dynamic) item.shortcutId else null,
+                                                kind = when {
+                                                    isTile -> com.lsp.hypersidebar.util.ShortcutKind.QS_TILE
+                                                    dynamic -> com.lsp.hypersidebar.util.ShortcutKind.SHORTCUT_ID
+                                                    else -> com.lsp.hypersidebar.util.ShortcutKind.COMPONENT
                                                 },
                                                 label = cur.shortcut.label.ifEmpty { item.label },
                                                 iconPackageName = item.packageName

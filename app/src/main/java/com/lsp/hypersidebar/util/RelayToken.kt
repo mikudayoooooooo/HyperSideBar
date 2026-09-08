@@ -11,7 +11,7 @@ import java.util.UUID
  *
  * 背景（09-02 安全审查两个严重项）：
  * - FreeformRelayHook（:ui 进程，RECEIVER_EXPORTED 动态注册）此前**零校验**——任意 App
- *   都能发 ACTION_FAN_LAUNCH 广播，借 system uid 拉起任意应用小窗；
+ *   都能发 ACTION_FAN_LAUNCH 广播，借 :ui 特权拉起任意应用小窗；
  * - ShortcutRelayReceiver（模块进程，manifest exported）用**源码硬编码令牌**校验——
  *   APK 反编译即可读出，等同于零校验，可借模块 root 身份 `am start` 任意非导出组件（提权）。
  *

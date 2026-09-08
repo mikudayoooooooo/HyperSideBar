@@ -55,7 +55,9 @@ data class QsTileInfo(
     val packageName: String,
     val className: String,
     val label: String,
-    val appLabel: String
+    val appLabel: String,
+    /** 非 null=动态/固定快捷方式（桥应答 t=d，启动走 startShortcut 桌面代发）；null=manifest/磁贴 */
+    val shortcutId: String? = null
 )
 
 /** 按 app 归组后的选择器条目容器（L2 应用列表 / L3 条目共用）。 */
@@ -206,13 +208,17 @@ object ManifestShortcutsBridge {
         return (0 until arr.length()).mapNotNull { i ->
             val ob = arr.optJSONObject(i) ?: return@mapNotNull null
             val pkg = ob.optString("p")
+            if (pkg.isEmpty()) return@mapNotNull null
+            // t=d=动态/固定项（s=shortcutId，无 activity 可走）；t=m/旧缓存=manifest 项
+            val sid = ob.optString("s").ifEmpty { null }
             val cls = ob.optString("c")
-            if (pkg.isEmpty() || cls.isEmpty()) return@mapNotNull null
+            if (sid == null && cls.isEmpty()) return@mapNotNull null
             QsTileInfo(
                 packageName = pkg,
                 className = cls,
                 label = ob.optString("l").ifEmpty { pkg },
-                appLabel = pkg
+                appLabel = pkg,
+                shortcutId = sid
             )
         }
     }
@@ -395,7 +401,7 @@ internal fun QsTilePickerPage(
                         modifier = Modifier.padding(vertical = 4.dp)
                     )
                 }
-                items(entries, key = { it.className + "/" + it.label }) { item ->
+                items(entries, key = { (it.shortcutId ?: it.className) + "/" + it.label }) { item ->
                     PickerRow(item) { onSelected(item, isTiles) }
                 }
             }

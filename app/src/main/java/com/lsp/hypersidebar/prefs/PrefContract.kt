@@ -52,12 +52,13 @@ object PrefKeys {
     const val DEBUG_RELAY_BLACKHOLE = "debugRelayBlackhole"
 
     // ===== :ui → 模块 App 的快捷方式 root 代发通道（§2.4 实测定案） =====
-    // :ui（system uid）对非 exported 目标 startActivityAsUser 静默假成功且无 su 授权；
+    // :ui（平台签名特权，非 uid 1000）对非 exported 目标 startActivityAsUser 静默假成功且无 su 授权；
     // 模块 App 进程持 root（su am start 可启动非导出组件，编辑页测试已验证）。
     // :ui 预检失败时把完整 ShortcutAction JSON 广播给模块 App 代发。
     const val RELAY_LAUNCH_ACTION = "com.lsp.hypersidebar.action.RELAY_LAUNCH_SHORTCUT"
     const val RELAY_LAUNCH_EXTRA_SHORTCUT = "shortcut"
     const val RELAY_LAUNCH_EXTRA_TOKEN = "token"
+
     /** root 代发结果回告（模块 App → :ui，失败 toast 前台；内容同时落 LAST_RELAY_RESULT 供自检报告） */
     const val ACTION_RELAY_RESULT = "com.lsp.hypersidebar.action.RELAY_RESULT"
     /** 上次 root 代发结果（模块 App 写 remotePrefs）：trace|label|ok|reason|ts */
@@ -76,11 +77,23 @@ object PrefKeys {
     const val MANIFEST_SHORTCUTS_REPLY = "com.lsp.hypersidebar.action.MANIFEST_SHORTCUTS_REPLY"
     const val MANIFEST_SHORTCUTS_EXTRA = "list"
 
+    // 动态/固定快捷方式代发（2026-09-08）：startShortcut 仅默认桌面可调——launcher 进程
+    // 桥代发（EdgeGestureHook 内 LauncherApps.startShortcut），有序广播回执 resultCode 1/0。
+    // 调用方=模块 App（编辑页测试）与 :ui（fan 点击），令牌沿用 RELAY_LAUNCH_EXTRA_TOKEN
+    const val SHORTCUT_ID_LAUNCH_REQUEST = "com.lsp.hypersidebar.action.SHORTCUT_ID_LAUNCH"
+    const val SHORTCUT_ID_LAUNCH_EXTRA_PKG = "pkg"
+    const val SHORTCUT_ID_LAUNCH_EXTRA_ID = "sid"
+    /** 代发目标=hook 宿主（默认桌面进程） */
+    const val SHORTCUT_ID_LAUNCH_TARGET = "com.miui.home"
+
     // ===== QS 磁贴 SystemUI 直点桥（批次 3，SystemUiHook）=====
     // click-tile 门禁在 CommandQueue 回调层（控制中心样式早退），QSTile.click 无约束——
     // 有序广播进 SystemUI 进程按 spec 从数据层直点；resultCode 1=已点击 0=未就绪/未找到
     const val QS_TILE_CLICK_ACTION = "com.lsp.hypersidebar.action.QS_TILE_CLICK"
     const val QS_TILE_CLICK_EXTRA = "cn"
+    /** 预热模式标记（2026-09-07 fan 呼出预热制）：true=SystemUI 侧只 prime 绑定/listening/
+     *  豁免、不投递点击（fan 呼出时 FanPrewarmer 发出），点击本身仍由用户触发 */
+    const val QS_TILE_PREBIND_EXTRA = "prebind"
 
     // ===== hook 状态探针（§2.5.4：设置页打开时有序 ping，hook 侧接收器回 resultCode） =====
     // 背景（1C 实测实锤）：hook 进程的 remotePrefs 只读（写抛 "Read only implementation"），
@@ -105,7 +118,7 @@ object PrefKeys {
     // ===== 固定应用选择页准入列表（设置页 ← :ui，探针同款有序广播信道） =====
     // 背景：选择页此前走 PM 全列表，违反 PRD §7.3.3"无小窗资格的应用在数据源层面
     // 即不展示"；而 getFreeformSuggestionList 在模块进程被 hidden API blocklist 拒绝
-    // （AllAppsActivity 同款坑），只能向 :ui（system uid）要。模块侧自建落库缓存，
+    // （AllAppsActivity 同款坑），只能向 :ui（特权宿主）要。模块侧自建落库缓存，
     // :ui 死时读"之前的"，首次且无应答才回退 PM 全列表。
     /** 设置页 → :ui 的准入列表请求 action（有序广播，resultExtras 回带） */
     const val ACTION_REQUEST_SUGGESTIONS = "com.lsp.hypersidebar.action.REQUEST_SUGGESTIONS"

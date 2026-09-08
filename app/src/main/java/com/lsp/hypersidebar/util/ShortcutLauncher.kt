@@ -3,11 +3,15 @@ package com.lsp.hypersidebar.util
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.BroadcastReceiver
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.UserHandle
 import android.util.Log
+import com.lsp.hypersidebar.prefs.PrefKeys
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
@@ -159,6 +163,12 @@ object ShortcutLauncher {
         // SERVICE 有独立的启动路径（startService），不走 Activity 管线
         if (action.kind == ShortcutKind.SERVICE) {
             return launchService(context, action, allowRootFallback)
+        }
+
+        // SHORTCUT_ID（动态/固定快捷方式，2026-09-08）：目标 intent 对非桌面不可见，
+        // 无法组件/intent 直启——launcher 进程桥 startShortcut 代发
+        if (action.kind == ShortcutKind.SHORTCUT_ID) {
+            return launchShortcutId(context, action, RelayToken.current())
         }
 
         // COMPONENT 自动探测类型后分发
@@ -556,6 +566,59 @@ object ShortcutLauncher {
      * 真机定案（2026-09-05）：`cmd statusbar click-tile` 仅在 QS 交互/展开态时真正
      * 生效（与调用 uid 无关，fire-and-forget——QS 收起时静默丢弃且 exit=0）。
      */
+    /**
+     * SHORTCUT_ID 启动（2026-09-08）：动态/固定快捷方式的 intent 仅桌面进程可见，
+     * 本进程（模块/:ui）无从直启——有序广播请 launcher 进程 hook（默认桌面，桌面角色
+     * 现成）startShortcut 代发，回执 resultCode 1=已启动。须在后台线程调用（阻塞等
+     * 回执 ≤3s）。
+     */
+    fun launchShortcutId(context: Context, action: ShortcutAction, token: String?): LaunchResult {
+        val pkg = action.packageName
+        val sid = action.shortcutId
+        if (pkg.isNullOrEmpty() || sid.isNullOrEmpty()) {
+            return LaunchResult.Failure(
+                FailureReason.INVALID_CONFIG,
+                "SHORTCUT_ID requires packageName + shortcutId"
+            )
+        }
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var ok = false
+        val intent = Intent(PrefKeys.SHORTCUT_ID_LAUNCH_REQUEST)
+            .setPackage(PrefKeys.SHORTCUT_ID_LAUNCH_TARGET)
+            .putExtra(PrefKeys.SHORTCUT_ID_LAUNCH_EXTRA_PKG, pkg)
+            .putExtra(PrefKeys.SHORTCUT_ID_LAUNCH_EXTRA_ID, sid)
+        // 令牌由调用方按进程给定：模块进程=RelayToken.current()，:ui=remotePrefs 只读值
+        //（current() 是模块进程内存缓存，:ui 里恒 null——0908 首测 fan 点击即因此被拒）
+        RelayToken.attach(intent, token)
+        runCatching {
+            context.sendOrderedBroadcast(
+                intent,
+                null,
+                object : BroadcastReceiver() {
+                    override fun onReceive(c: Context, i: Intent) {
+                        ok = resultCode == 1
+                        latch.countDown()
+                    }
+                },
+                Handler(Looper.getMainLooper()),
+                0, null, null
+            )
+        }.onFailure {
+            Log.w(TAG, "launchShortcutId send failed: ${it.message}")
+            return LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, it.message ?: "send failed")
+        }
+        latch.await(3, java.util.concurrent.TimeUnit.SECONDS)
+        Log.i(TAG, "launchShortcutId: pkg=$pkg sid=$sid ok=$ok")
+        return if (ok) {
+            LaunchResult.Success(null)
+        } else {
+            LaunchResult.Failure(
+                FailureReason.LAUNCH_EXCEPTION,
+                "launcher startShortcut failed/rejected (hook absent? default desktop?)"
+            )
+        }
+    }
+
     private fun launchQsTile(
         context: Context,
         action: ShortcutAction,
@@ -648,6 +711,9 @@ object ShortcutLauncher {
         ShortcutKind.SERVICE -> buildServiceIntent(action)
         ShortcutKind.QS_TILE -> BuildIntentResult.Failure(
             FailureReason.INVALID_CONFIG, "QS_TILE is dispatched via statusbar command, not Intent"
+        )
+        ShortcutKind.SHORTCUT_ID -> BuildIntentResult.Failure(
+            FailureReason.INVALID_CONFIG, "SHORTCUT_ID is dispatched via launcher bridge, not Intent"
         )
         ShortcutKind.TOOLBOX -> BuildIntentResult.Failure(
             FailureReason.INVALID_CONFIG, "TOOLBOX cannot be built as Intent"
@@ -860,8 +926,10 @@ object ShortcutLauncher {
             "Resolved but no activityInfo"
         )
 
-        // SYSTEM_UID（运行时宿主 securitycenter:ui）可以直接启动非 exported Activity，
-        // 无需绕道 ROOT；仅在普通应用进程（如设置页测试启动）才强制 exported 检查
+        // 事实注记（0907 uid 修正）：:ui 并非 uid 1000（真实 uid 未测得；10613 曾误判为
+        // :ui，实为模块 App 自身 uid）——本判断的实际语义是"除字面 uid 1000 外一律不做非 exported 直启"，
+        // :ui 直启非导出实测静默假成功（SUCCESS via SYSTEM 但不启动），统一走 root relay；
+        // 仅普通应用进程（如设置页测试启动）之外的 uid-1000 进程理论上可直启
         if (!activityInfo.exported && android.os.Process.myUid() != 1000 /* SYSTEM_UID */) {
             return LaunchResult.Failure(
                 FailureReason.NOT_EXPORTED,
@@ -1100,6 +1168,7 @@ object ShortcutLauncher {
                 arrayOf("/system/bin/cmd", "statusbar", "click-tile", "$pkg/$fullCls")
             }
             ShortcutKind.TOOLBOX -> null
+            ShortcutKind.SHORTCUT_ID -> null
         }
     }
 }

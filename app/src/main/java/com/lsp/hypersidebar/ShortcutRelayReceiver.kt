@@ -16,7 +16,7 @@ private const val TAG = "ShortcutRelay"
 /**
  * :ui → 模块 App 的快捷方式 root 代发接收器（§2.4 实测定案）。
  *
- * :ui（system uid）对非 exported 目标 startActivityAsUser 静默假成功（不抛异常、
+ * :ui（平台签名特权，独立 uid 非 1000）对非 exported 目标 startActivityAsUser 静默假成功（不抛异常、
  * 实际不启动），且无 su 授权；本进程持 root（su am start 可启动非导出组件——
  * 编辑页测试启动的 root 链路已验证）。:ui 预检失败时把完整 ShortcutAction JSON
  * 广播过来，本接收器走完整启动链（validate 失败 → 直试 → ANF → su root）。
@@ -37,6 +37,9 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
                 com.lsp.hypersidebar.ui.settings.ManifestShortcutsBridge.onReply(context, json)
                 return
             }
+            // QS 磁贴解冻 relay 现走 bind 通道（2026-09-07 方案 2）：UnfreezeRelayService
+            // （bind 唤醒冻结的模块 App 后 su 解冻），广播通道不再承担解冻。
+            // 本接收器仅保留 LAUNCH 代发与 manifest 桥应答。
             PrefKeys.RELAY_LAUNCH_ACTION -> Unit
             else -> return
         }

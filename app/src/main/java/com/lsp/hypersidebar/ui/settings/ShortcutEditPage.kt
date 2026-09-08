@@ -60,6 +60,7 @@ internal fun ShortcutEditPage(
     onSave: (ShortcutAction) -> Unit,
     onDelete: (() -> Unit)?,
     onPickActivity: () -> Unit,
+    onPickQsTile: () -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -215,6 +216,16 @@ internal fun ShortcutEditPage(
                                 label = stringResource(R.string.shortcut_package_optional_hint)
                             )
                         }
+                        ShortcutKind.SHORTCUT_ID -> {
+                            // 动态/固定快捷方式：目标 intent 非桌面不可见，只读展示 id
+                            Text(text = stringResource(R.string.shortcut_package_optional), style = MiuixTheme.textStyles.body1)
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = shortcut.shortcutId ?: "?",
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                style = MiuixTheme.textStyles.footnote1
+                            )
+                        }
                         ShortcutKind.TOOLBOX -> {
                             Text(text = stringResource(R.string.shortcut_toolbox_desc))
                         }
@@ -237,6 +248,29 @@ internal fun ShortcutEditPage(
                             Spacer(Modifier.height(4.dp))
                             Text(
                                 text = stringResource(R.string.shortcut_service_root_note),
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                style = MiuixTheme.textStyles.footnote1
+                            )
+                        }
+                        ShortcutKind.QS_TILE -> {
+                            // 磁贴组件只读展示（由选择器扫描回填，SystemUI hook 直点触发）
+                            Text(text = stringResource(R.string.shortcut_qs_tile_target), style = MiuixTheme.textStyles.body1)
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "${packageName.ifEmpty { "?" }}/${serviceName.ifEmpty { "?" }}",
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                style = MiuixTheme.textStyles.footnote1
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Button(
+                                onClick = onPickQsTile,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(stringResource(R.string.qs_tile_pick))
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = stringResource(R.string.shortcut_qs_tile_note),
                                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                 style = MiuixTheme.textStyles.footnote1
                             )
@@ -267,7 +301,7 @@ internal fun ShortcutEditPage(
                                     else -> null
                                 },
                                 serviceName = when (shortcut.kind) {
-                                    ShortcutKind.SERVICE -> serviceName.ifEmpty { null }
+                                    ShortcutKind.SERVICE, ShortcutKind.QS_TILE -> serviceName.ifEmpty { null }
                                     else -> null
                                 },
                                 intentUri = intentUri.ifEmpty { null }
@@ -333,14 +367,15 @@ internal fun ShortcutEditPage(
                             else -> null
                         },
                         serviceName = when (shortcut.kind) {
-                            ShortcutKind.SERVICE -> serviceName.ifEmpty { null }
+                            // QS_TILE 类名同样存 serviceName（选择器回填/保存共用此字段）
+                            ShortcutKind.SERVICE, ShortcutKind.QS_TILE -> serviceName.ifEmpty { null }
                             else -> null
                         },
                         intentUri = intentUri.ifEmpty { null },
                         enabled = enabled,
                         iconPackageName = when (shortcut.kind) {
                             ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.pkg.ifEmpty { shortcut.iconPackageName }
-                            ShortcutKind.SERVICE -> packageName.ifEmpty { shortcut.iconPackageName }
+                            ShortcutKind.SERVICE, ShortcutKind.QS_TILE -> packageName.ifEmpty { shortcut.iconPackageName }
                             else -> shortcut.iconPackageName
                         }
                     )

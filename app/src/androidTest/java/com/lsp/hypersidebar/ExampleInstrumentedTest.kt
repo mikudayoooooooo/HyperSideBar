@@ -19,6 +19,8 @@ class ExampleInstrumentedTest {
     fun useAppContext() {
         // Context of the app under test.
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
-        assertEquals("com.lsp.hypersidebar", appContext.packageName)
+        // 迭代五批次 0：断言的是 APK 身份 applicationId（已迁 io.github.*），
+        // 与源码 namespace（com.lsp.hypersidebar）解耦
+        assertEquals("io.github.mikudayoooooooo.hypersidebar", appContext.packageName)
     }
 }

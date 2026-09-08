@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -21,9 +20,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.runtime.MutableState
@@ -33,6 +35,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.lsp.hypersidebar.prefs.LayoutDefaults
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -44,6 +47,8 @@ fun FanMenuCompose(
     geometry: FanGeometry,
     touchState: MutableState<FanTouchState>,
     colors: FanThemeColors,
+    fogIntensity: Float,
+    dimEnabled: Boolean,
     onAppSelected: (FanAppInfo) -> Unit,
     onQuickAppSelected: (FanAppInfo) -> Unit,
     onDismiss: () -> Unit
@@ -79,13 +84,18 @@ fun FanMenuCompose(
         targetValue = if (isVisible) 1f else 0.7f,
         animationSpec = tween(200)
     )
-    val menuAlpha by animateFloatAsState(
-        targetValue = if (isVisible) 1f else 0f,
-        animationSpec = tween(200)
-    )
 
     Box(modifier = Modifier.fillMaxSize()) {
-        FanBackground(geometry, colors, menuAlpha, Modifier.scale(scale))
+        // 压暗 scrim（用户开关）：全屏纯黑罩在窗口内容最底层——呼出即终态（背景硬着陆，
+        // 用户 2026-09-06 拍板不做淡入），视觉等价 FLAG_DIM_BEHIND 但不碰窗口参数
+        if (dimEnabled) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = LayoutDefaults.FAN_DIM_AMOUNT))
+            )
+        }
+        FanBackground(geometry, colors, fogIntensity, Modifier.scale(scale))
 
         geometry.items.forEachIndexed { index, item ->
             FanAppIcon(
@@ -94,7 +104,6 @@ fun FanMenuCompose(
                 isSelected = index == selectedIndex,
                 iconSize = geometry.iconSize,
                 colors = colors,
-                alpha = menuAlpha,
                 scale = scale
             )
         }
@@ -120,28 +129,59 @@ fun FanMenuCompose(
 private fun FanBackground(
     geometry: FanGeometry,
     colors: FanThemeColors,
-    alpha: Float,
+    fogIntensity: Float,
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
+        // 雾化层（路线 C）：径向渐变填充——弧缘最浓（=滑条值）向锚点渐弱到 35%（反向渐变，
+        // 2026-09-06 用户拍板：密度落在可见的弧线边界与图标环带上，而非屏边不可见区），
+        // 整层 6dp blur 羽化 + 粗弧光晕。RenderEffect 走 GPU，窗口 FLAG_HARDWARE_ACCELERATED
+        // + minSdk 33 恒可用；浓度 0 = 无填充无光晕（裸弧线），滑条可在线 A/B
+        androidx.compose.foundation.Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .blur(6.dp)
+        ) {
+            val topLeft = Offset(
+                geometry.anchor.x - geometry.outerRadius,
+                geometry.anchor.y - geometry.outerRadius
+            )
+            val arcSize = androidx.compose.ui.geometry.Size(
+                geometry.outerRadius * 2,
+                geometry.outerRadius * 2
+            )
+            if (fogIntensity > 0.01f) {
+                val fog = colors.surfaceContainer
+                drawArc(
+                    brush = Brush.radialGradient(
+                        colorStops = arrayOf(
+                            0f to fog.copy(alpha = fogIntensity * 0.35f),
+                            1f to fog.copy(alpha = fogIntensity)
+                        ),
+                        center = geometry.anchor,
+                        radius = geometry.outerRadius
+                    ),
+                    startAngle = geometry.startAngle,
+                    sweepAngle = geometry.spanAngle,
+                    useCenter = true,
+                    topLeft = topLeft,
+                    size = arcSize
+                )
+                drawArc(
+                    color = colors.outline.copy(alpha = 0.18f),
+                    startAngle = geometry.startAngle,
+                    sweepAngle = geometry.spanAngle,
+                    useCenter = false,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    style = Stroke(width = 8.dp.toPx())
+                )
+            }
+        }
+        // 锐利外弧描边：不参与 blur，始终清晰——边界感的锚
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
             drawArc(
-                color = colors.surfaceContainer.copy(alpha = 0.15f * alpha),
-                startAngle = geometry.startAngle,
-                sweepAngle = geometry.spanAngle,
-                useCenter = true,
-                topLeft = Offset(
-                    geometry.anchor.x - geometry.outerRadius,
-                    geometry.anchor.y - geometry.outerRadius
-                ),
-                size = androidx.compose.ui.geometry.Size(
-                    geometry.outerRadius * 2,
-                    geometry.outerRadius * 2
-                ),
-                alpha = alpha
-            )
-            drawArc(
-                color = colors.outline.copy(alpha = 0.2f * alpha),
+                color = colors.outline.copy(alpha = 0.45f),
                 startAngle = geometry.startAngle,
                 sweepAngle = geometry.spanAngle,
                 useCenter = false,
@@ -153,8 +193,7 @@ private fun FanBackground(
                     geometry.outerRadius * 2,
                     geometry.outerRadius * 2
                 ),
-                style = Stroke(width = 1.dp.toPx()),
-                alpha = alpha
+                style = Stroke(width = 2.dp.toPx())
             )
         }
     }
@@ -167,7 +206,6 @@ private fun FanAppIcon(
     isSelected: Boolean,
     iconSize: Float,
     colors: FanThemeColors,
-    alpha: Float,
     scale: Float
 ) {
     val (drawable, fallbackColor) = rememberAppIcon(context, item.app)
@@ -188,29 +226,35 @@ private fun FanAppIcon(
             }
             .size(iconSize.dp)
             .scale(scale * iconScale)
-            .alpha(alpha * iconAlpha)
-            .clip(CircleShape)
-            .background(
-                if (isSelected) colors.primaryContainer.copy(alpha = 0.9f)
-                else colors.surfaceContainer.copy(alpha = 0.85f)
-            ),
+            .alpha(iconAlpha),
         contentAlignment = Alignment.Center
     ) {
+        // 选中高亮板仅选中态绘制：常态无底框——原生应用图标自带形状边界，
+        // 常驻托底 + 0.7 缩放会造成"双层方框夹空隙"（用户反馈空隙大）
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape((iconSize * 0.25f).dp))
+                    .background(colors.primaryContainer.copy(alpha = 0.9f))
+            )
+        }
         AppIconImage(
             drawable = drawable,
             fallbackColor = fallbackColor,
             appName = item.app.appName,
-            size = iconSize * 0.7f,
+            // 0.7（圆形托底时代遗留）→ 0.92：图标几乎占满，与 AllApps 去托底一致
+            size = iconSize * 0.92f,
             colors = colors
         )
 
         if (isSelected) {
             androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                drawCircle(
+                // B1：描边随 mask 同形状（圆角方）
+                drawRoundRect(
                     color = colors.primary,
-                    radius = size.minDimension / 2f,
-                    style = Stroke(width = 2.dp.toPx()),
-                    alpha = alpha
+                    cornerRadius = CornerRadius(size.minDimension * 0.25f, size.minDimension * 0.25f),
+                    style = Stroke(width = 2.dp.toPx())
                 )
             }
         }

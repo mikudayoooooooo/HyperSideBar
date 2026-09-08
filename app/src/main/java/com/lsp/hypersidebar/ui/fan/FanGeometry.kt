@@ -247,7 +247,10 @@ private fun fitIconSize(
     density: Float
 ): Float {
 
-    val gapFraction = 0.2f
+    // 图标间隙比例（2026-09-04 收紧 0.2→0.12）：此前 11 应用布局下钳制上限
+    // ≈40.3dp，滑条 40 以上的调整全部无效（体感"图标大小失效"）；收紧间隙后
+    // 上限提升约 7%，同时调小方向（< 上限）本就有效。图标间仍有 12% 间隙防重叠。
+    val gapFraction = 0.12f
     var minChord = Float.MAX_VALUE
 
     if (outerCount > 1) {

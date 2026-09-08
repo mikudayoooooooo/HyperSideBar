@@ -1,6 +1,7 @@
 package com.lsp.hypersidebar.ui.fan
 
 import android.content.Context
+import com.lsp.hypersidebar.util.Trace
 import android.content.SharedPreferences
 import android.util.Log
 import android.view.MotionEvent
@@ -32,6 +33,9 @@ class FanMenuController(
     private val launchStrategy: FanLaunchStrategy,
     private val onMechanismResult: ((success: Boolean, reason: String) -> Unit)? = null
 ) {
+
+    // prefs 实例由装配方提供（hook 进程为 SyncedPrefs 同步感知装饰器——
+    // 配置同步广播缓存命中优先，设置页写入即时可见；见 util/ConfigSync）
 
     @Volatile
     var isShowing = false
@@ -82,8 +86,12 @@ class FanMenuController(
 
     private fun showInternal(context: Context, anchorX: Float, anchorY: Float) {
         // 实测轮七：入口状态遥测——定位 isShowing 被无日志翻转的路径（双开根因）
-        Log.i(TAG, "showInternal enter: isShowing=$isShowing host=${host != null} anchor=($anchorX,$anchorY)")
+        Trace.current = Trace.new()
+        Log.i(TAG, tl() + "showInternal enter: isShowing=$isShowing host=${host != null} anchor=($anchorX,$anchorY)")
         if (isShowing && host != null) return
+        // 耗时锚点（呼出卡顿归因）：cost=本次呼出主线程装配全程；firstAssembly=true
+        // =本进程池为空（进程冷启/被杀后首呼出），这是"有时候呼出会卡"的头号嫌疑段
+        val t0 = android.os.SystemClock.elapsedRealtime()
 
         isShowing = true
         // 防御性单窗口不变量：任何状态下不允许两个 fan 窗口并存——
@@ -137,7 +145,11 @@ class FanMenuController(
             )
             val allQuick = runtimeQuick.map { sa ->
                 FanAppInfo(
-                    packageName = if (sa.kind == ShortcutKind.TOOLBOX) "__open_panel__" else "shortcut:${sa.id}",
+                    // 真实宿主包名（批次 2 修复）：此前用 "shortcut:${id}" 伪包名，
+                    // IconLoader.getApplicationIcon 必然 NameNotFound → drawable=null
+                    // → 快捷栏退化字首头像（圆形）而非宿主真图标。启动逻辑不依赖
+                    // packageName（走 actionHandle 闭包捕获的 sa），改真包名无副作用
+                    packageName = sa.packageName ?: "",
                     appName = sa.label,
                     actionHandle = { ctx ->
                         if (sa.kind == ShortcutKind.TOOLBOX) {
@@ -151,15 +163,24 @@ class FanMenuController(
 
             // 池=1 复用（1C P2）：host 不逐呼出重建，context 经 activeContext 提供
             activeContext = context
+            val firstAssembly = idleHost == null
             val fanHost = obtainHost()
             host = fanHost
             fanHost.show(anchorX, anchorY, apps, allQuick, isLandscape)
             touchHeartbeat()
+            // 呼出即预热（2026-09-07 预热制）：QS_TILE 目标包 kill+预 bind、图标缓存预灌。
+            // 策略差异：仅 :ui 的 DirectLaunchStrategy 覆写有动作，launcher 空实现
+            launchStrategy.onFanShown(
+                context,
+                runtimeQuick,
+                apps.map { it.packageName }.filter { it != ALL_APPS_PKG }
+            )
             onMechanismResult?.invoke(true, "show ok")
-            Log.i(TAG, "show: fan overlay added (pooled), ${allQuick.size} quick actions, landscape=$isLandscape")
+            Log.i(TAG, tl() + "show: fan overlay added (pooled), ${allQuick.size} quick actions, landscape=$isLandscape, " +
+                "cost=${android.os.SystemClock.elapsedRealtime() - t0}ms, firstAssembly=$firstAssembly")
 
         } catch (e: Throwable) {
-            Log.e(TAG, "show FAILED: ${e.message}", e)
+            Log.e(TAG, tl() + "show FAILED: ${e.message}", e)
             isShowing = false
             host = null
             evictIdleHost()
@@ -181,7 +202,7 @@ class FanMenuController(
         val ctx = activeContext ?: throw IllegalStateException("activeContext missing")
         return ComposeFanHost(ctx, prefs).apply {
             onAppSelected = { appInfo ->
-                Log.i(TAG, "onAppSelected: ${appInfo.packageName}")
+                Log.i(TAG, tl() + "onAppSelected: ${appInfo.packageName}")
                 val context = activeContext
                 if (context != null) {
                     if (appInfo.packageName == ALL_APPS_PKG) {
@@ -194,7 +215,7 @@ class FanMenuController(
             }
 
             onQuickAppSelected = { appInfo ->
-                Log.i(TAG, "onQuickAppSelected: ${appInfo.packageName}")
+                Log.i(TAG, tl() + "onQuickAppSelected: ${appInfo.packageName}")
                 val context = activeContext
                 if (context != null) {
                     if (appInfo.actionHandle != null) {
@@ -256,7 +277,7 @@ class FanMenuController(
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
             doDismiss("main")
         } else {
-            Log.i(TAG, "dismiss: posted from ${Thread.currentThread().name}")
+            Log.i(TAG, tl() + "dismiss: posted from ${Thread.currentThread().name}")
             mainHandler.post { doDismiss("posted") }
         }
     }
@@ -268,7 +289,7 @@ class FanMenuController(
             isShowing = false
             return
         }
-        Log.i(TAG, "doDismiss($via): tearing down host")
+        Log.i(TAG, tl() + "doDismiss($via): tearing down host")
         // 强一致（1C §3）：先完成视图真实摘除，再清状态位——顺序颠倒会把
         // "视图还活着"伪装成"已收起"，下次呼出在旧窗口之上再叠一个（双开根因）
         try {
@@ -282,6 +303,9 @@ class FanMenuController(
 
     fun getStats(): String =
         "fanMenu=${host != null}, isShowing=$isShowing, watchdogFires=$watchdogFires"
+
+    /** 呼出链路追踪前缀（util/Trace）：单次呼出全程同一 id，跨进程靠 intent extra 传递 */
+    private fun tl(): String = "[${Trace.current ?: "-"}] "
 
     private fun readPref(key: String, default: Float): Float {
         return try { prefs.getFloat(key, default) } catch (_: Exception) { default }

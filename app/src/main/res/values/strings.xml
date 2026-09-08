@@ -8,7 +8,7 @@
     <string name="back">返回</string>
 
     <string name="module_section">模块</string>
-    <string name="module_enabled">启用超级侧边栏</string>
+    <string name="module_enabled">启用 HyperSideBar</string>
     <string name="module_enabled_summary">替换原生侧边栏为扇形菜单</string>
     <string name="status_running">模块运行中</string>
     <string name="status_normal_summary">手势与执行通道工作正常</string>
@@ -52,6 +52,13 @@
     <string name="theme_dark">深色</string>
     <string name="system_colors">系统配色</string>
     <string name="system_colors_summary">使用 HyperOS 系统动态颜色</string>
+    <string name="interaction_section">交互</string>
+    <string name="trigger_dwell_title">呼出停顿</string>
+    <string name="trigger_dwell_summary">贴边停顿 %1$d ms 后展开扇形</string>
+    <string name="fan_fog_title">扇形背景雾化</string>
+    <string name="fan_fog_summary">雾化浓度 %1$d%%（0 为关闭填充）</string>
+    <string name="fan_dim_title">背景压暗</string>
+    <string name="fan_dim_summary">呼出扇形时全屏压暗 24%，突出菜单</string>
     <string name="defaults_section">重置</string>
     <string name="restore_defaults">恢复默认值</string>
     <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，立即生效</string>
@@ -114,6 +121,12 @@
     <string name="about_author">作者</string>
     <string name="about_project_url">项目地址</string>
     <string name="open_link_failed">无法打开链接</string>
+    <string name="update_check">检查更新</string>
+    <string name="update_check_idle">点击检查最新版本</string>
+    <string name="update_checking">正在检查…</string>
+    <string name="update_up_to_date">已是最新版本</string>
+    <string name="update_available">发现新版本 %1$s，点击前往下载</string>
+    <string name="update_check_failed">检查失败（网络原因），点击重试</string>
     <string name="about_module_scope">模块作用域</string>
     <string name="scope_configured">已包含 com.miui.securitycenter</string>
     <string name="unknown">未知</string>
@@ -122,6 +135,16 @@
     <string name="debug_section">调试</string>
     <string name="debug_relay_blackhole">模拟执行端失联</string>
     <string name="debug_relay_blackhole_summary">所有执行广播按失联处理，用于验证熔断链路；测完务必关闭</string>
+    <string name="debug_relay_confirm_title">开启模拟执行端失联？</string>
+    <string name="debug_relay_confirm_summary">开启后扇形的所有点击都会被人为拦截：提示"服务不可用"，连续 5 次后触发真实熔断，症状与真实故障完全相同。此设置卸载重装后仍会保留，只能回到本页关闭。</string>
+    <string name="debug_relay_confirm_countdown">%d 秒后可确认</string>
+    <string name="debug_relay_confirm_ready">倒计时结束，可以确认了</string>
+    <string name="debug_relay_confirm_action">确认开启</string>
+    <string name="debug_relay_confirm_action_counting">确认开启（%d）</string>
+    <string name="selfcheck_export">导出自检报告</string>
+    <string name="selfcheck_export_summary">生成探针双路应答、调试开关实值与配置快照的文本报告，保存到下载目录（不含令牌等敏感信息）</string>
+    <string name="selfcheck_exporting">正在生成探针与报告…</string>
+    <string name="selfcheck_export_done">自检报告已保存：下载/%s</string>
 
     <!-- Shortcut -->
     <string name="shortcut_count_format">已添加 %1$d · 启用 %2$d</string>
@@ -181,5 +204,21 @@
     <string name="activity_picker_search">搜索活动…</string>
     <string name="activity_picker_loading">正在加载…</string>
     <string name="activity_picker_count">%d 个活动</string>
+    <string name="activity_picker_filter_targets">只看快捷方式 (%1$d)</string>
+    <string name="activity_picker_filter_all">显示全部 (%1$d)</string>
+    <string name="shortcuts_add_qs_tile">添加快捷开关</string>
+    <string name="shortcuts_add_qs_tile_summary">选择系统快捷开关磁贴（无须 root，无须加入控制中心）</string>
+    <string name="qs_tile_picker_title">选择快捷开关</string>
+    <string name="qs_tile_picker_search">搜索磁贴…</string>
+    <string name="qs_tile_picker_loading">正在扫描磁贴服务…</string>
+    <string name="qs_tile_picker_count">%d 个应用</string>
+    <string name="qs_tile_pick">选择磁贴</string>
+    <string name="qs_tile_group_tiles">系统磁贴</string>
+    <string name="qs_tile_group_shortcuts">应用快捷方式</string>
+    <string name="qs_tile_group_apps_count">%1$d 个应用可用</string>
+    <string name="qs_tile_item_count">%1$d 个磁贴</string>
+    <string name="qs_shortcut_item_count">%1$d 个快捷方式</string>
+    <string name="shortcut_qs_tile_target">磁贴组件</string>
+    <string name="shortcut_qs_tile_note">通过 SystemUI 直接触发系统快捷开关（无须加入控制中心）；需 LSPosed 勾选系统界面作用域，否则自动回退 root 兜底</string>
     <string name="all_apps_title">全部应用</string>
 </resources>

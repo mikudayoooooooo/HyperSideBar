@@ -3,11 +3,15 @@ package com.lsp.hypersidebar.util
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.BroadcastReceiver
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.UserHandle
 import android.util.Log
+import com.lsp.hypersidebar.prefs.PrefKeys
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
@@ -150,9 +154,21 @@ object ShortcutLauncher {
             return LaunchResult.Failure(FailureReason.INVALID_CONFIG, "TOOLBOX should be handled by broadcast")
         }
 
+        // QS_TILE 独立路径：SystemUI hook 直点（无须 root、无须固定在控制中心），
+        // hook 缺席时回退 root 兜底（见 launchQsTile）
+        if (action.kind == ShortcutKind.QS_TILE) {
+            return launchQsTile(context, action, allowRootFallback)
+        }
+
         // SERVICE 有独立的启动路径（startService），不走 Activity 管线
         if (action.kind == ShortcutKind.SERVICE) {
             return launchService(context, action, allowRootFallback)
+        }
+
+        // SHORTCUT_ID（动态/固定快捷方式，2026-09-08）：目标 intent 对非桌面不可见，
+        // 无法组件/intent 直启——launcher 进程桥 startShortcut 代发
+        if (action.kind == ShortcutKind.SHORTCUT_ID) {
+            return launchShortcutId(context, action, RelayToken.current())
         }
 
         // COMPONENT 自动探测类型后分发
@@ -229,6 +245,12 @@ object ShortcutLauncher {
         // SERVICE 用 Service 专用解析，不走 Activity 管线
         if (action.kind == ShortcutKind.SERVICE) {
             return validateService(context, action)
+        }
+
+        // QS_TILE 轻量验证：包已安装即可——磁贴是否在 QS 无法静态判断，
+        // click-tile 对不在 QS 的磁贴静默失败（spike 定案），留给运行时观察
+        if (action.kind == ShortcutKind.QS_TILE) {
+            return validateQsTile(context, action)
         }
 
         // COMPONENT 自动探测后分发验证
@@ -537,10 +559,162 @@ object ShortcutLauncher {
         }
     }
 
+    /**
+     * QS_TILE 启动路径：首选 SystemUI hook 直点（数据层 QSTile.click，无面板门禁、
+     * 零可见动作）；hook 不在 → root 三连兜底（expand-settings 唤醒 → click-tile →
+     * collapse，QS 闪现）。TileService 类存储在 serviceName 字段（与 SERVICE 同构）。
+     * 真机定案（2026-09-05）：`cmd statusbar click-tile` 仅在 QS 交互/展开态时真正
+     * 生效（与调用 uid 无关，fire-and-forget——QS 收起时静默丢弃且 exit=0）。
+     */
+    /**
+     * SHORTCUT_ID 启动（2026-09-08）：动态/固定快捷方式的 intent 仅桌面进程可见，
+     * 本进程（模块/:ui）无从直启——有序广播请 launcher 进程 hook（默认桌面，桌面角色
+     * 现成）startShortcut 代发，回执 resultCode 1=已启动。须在后台线程调用（阻塞等
+     * 回执 ≤3s）。
+     */
+    fun launchShortcutId(context: Context, action: ShortcutAction, token: String?): LaunchResult {
+        val pkg = action.packageName
+        val sid = action.shortcutId
+        if (pkg.isNullOrEmpty() || sid.isNullOrEmpty()) {
+            return LaunchResult.Failure(
+                FailureReason.INVALID_CONFIG,
+                "SHORTCUT_ID requires packageName + shortcutId"
+            )
+        }
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var ok = false
+        val intent = Intent(PrefKeys.SHORTCUT_ID_LAUNCH_REQUEST)
+            .setPackage(PrefKeys.SHORTCUT_ID_LAUNCH_TARGET)
+            .putExtra(PrefKeys.SHORTCUT_ID_LAUNCH_EXTRA_PKG, pkg)
+            .putExtra(PrefKeys.SHORTCUT_ID_LAUNCH_EXTRA_ID, sid)
+        // 令牌由调用方按进程给定：模块进程=RelayToken.current()，:ui=remotePrefs 只读值
+        //（current() 是模块进程内存缓存，:ui 里恒 null——0908 首测 fan 点击即因此被拒）
+        RelayToken.attach(intent, token)
+        runCatching {
+            context.sendOrderedBroadcast(
+                intent,
+                null,
+                object : BroadcastReceiver() {
+                    override fun onReceive(c: Context, i: Intent) {
+                        ok = resultCode == 1
+                        latch.countDown()
+                    }
+                },
+                Handler(Looper.getMainLooper()),
+                0, null, null
+            )
+        }.onFailure {
+            Log.w(TAG, "launchShortcutId send failed: ${it.message}")
+            return LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, it.message ?: "send failed")
+        }
+        latch.await(3, java.util.concurrent.TimeUnit.SECONDS)
+        Log.i(TAG, "launchShortcutId: pkg=$pkg sid=$sid ok=$ok")
+        return if (ok) {
+            LaunchResult.Success(null)
+        } else {
+            LaunchResult.Failure(
+                FailureReason.LAUNCH_EXCEPTION,
+                "launcher startShortcut failed/rejected (hook absent? default desktop?)"
+            )
+        }
+    }
+
+    private fun launchQsTile(
+        context: Context,
+        action: ShortcutAction,
+        allowRootFallback: Boolean
+    ): LaunchResult {
+        val validation = validateQsTile(context, action)
+        if (validation is LaunchResult.Failure) return validation
+        val pkg = action.packageName ?: return LaunchResult.Failure(
+            FailureReason.INVALID_CONFIG, "packageName is empty"
+        )
+        val cls = action.serviceName ?: return LaunchResult.Failure(
+            FailureReason.INVALID_CONFIG, "serviceName is empty"
+        )
+        val fullCls = if (cls.startsWith(".")) "$pkg$cls" else cls
+        // 首选 SystemUI hook 直点（模块 App 也直接可广播，与 :ui 同一接收器）
+        if (QsTileClickBridge.sendBlocking(context, "$pkg/$fullCls", RelayToken.current())) {
+            return LaunchResult.Success(ComponentName(pkg, cls))
+        }
+        // 回退：root 三连（编辑页测试可见 QS 闪现，属可接受代价）
+        if (!allowRootFallback) {
+            return LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, "QS tile requires root fallback disabled")
+        }
+        if (!isRootAvailable()) {
+            return LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, "QS tile requires root (su)")
+        }
+        return launchQsTileViaRoot(action)
+    }
+
+    private fun launchQsTileViaRoot(action: ShortcutAction): LaunchResult {
+        val pkg = action.packageName ?: return LaunchResult.Failure(
+            FailureReason.INVALID_CONFIG, "packageName is empty"
+        )
+        val cls = action.serviceName ?: return LaunchResult.Failure(
+            FailureReason.INVALID_CONFIG, "serviceName is empty"
+        )
+        val fullCls = if (cls.startsWith(".")) "$pkg$cls" else cls
+        if (!pkg.matches(PKG_ACTIVITY_REGEX) || !fullCls.matches(PKG_ACTIVITY_REGEX)) {
+            return LaunchResult.Failure(FailureReason.INVALID_CONFIG, "Invalid tile component")
+        }
+        // 组合脚本（2026-09-05 用户 T4 实测定稿）：expand-settings 唤醒 QS → click-tile
+        // → collapse 还原。组件名已过正则白名单（仅字母数字点），脚本为常量组合——
+        // 整串作为单个 -c 参数裸传（不可再 shellQuote：su 内层 sh 会把引号包裹的
+        // 整串当成一个命令名，exit=127 "not found"，11:22 实测）
+        val script = "/system/bin/cmd statusbar expand-settings; sleep 0.3; " +
+            "/system/bin/cmd statusbar click-tile $pkg/$fullCls; sleep 0.2; " +
+            "/system/bin/cmd statusbar collapse"
+        val cmd = listOf("su", "-c", script)
+        Log.i(TAG, "launchQsTileViaRoot: $script")
+        return try {
+            val process = ProcessBuilder(cmd).start()
+            try {
+                val exitCode = process.waitFor()
+                val errorOutput = BufferedReader(InputStreamReader(process.errorStream)).use {
+                    it.readText().trim()
+                }
+                if (exitCode == 0) {
+                    Log.i(TAG, "launchQsTileViaRoot: SUCCESS")
+                    LaunchResult.Success(null)
+                } else {
+                    Log.w(TAG, "launchQsTileViaRoot: exit=$exitCode, error=$errorOutput")
+                    LaunchResult.Failure(FailureReason.ROOT_EXEC_FAILED, "exit=$exitCode: $errorOutput")
+                }
+            } finally {
+                process.destroy()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "launchQsTileViaRoot: exception", e)
+            LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, e.message ?: "su exec failed")
+        }
+    }
+
+    /** QS_TILE 轻量验证：包已安装 + 字段齐全即可（QS 归属无法静态判断）。 */
+    private fun validateQsTile(context: Context, action: ShortcutAction): LaunchResult {
+        val pkg = action.packageName
+        val cls = action.serviceName
+        if (pkg.isNullOrEmpty() || cls.isNullOrEmpty()) {
+            return LaunchResult.Failure(FailureReason.INVALID_CONFIG, "packageName or serviceName is empty")
+        }
+        return try {
+            context.packageManager.getPackageInfo(pkg, 0)
+            LaunchResult.Success(ComponentName(pkg, cls))
+        } catch (e: PackageManager.NameNotFoundException) {
+            LaunchResult.Failure(FailureReason.APP_NOT_INSTALLED, "Package not found: $pkg")
+        }
+    }
+
     private fun buildIntent(action: ShortcutAction): BuildIntentResult = when (action.kind) {
         ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> buildActivityIntent(action)
         ShortcutKind.INTENT_URI -> buildIntentUri(action)
         ShortcutKind.SERVICE -> buildServiceIntent(action)
+        ShortcutKind.QS_TILE -> BuildIntentResult.Failure(
+            FailureReason.INVALID_CONFIG, "QS_TILE is dispatched via statusbar command, not Intent"
+        )
+        ShortcutKind.SHORTCUT_ID -> BuildIntentResult.Failure(
+            FailureReason.INVALID_CONFIG, "SHORTCUT_ID is dispatched via launcher bridge, not Intent"
+        )
         ShortcutKind.TOOLBOX -> BuildIntentResult.Failure(
             FailureReason.INVALID_CONFIG, "TOOLBOX cannot be built as Intent"
         )
@@ -752,8 +926,10 @@ object ShortcutLauncher {
             "Resolved but no activityInfo"
         )
 
-        // SYSTEM_UID（运行时宿主 securitycenter:ui）可以直接启动非 exported Activity，
-        // 无需绕道 ROOT；仅在普通应用进程（如设置页测试启动）才强制 exported 检查
+        // 事实注记（0907 uid 修正）：:ui 并非 uid 1000（真实 uid 未测得；10613 曾误判为
+        // :ui，实为模块 App 自身 uid）——本判断的实际语义是"除字面 uid 1000 外一律不做非 exported 直启"，
+        // :ui 直启非导出实测静默假成功（SUCCESS via SYSTEM 但不启动），统一走 root relay；
+        // 仅普通应用进程（如设置页测试启动）之外的 uid-1000 进程理论上可直启
         if (!activityInfo.exported && android.os.Process.myUid() != 1000 /* SYSTEM_UID */) {
             return LaunchResult.Failure(
                 FailureReason.NOT_EXPORTED,
@@ -980,7 +1156,19 @@ object ShortcutLauncher {
                 }
                 arrayOf("am", "startservice", "-n", "$pkg/$fullSvc")
             }
+            ShortcutKind.QS_TILE -> {
+                val pkg = action.packageName ?: return null
+                val cls = normalizeServiceName(pkg, action.serviceName ?: return null)
+                val fullCls = if (cls.startsWith(".")) "$pkg$cls" else cls
+                if (!pkg.matches(PKG_ACTIVITY_REGEX) || !fullCls.matches(PKG_ACTIVITY_REGEX)) {
+                    return null
+                }
+                // statusbar 是 cmd 的子命令而非独立二进制（漏掉 cmd 前缀 exit=127，
+                // 2026-09-05 编辑页测试实测）；绝对路径防 su 环境 PATH 不全
+                arrayOf("/system/bin/cmd", "statusbar", "click-tile", "$pkg/$fullCls")
+            }
             ShortcutKind.TOOLBOX -> null
+            ShortcutKind.SHORTCUT_ID -> null
         }
     }
 }

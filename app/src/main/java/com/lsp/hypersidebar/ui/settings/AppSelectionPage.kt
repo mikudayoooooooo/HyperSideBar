@@ -34,6 +34,7 @@ import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.AppIconImage
 import com.lsp.hypersidebar.ui.fan.FanAppInfo
 import com.lsp.hypersidebar.ui.fan.rememberAppIcon
+import com.lsp.hypersidebar.util.RelayToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
@@ -367,12 +368,8 @@ private fun AppSelectionRow(
 
 private fun loadInstalledApps(context: Context): List<AppItem> {
     val packageManager = context.packageManager
-    val installed = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-        packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
-    } else {
-        @Suppress("DEPRECATION")
-        packageManager.getInstalledApplications(0)
-    }
+    // minSdk 33：ApplicationInfoFlags 版恒定可用，无版本分支
+    val installed = packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
     return installed
         .asSequence()
         .filter { it.enabled }
@@ -445,6 +442,8 @@ private fun withMissingPinned(
 private fun requestSuggestionsFromUi(context: Context, onResult: (List<String>?) -> Unit) {
     val intent = Intent(PrefKeys.ACTION_REQUEST_SUGGESTIONS).apply {
         setPackage("com.miui.securitycenter")
+        // 跨进程防伪令牌（:ui 侧 FreeformRelayHook 校验）
+        RelayToken.attach(this, RelayToken.current())
     }
     runCatching {
         context.sendOrderedBroadcast(

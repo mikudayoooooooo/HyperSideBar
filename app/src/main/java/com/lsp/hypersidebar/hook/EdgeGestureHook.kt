@@ -14,6 +14,7 @@ import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import com.lsp.hypersidebar.ui.fan.FanMenuController
 import com.lsp.hypersidebar.util.DataLoader
+import com.lsp.hypersidebar.util.RelayToken
 import io.github.kyuubiran.ezxhelper.core.ClassLoaderProvider
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.EzXposed
@@ -37,8 +38,12 @@ private const val TAG = "EdgeGesture"
  * - 拦截层：GestureStubView$3.onSwipeStop 翻转首参为 false（消费路径漏事件时的兜底）
  */
 class EdgeGestureHook(
-    private val remotePrefs: SharedPreferences
+    remotePrefs: SharedPreferences
 ) : BaseHook() {
+
+    // 批次 2 起包装为 SyncedPrefs（XposedInit 装配）：配置同步广播缓存命中优先，
+    // 设置页任何写入即时生效——remotePrefs 保持 var 以便将来替换实例
+    private var remotePrefs: SharedPreferences = remotePrefs
 
     override val name = "EdgeGesture"
 
@@ -59,9 +64,15 @@ class EdgeGestureHook(
                     if (alive) breaker.recordSuccess() else breaker.recordFailure("relay dead: $what")
                 },
                 shouldSimulateRelayDead = {
-                    runCatching { remotePrefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false) }
-                        .getOrDefault(false)
-                }
+                    // v2.0.0 发布门控（review 定案）：调试开关仅 debug 构建生效——
+                    // 该值跨重装存活，release 若读存量 true=远程用户自造熔断且无法关闭
+                    com.lsp.hypersidebar.BuildConfig.DEBUG &&
+                        runCatching { remotePrefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false) }
+                            .getOrDefault(false)
+                },
+                // 随广播附令牌（:ui 侧 FreeformRelayHook 校验）：每次发送时现读，
+                // 保证令牌下发后的第一次呼出就能带上新值，而不是绑死启动快照
+                relayToken = { runCatching { RelayToken.read(remotePrefs) }.getOrNull() }
             ),
             onMechanismResult = { ok, reason ->
                 // show 成功不清零（实测轮二踩坑）：呼出与执行端是独立机制，两次选中之间
@@ -132,6 +143,8 @@ class EdgeGestureHook(
         com.lsp.hypersidebar.util.DataLoader.prewarmWithRetry(
             provider = { runCatching { EzXposed.appContext }.getOrNull() }
         )
+        // 扇形 UI 类族后台预载：把 ART 校验从首呼出主线程挪走（"有时候呼出会卡"实凶）
+        com.lsp.hypersidebar.util.FanUiWarmup.warm()
     }
 
     /**
@@ -159,6 +172,10 @@ class EdgeGestureHook(
                         receiver, IntentFilter(PrefKeys.PROBE_ACTION_HOME), Context.RECEIVER_EXPORTED
                     )
                     Log.i(TAG, "probe receiver registered (via Application.attach)")
+                    // 配置同步通道（批次 2）：收设置页全量推送，根治 hook 进程死快照
+                    com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx)
+                    Log.i(TAG, "config sync receiver registered (via Application.attach)")
+                    registerManifestShortcutsBridge(ctx)
                 } catch (e: Throwable) {
                     Log.e(TAG, "probe receiver registration failed: ${e.message}", e)
                 }
@@ -166,6 +183,145 @@ class EdgeGestureHook(
         if (hooked == null) {
             Log.e(TAG, "Application.attach hook failed（状态探针不可用，设置页将显示无应答）")
         }
+    }
+
+    /**
+     * manifest 快捷方式 launcher 桥（批次 3，2026-09-05 实锤）：LauncherApps.getShortcuts
+     * 对非默认桌面抛 SecurityException，而本进程恰是默认桌面（有访问权）。收设置页
+     * REQUEST → 查询 → JSON 应答给模块 App 的 ShortcutRelayReceiver（显式组件寻址+
+     * 令牌）。数据仅驱动选择器展示，伪造危害=列表造假，仍按令牌严格校验。
+     */
+    private fun registerManifestShortcutsBridge(ctx: Context) {
+        runCatching {
+            ctx.registerReceiver(
+                object : BroadcastReceiver() {
+                    override fun onReceive(c: Context, intent: Intent) {
+                        Thread {
+                            runCatching {
+                                val la = c.getSystemService(
+                                    android.content.pm.LauncherApps::class.java
+                                ) ?: return@runCatching
+                                // 2026-09-08 扩展：+DYNAMIC/PINNED（微信扫一扫/收付款等
+                                // runtime 推送项 dumpsys 实锤全为 dynamic，原 MANIFEST-only
+                                // 导致微信列表为空）。manifest 项走原 COMPONENT 路径（t=m），
+                                // 动态/固定项走 startShortcut 代发（t=d，s=shortcutId）——
+                                // 仅默认桌面可调 startShortcut，本进程恰是其宿主
+                                val arr = org.json.JSONArray()
+                                val seen = java.util.HashSet<String>()
+                                val user = android.os.Process.myUserHandle()
+                                // 两遍式查询：分类由 query 旗标决定而非读 ShortcutInfo 旗标位
+                                //（manifest 项走原 COMPONENT 路径 t=m；动态/固定项 t=d，
+                                // startShortcut 代发——它同样能启 manifest 项，误分类也安全）
+                                fun queryShortcuts(flags: Int, isManifest: Boolean) {
+                                    val q = android.content.pm.LauncherApps.ShortcutQuery()
+                                        .setQueryFlags(flags)
+                                    la.getShortcuts(q, user).orEmpty().forEach { si ->
+                                        val key = si.`package` + "/" + si.id
+                                        if (!seen.add(key)) return@forEach
+                                        val label = si.longLabel?.toString()
+                                            ?: si.shortLabel?.toString().orEmpty()
+                                        if (isManifest) {
+                                            val cn = si.activity ?: return@forEach
+                                            arr.put(
+                                                org.json.JSONObject()
+                                                    .put("p", cn.packageName)
+                                                    .put("c", cn.className)
+                                                    .put("l", label)
+                                                    .put("t", "m")
+                                            )
+                                        } else {
+                                            arr.put(
+                                                org.json.JSONObject()
+                                                    .put("p", si.`package`)
+                                                    .put("s", si.id)
+                                                    .put("l", label)
+                                                    .put("t", "d")
+                                            )
+                                        }
+                                    }
+                                }
+                                queryShortcuts(
+                                    android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST,
+                                    true
+                                )
+                                queryShortcuts(
+                                    android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or
+                                        android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED,
+                                    false
+                                )
+                                val reply = Intent(PrefKeys.MANIFEST_SHORTCUTS_REPLY)
+                                    .setClassName(
+                                        com.lsp.hypersidebar.util.FreeformLauncher.MODULE_PACKAGE,
+                                        com.lsp.hypersidebar.ShortcutRelayReceiver::class.java.name
+                                    )
+                                    .putExtra(PrefKeys.MANIFEST_SHORTCUTS_EXTRA, arr.toString())
+                                RelayToken.attach(reply, RelayToken.read(remotePrefs))
+                                c.sendBroadcast(reply)
+                                Log.i(TAG, "manifest shortcuts replied: ${arr.length()}")
+                            }.onFailure {
+                                Log.w(TAG, "manifest shortcuts query failed: ${it.message}")
+                            }
+                        }.start()
+                    }
+                },
+                IntentFilter(PrefKeys.MANIFEST_SHORTCUTS_REQUEST),
+                Context.RECEIVER_EXPORTED
+            )
+            Log.i(TAG, "manifest shortcuts request receiver registered (via Application.attach)")
+        }.onFailure { Log.e(TAG, "manifest shortcuts bridge register failed: ${it.message}") }
+
+        // 动态/固定快捷方式 startShortcut 代发（2026-09-08）：有序广播进本进程（默认桌面，
+        // 桌面角色现成——B2 归档"startShortcut 需桌面角色"的前提在此成立而非阻塞），
+        // resultCode 1=已启动 0=失败/令牌拒绝。防伪=令牌严格档（借桌面身份启动任意
+        // shortcut，与 root 代发同危害级）
+        runCatching {
+            ctx.registerReceiver(
+                object : BroadcastReceiver() {
+                    override fun onReceive(c: Context, intent: Intent) {
+                        val pkg = intent.getStringExtra(PrefKeys.SHORTCUT_ID_LAUNCH_EXTRA_PKG) ?: return
+                        val sid = intent.getStringExtra(PrefKeys.SHORTCUT_ID_LAUNCH_EXTRA_ID) ?: return
+                        val pending = goAsync()
+                        Thread {
+                            var ok = false
+                            var why = ""
+                            runCatching {
+                                val expected = RelayToken.read(remotePrefs)
+                                val got = intent.getStringExtra(
+                                    com.lsp.hypersidebar.prefs.PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN
+                                )
+                                if (expected.isNullOrEmpty() || got.isNullOrEmpty() || got != expected) {
+                                    why = "token rejected"
+                                } else if (!pkg.matches(Regex("[A-Za-z0-9._]+"))) {
+                                    why = "malformed pkg"
+                                } else {
+                                    val la: android.content.pm.LauncherApps? = c.getSystemService(
+                                        android.content.pm.LauncherApps::class.java
+                                    )
+                                    val user: android.os.UserHandle = android.os.Process.myUserHandle()
+                                    if (la == null) {
+                                        why = "LauncherApps unavailable"
+                                    } else {
+                                        // API 35+ 起 startShortcut 返回 void，失败抛异常
+                                        //（runCatching 外层兜住 SecurityException 等）
+                                        la.startShortcut(
+                                            pkg, sid, null as android.graphics.Rect?,
+                                            null as android.os.Bundle?, user
+                                        )
+                                        ok = true
+                                    }
+                                }
+                            }.onFailure { why = "exception: ${it.message}" }
+                            Log.i(TAG, "startShortcut launch: pkg=$pkg id=$sid ok=$ok $why")
+                            pending.resultCode = if (ok) 1 else 0
+                            pending.finish()
+                        }.start()
+                    }
+                },
+                IntentFilter(PrefKeys.SHORTCUT_ID_LAUNCH_REQUEST),
+                Context.RECEIVER_EXPORTED
+            )
+            Log.i(TAG, "shortcut-id launch receiver registered (via Application.attach)")
+        }.onFailure { Log.e(TAG, "shortcut-id launch register failed: ${it.message}") }
     }
 
     /** 记录层：触摸流入口，BeforeHook。返回 true = 消费（拦截原生处理）。 */
@@ -242,6 +398,12 @@ class EdgeGestureHook(
     private fun handleTouch(ev: MotionEvent, stub: View?): Boolean {
         // 数据源死亡停摆（迭代四 §1.3）：整条透传原生（原生返回优先），不再呼出
         if (DataDeadState.dead) {
+            if (fanController.isShowing) fanController.dismiss()
+            return false
+        }
+        // 总开关门（设置页"启用超级侧边栏"）：关闭=整条透传原生（同数据源死亡语义），
+        // 展示中的 fan 立即收起；重新打开即时恢复（SyncedPrefs 读=内存缓存命中）
+        if (!moduleEnabled()) {
             if (fanController.isShowing) fanController.dismiss()
             return false
         }
@@ -368,8 +530,12 @@ class EdgeGestureHook(
         val anchorX = if (downX < dm.widthPixels / 2f) 0f else dm.widthPixels.toFloat()
         val anchorY = if (zoneTop < zoneBottom) downY.coerceIn(zoneTop, zoneBottom) else downY
         Log.i(TAG, "showFan: anchor=($anchorX, $anchorY) downY=$downY dwell=${dwellMs()}ms")
+        // 耗时锚点（呼出卡顿归因）：postLag=launcher 主线程繁忙度——数值大说明
+        // 呼出迟到是主线程排队，而不是装配慢
+        val postAtMs = android.os.SystemClock.uptimeMillis()
         val r = Runnable {
             pendingShow = null
+            Log.i(TAG, "g#$gestureSeq showFan runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
             fanController.show(ctx, anchorX, anchorY)
         }
         pendingShow = r
@@ -442,4 +608,8 @@ class EdgeGestureHook(
     } catch (_: Exception) {
         LayoutDefaults.TRIGGER_DWELL_MS.toLong()
     }
+
+    /** 总开关（设置页"启用超级侧边栏"，PrefKeys.ENABLED）：关闭=本 hook 停止一切侵入。 */
+    private fun moduleEnabled(): Boolean =
+        runCatching { remotePrefs.getBoolean(PrefKeys.ENABLED, true) }.getOrDefault(true)
 }

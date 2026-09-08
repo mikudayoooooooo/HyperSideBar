@@ -89,7 +89,7 @@ internal fun MainScreen(
         SettingsKey.TabSettings -> stringResource(R.string.tab_settings)
         SettingsKey.TabAbout -> stringResource(R.string.tab_about)
         is SettingsKey.AppSelection -> top.title
-        SettingsKey.ShortcutList, SettingsKey.ShortcutPicker ->
+        SettingsKey.ShortcutList, SettingsKey.ShortcutPicker, SettingsKey.QsTilePicker ->
             stringResource(R.string.shortcuts_add_section)
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
     }
@@ -187,8 +187,6 @@ internal fun MainScreen(
                         ) {
                             SettingsPage(
                                 prefs = prefs,
-                                repo = settingsRepo,
-                                prefsRevision = prefsRevision,
                                 status = moduleStatus,
                                 currentThemeMode = themeMode,
                                 onThemeModeChange = onThemeModeChange,
@@ -274,6 +272,43 @@ internal fun MainScreen(
                                     }
                                 },
                                 onPickActivity = { settingsStack.add(SettingsKey.ShortcutPicker) },
+                                onPickQsTile = { settingsStack.add(SettingsKey.QsTilePicker) },
+                                onBack = { settingsStack.removeLast() }
+                            )
+                        }
+                    }
+                    SettingsKey.QsTilePicker -> NavEntry(key) {
+                        DetailPageContainer {
+                            QsTilePickerPage(
+                                onSelected = { item, isTile ->
+                                    // 与 ShortcutPicker 同款回填：原地替换栈中编辑键 + 弹出选择器。
+                                    // 磁贴→QS_TILE（类名存 serviceName）；应用快捷方式→COMPONENT
+                                    //（目标 activity am start 直启，C2 定案）
+                                    val idx = settingsStack.indexOfLast { it is SettingsKey.ShortcutEdit }
+                                    if (idx >= 0) {
+                                        val cur = settingsStack[idx] as SettingsKey.ShortcutEdit
+                                        // 快捷方式三分：动态/固定项（shortcutId 非空）→ SHORTCUT_ID
+                                        //（startShortcut 桌面桥代发，目标 intent 非桌面不可见）；
+                                        // manifest 项 → COMPONENT（activity am start 直启）
+                                        val dynamic = !isTile && item.shortcutId != null
+                                        settingsStack[idx] = cur.copy(
+                                            shortcut = cur.shortcut.copy(
+                                                packageName = item.packageName,
+                                                activityName = if (isTile || dynamic) null else item.className,
+                                                serviceName = if (isTile) item.className else null,
+                                                shortcutId = if (dynamic) item.shortcutId else null,
+                                                kind = when {
+                                                    isTile -> com.lsp.hypersidebar.util.ShortcutKind.QS_TILE
+                                                    dynamic -> com.lsp.hypersidebar.util.ShortcutKind.SHORTCUT_ID
+                                                    else -> com.lsp.hypersidebar.util.ShortcutKind.COMPONENT
+                                                },
+                                                label = cur.shortcut.label.ifEmpty { item.label },
+                                                iconPackageName = item.packageName
+                                            )
+                                        )
+                                    }
+                                    settingsStack.removeLast()
+                                },
                                 onBack = { settingsStack.removeLast() }
                             )
                         }
@@ -281,7 +316,7 @@ internal fun MainScreen(
                     SettingsKey.ShortcutPicker -> NavEntry(key) {
                         DetailPageContainer {
                             ActivityPickerPage(
-                                onSelected = { pkg, act, label ->
+                                onSelected = { pkg, act, label, isQsTile ->
                                     // 选择器回填：原地替换栈中编辑键 + 弹出选择器（同帧），
                                     // 编辑页从更新后的 shortcut 重建字段（等价旧 when() 销毁重建语义）
                                     val idx = settingsStack.indexOfLast { it is SettingsKey.ShortcutEdit }
@@ -290,7 +325,17 @@ internal fun MainScreen(
                                         settingsStack[idx] = cur.copy(
                                             shortcut = cur.shortcut.copy(
                                                 packageName = pkg,
-                                                activityName = act,
+                                                // QS 磁贴：类名走 serviceName（与 SERVICE 同构，编辑页
+                                                // 保存映射按 kind 分支），kind 显式置 QS_TILE——
+                                                // 否则 COMPONENT 探测会把它当普通 Service startService（无效）
+                                                activityName = if (isQsTile) null else act,
+                                                serviceName = if (isQsTile) act else cur.shortcut.serviceName,
+                                                kind = when {
+                                                    isQsTile -> com.lsp.hypersidebar.util.ShortcutKind.QS_TILE
+                                                    cur.shortcut.kind == com.lsp.hypersidebar.util.ShortcutKind.QS_TILE ->
+                                                        com.lsp.hypersidebar.util.ShortcutKind.COMPONENT
+                                                    else -> cur.shortcut.kind
+                                                },
                                                 // 仅当当前名称为空时才用 Activity 标签自动填充，避免覆盖用户已输入的名称
                                                 label = cur.shortcut.label.ifEmpty { label },
                                                 iconPackageName = pkg

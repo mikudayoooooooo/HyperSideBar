@@ -35,11 +35,18 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.lsp.hypersidebar"
-        minSdk = 26
+        // 迭代五批次 0：LSPosed 仓库自动审批要求提交者能证明包名所属域名的控制权，
+        // com.lsp.*（lsp.com 非本人所有）不可批 → 迁到 io.github.<user>.<module>。
+        // 仅改 applicationId（APK 身份）；namespace/目录树/类路径保持 com.lsp.hypersidebar 不动。
+        applicationId = "io.github.mikudayoooooooo.hypersidebar"
+        // 迭代五批次 1（2026-09-04 用户拍板）：26 → 33，直接支持 miuix-blur
+        // （RuntimeShader 自 API 33 起，模糊/混合/噪点/高光全部依赖）——
+        // 免去全库 blur 路径的 capability 门控；要求 Android 13+（HyperOS 全系满足）
+        minSdk = 33
         targetSdk = 36
         versionCode = computedVersionCode
-        versionName = "1.1"
+        // 三段式语义化版本；2.0.0 = 包名断代标记（旧包名无法覆盖安装，需卸载重装）
+        versionName = "2.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

@@ -19,13 +19,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,17 +43,25 @@ import com.lsp.hypersidebar.BuildConfig
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.savePref
+import com.lsp.hypersidebar.util.RemotePrefsBridge
+import com.lsp.hypersidebar.util.SelfCheck
+import com.lsp.hypersidebar.util.UpdateChecker
 import io.github.libxposed.service.XposedService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
+import top.yukonga.miuix.kmp.window.WindowDialog
 
 @Composable
 internal fun AboutPage(
@@ -58,9 +71,13 @@ internal fun AboutPage(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val relayBlackhole by remember(prefs, prefsRevision) {
+    // D1 同款（SettingsPage）：绑定晚到时参数 prefs 可能是 nav3 entry 固化的本地空壳，
+    // 读写都落不到 hook 可见的 remote store——页内切到 bridge.prefs 保读写同源
+    val effectivePrefs = RemotePrefsBridge.prefs ?: prefs
+    var relayBlackhole by remember(effectivePrefs, prefsRevision) {
         mutableStateOf(
-            runCatching { prefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false) }.getOrDefault(false)
+            runCatching { effectivePrefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false) }
+                .getOrDefault(false)
         )
     }
     val versionName = remember {
@@ -96,6 +113,47 @@ internal fun AboutPage(
         }
     }
 
+    val updateScope = rememberCoroutineScope()
+    var updateState by remember { mutableStateOf<UpdateCheckState>(UpdateCheckState.Idle) }
+    fun checkForUpdate() {
+        if (updateState is UpdateCheckState.Checking) return
+        updateState = UpdateCheckState.Checking
+        updateScope.launch {
+            updateState = try {
+                val release = UpdateChecker.fetchLatestRelease()
+                when {
+                    release.version.isEmpty() -> UpdateCheckState.Failed
+                    UpdateChecker.isNewer(release.version, versionName) ->
+                        UpdateCheckState.Available(release.version, release.pageUrl)
+                    else -> UpdateCheckState.UpToDate
+                }
+            } catch (_: Exception) {
+                UpdateCheckState.Failed
+            }
+        }
+    }
+    val updateSummary = when (val state = updateState) {
+        UpdateCheckState.Idle -> stringResource(R.string.update_check_idle)
+        UpdateCheckState.Checking -> stringResource(R.string.update_checking)
+        UpdateCheckState.UpToDate -> stringResource(R.string.update_up_to_date)
+        is UpdateCheckState.Available -> stringResource(R.string.update_available, state.version)
+        UpdateCheckState.Failed -> stringResource(R.string.update_check_failed)
+    }
+
+    // 调试开关确认弹窗（用户 2026-09-05 拍板）：开启需 5 秒倒计时——该开关开启后
+    // 症状与真实 :ui 死亡完全一致（toast"服务不可用"+5 次真熔断），且存 remotePrefs
+    // 跨卸载重装存活，作者本人都曾被它误伤；关闭路径保持即时（不给出恢复障碍）
+    var showBlackholeConfirm by remember { mutableStateOf(false) }
+    var countdown by remember { mutableIntStateOf(5) }
+    LaunchedEffect(showBlackholeConfirm) {
+        if (!showBlackholeConfirm) return@LaunchedEffect
+        countdown = 5
+        while (countdown > 0) {
+            delay(1000)
+            countdown--
+        }
+    }
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -116,7 +174,7 @@ internal fun AboutPage(
                         contentDescription = stringResource(R.string.app_icon_content_desc),
                         modifier = Modifier
                             .size(68.dp)
-                            .clip(CircleShape)
+                            .clip(RoundedCornerShape(17.dp))
                             .background(MiuixTheme.colorScheme.primaryContainer)
                     )
                     Spacer(modifier = Modifier.height(12.dp))
@@ -142,6 +200,17 @@ internal fun AboutPage(
                     BasicComponent(
                         title = stringResource(R.string.about_version),
                         summary = versionName
+                    )
+                    BasicComponent(
+                        title = stringResource(R.string.update_check),
+                        summary = updateSummary,
+                        onClick = {
+                            when (val state = updateState) {
+                                is UpdateCheckState.Available ->
+                                    openExternalUrl(context, state.pageUrl.ifEmpty { PROJECT_URL })
+                                else -> checkForUpdate()
+                            }
+                        }
                     )
                     BasicComponent(
                         title = stringResource(R.string.about_version_code),
@@ -222,24 +291,117 @@ internal fun AboutPage(
         item { SmallTitle(text = stringResource(R.string.debug_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                SwitchPreference(
+                var selfCheckBusy by remember { mutableStateOf(false) }
+                BasicComponent(
+                    title = stringResource(R.string.selfcheck_export),
+                    summary = if (selfCheckBusy) {
+                        stringResource(R.string.selfcheck_exporting)
+                    } else {
+                        stringResource(R.string.selfcheck_export_summary)
+                    },
+                    onClick = {
+                        if (selfCheckBusy) return@BasicComponent
+                        selfCheckBusy = true
+                        updateScope.launch {
+                            val path = runCatching {
+                                val content = SelfCheck.generate(context, service, effectivePrefs)
+                                SelfCheck.export(context, content)
+                            }.getOrElse { context.getString(R.string.unknown) + " (${it.message})" }
+                            selfCheckBusy = false
+                            runCatching {
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.selfcheck_export_done, path),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                )
+                if (com.lsp.hypersidebar.BuildConfig.DEBUG) SwitchPreference(
                     title = stringResource(R.string.debug_relay_blackhole),
                     summary = stringResource(R.string.debug_relay_blackhole_summary),
                     checked = relayBlackhole,
                     onCheckedChange = {
-                        // 写 remotePrefs：launcher 侧每次执行广播时读取（binder 缓存实时同步）
-                        prefs.savePref(PrefKeys.DEBUG_RELAY_BLACKHOLE, it)
+                        if (it) {
+                            // 开启走 5 秒倒计时确认弹窗；关闭保持即时（恢复路径不加障碍）
+                            showBlackholeConfirm = true
+                        } else {
+                            // 乐观本地更新：开关样式即时翻转（写入→revision→重组的异步链
+                            // 不保证触发，曾实测样式滞留旧态）；写 remotePrefs，
+                            // launcher 侧每次执行广播时读取（binder 缓存实时同步）
+                            relayBlackhole = false
+                            effectivePrefs.savePref(PrefKeys.DEBUG_RELAY_BLACKHOLE, false)
+                        }
                     }
                 )
             }
         }
     }
+
+    // 确认弹窗：样式对齐 ResetConfirmDialog（miuix WindowDialog + 双等宽 TextButton），
+    // 醒目化=后果行染 error 色 + 确认按钮倒计时期间禁用（变暗）且按钮染 error 色
+    WindowDialog(
+        show = showBlackholeConfirm,
+        title = stringResource(R.string.debug_relay_confirm_title),
+        onDismissRequest = { showBlackholeConfirm = false },
+        content = {
+            Text(
+                text = stringResource(R.string.debug_relay_confirm_summary),
+                color = MiuixTheme.colorScheme.error,
+                style = MiuixTheme.textStyles.body2
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = if (countdown > 0) {
+                    stringResource(R.string.debug_relay_confirm_countdown, countdown)
+                } else {
+                    stringResource(R.string.debug_relay_confirm_ready)
+                },
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                style = MiuixTheme.textStyles.footnote1
+            )
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(
+                    text = stringResource(R.string.layout_sheet_cancel),
+                    onClick = { showBlackholeConfirm = false },
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(20.dp))
+                TextButton(
+                    text = if (countdown > 0) {
+                        stringResource(R.string.debug_relay_confirm_action_counting, countdown)
+                    } else {
+                        stringResource(R.string.debug_relay_confirm_action)
+                    },
+                    onClick = {
+                        relayBlackhole = true
+                        effectivePrefs.savePref(PrefKeys.DEBUG_RELAY_BLACKHOLE, true)
+                        showBlackholeConfirm = false
+                    },
+                    enabled = countdown <= 0,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColors(color = MiuixTheme.colorScheme.error)
+                )
+            }
+        }
+    )
 }
 
 // 项目地址取自仓库 origin（github.com/mikudayoooooooo/HyperSideBar）——改仓库时同步改这里
 private const val AUTHOR_HANDLE = "mikudayoooooooo"
 private const val AUTHOR_URL = "https://github.com/mikudayoooooooo"
 private const val PROJECT_URL = "https://github.com/mikudayoooooooo/HyperSideBar"
+
+/** 检查更新 UI 态；Failed 可重试，Available 点击跳 Release 页 */
+private sealed interface UpdateCheckState {
+    data object Idle : UpdateCheckState
+    data object Checking : UpdateCheckState
+    data object UpToDate : UpdateCheckState
+    data class Available(val version: String, val pageUrl: String) : UpdateCheckState
+    data object Failed : UpdateCheckState
+}
 
 private fun openExternalUrl(context: android.content.Context, url: String) {
     runCatching {

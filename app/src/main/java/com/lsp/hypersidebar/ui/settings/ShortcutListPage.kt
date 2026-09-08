@@ -263,6 +263,14 @@ internal fun ShortcutListPage(
                             onClick = { onAdd(ShortcutKind.INTENT_URI) },
                             enabled = !atStoreCap
                         )
+                        // C3（批次 3）：快捷开关磁贴入口（用户 2026-09-05：与上两项同级；
+                        // 将来 ShortcutManager 型应用快捷方式并入同一选择器）
+                        ArrowPreference(
+                            title = stringResource(R.string.shortcuts_add_qs_tile),
+                            summary = stringResource(R.string.shortcuts_add_qs_tile_summary),
+                            onClick = { onAdd(ShortcutKind.QS_TILE) },
+                            enabled = !atStoreCap
+                        )
                     }
                 }
             }
@@ -337,6 +345,15 @@ private fun buildShortcutSummary(shortcut: ShortcutAction, unsetUri: String, too
             val pkg = shortcut.packageName ?: "?"
             val svc = shortcut.serviceName ?: "?"
             "$pkg/$svc"
+        }
+        ShortcutKind.QS_TILE -> {
+            val pkg = shortcut.packageName ?: "?"
+            val svc = shortcut.serviceName ?: "?"
+            "$pkg/$svc"
+        }
+        ShortcutKind.SHORTCUT_ID -> {
+            val pkg = shortcut.packageName ?: "?"
+            "$pkg/#${shortcut.shortcutId ?: "?"}"
         }
     }
     return if (raw.length > 40) raw.take(38) + "…" else raw

@@ -14,13 +14,19 @@ private const val TAG = "ShortcutModels"
  * - SERVICE: 显式 Service（向后兼容旧数据）
  * - INTENT_URI: Intent URI (deep link / action / data)
  * - TOOLBOX: 内置视频/游戏面板快捷项（不占用户名额）
+ * - QS_TILE: 快捷开关磁贴（TileService 类，SystemUI hook 数据层直点触发——无须 root、
+ *   无须固定在控制中心，2026-09-05 定稿；hook 缺席时自动回退 root 兜底）
+ * - SHORTCUT_ID: 动态/固定快捷方式（微信扫一扫等 runtime 推送项，2026-09-08 定稿）——
+ *   仅默认桌面可 startShortcut，经 launcher 进程桥代发（B2 归档结论因桌面桥的存在过时）
  */
 enum class ShortcutKind {
     COMPONENT,
     ACTIVITY,
     INTENT_URI,
     TOOLBOX,
-    SERVICE
+    SERVICE,
+    QS_TILE,
+    SHORTCUT_ID
 }
 
 /**
@@ -48,6 +54,7 @@ data class ShortcutAction(
     val serviceName: String? = null,
     val intentUri: String? = null,
     val iconPackageName: String? = null,
+    val shortcutId: String? = null,
     val order: Int = 0
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
@@ -61,6 +68,7 @@ data class ShortcutAction(
         putOpt("serviceName", serviceName)
         putOpt("intentUri", intentUri)
         putOpt("iconPackageName", iconPackageName)
+        putOpt("shortcutId", shortcutId)
         put("order", order)
     }
 
@@ -78,6 +86,7 @@ data class ShortcutAction(
             serviceName = json.optString("serviceName", "").ifEmpty { null },
             intentUri = json.optString("intentUri", "").ifEmpty { null },
             iconPackageName = json.optString("iconPackageName", "").ifEmpty { null },
+            shortcutId = json.optString("shortcutId", "").ifEmpty { null },
             order = json.optInt("order", 0)
         )
     }
@@ -146,6 +155,9 @@ object ShortcutStore {
 
         try {
             prefs.edit().putString(KEY, arr.toString()).apply()
+            // 诊断锚点：快捷栏缺失问题时区分"保存没落盘"（无此行/条目缺）vs"扇形没读到"
+            Log.i(TAG, "saved ${userItems.size} shortcuts: " +
+                userItems.joinToString { "${it.kind}:${it.label}(${if (it.enabled) "on" else "off"})" })
         } catch (e: Exception) {
             Log.e(TAG, "saveUserShortcuts: write failed", e)
         }
@@ -238,10 +250,13 @@ object ShortcutStore {
 
         // 用户启用的快捷方式：栏上限 6 含占位（PRD §7.1）——占位在场取 5 个，隐藏时 6 个全上
         val maxUser = if (toolboxAvailable) 5 else 6
-        loadUserShortcuts(prefs)
-            .filter { it.enabled }
-            .take(maxUser)
-            .forEach { result.add(it) }
+        val userEnabled = loadUserShortcuts(prefs).filter { it.enabled }
+        val picked = userEnabled.take(maxUser)
+        // 诊断锚点：与 saveUserShortcuts 的 "saved N" 配对——读端缓存陈旧时
+        // enabled 数与最近一次 saved 数不一致
+        Log.i(TAG, "runtimeQuick: user=${userEnabled.size} out=${picked.size} " +
+            "kinds=${picked.joinToString { it.kind.name }}")
+        picked.forEach { result.add(it) }
 
         return result
     }

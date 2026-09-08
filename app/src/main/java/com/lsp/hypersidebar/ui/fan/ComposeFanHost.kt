@@ -107,11 +107,16 @@ class ComposeFanHost(
         Log.i(
             TAG,
             "config: icon=${config.iconSizeDp} inner=${config.innerRadiusDp}d outer=${config.outerRadiusDp}d " +
-                "dead=${config.deadZoneDp}d outerN=${config.maxAppsOuter} innerN=${config.maxAppsInner} landscape=$isLandscape"
+                "dead=${config.deadZoneDp}d outerN=${config.maxAppsOuter} innerN=${config.maxAppsInner} landscape=$isLandscape " +
+                "fog=${readFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)} " +
+                "dim=${readBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)}"
         )
         pendingInput = GeometryInput(anchorX, anchorY, apps, quickApps, isLandscape)
         resetInteractionState()
 
+        // 耗时锚点（呼出卡顿归因）：firstBuild=首次装配（Compose 运行时类加载+首次组合，
+        // 项目实测 ~250-300ms）；addView=窗口创建 binder+首帧前成本，每次呼出都发生
+        val firstBuild = !built
         if (!built) {
             buildComposition()
             built = true
@@ -121,7 +126,9 @@ class ComposeFanHost(
             // 防御：池化后理论上 dismiss 必摘窗口，但 compose 内部 onDismiss 等路径
             // 若留下挂载态，重复 addView 会直接抛——先收敛到摘除态
             if (wrapper.isAttachedToWindow) detachWindow()
+            val tAddMs = SystemClock.elapsedRealtime()
             wm.addView(wrapper, buildWindowParams())
+            Log.i(TAG, "addView: ${SystemClock.elapsedRealtime() - tAddMs}ms")
         } catch (e: Throwable) {
             Log.e(TAG, "Failed to attach fan window", e)
             detachWindow()
@@ -130,7 +137,7 @@ class ComposeFanHost(
         // 首帧绘制前算几何（origin-before-geometry，1B）：悬浮窗被系统 inset 后
         // 真实原点/尺寸只有布局后才可知。池化后视图多次 attach，OneShot 逐 show 重挂
         OneShotPreDrawListener.add(wrapper) { computeAndPublishGeometry(); true }
-        Log.i(TAG, "fan window attached (pooled=$built), ${apps.size} apps, ${quickApps.size} quick")
+        Log.i(TAG, "fan window attached (pooled=$built, firstBuild=$firstBuild), ${apps.size} apps, ${quickApps.size} quick")
     }
 
     /** 逐呼出重置交互态（几何清空 → 首帧前不渲染，touch/选中态归零）。 */
@@ -184,6 +191,14 @@ class ComposeFanHost(
                             geometry = g,
                             touchState = touchState,
                             colors = themeColors,
+                            // 路线 C 视觉参数：逐呼出随重组重读（几何状态变化驱动），
+                            // 与 extractFanThemeColors 同一读取模式
+                            fogIntensity = readFloat(
+                                PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY
+                            ),
+                            dimEnabled = readBoolean(
+                                PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED
+                            ),
                             onAppSelected = { app -> onAppSelected?.invoke(app) },
                             onQuickAppSelected = { app -> onQuickAppSelected?.invoke(app) },
                             // compose 内部请求收起 → 走同一 dismiss 语义（摘窗口+通知 controller）
@@ -596,6 +611,10 @@ class ComposeFanHost(
 
     private fun readInt(key: String, default: Int): Int {
         return try { prefs.getInt(key, default) } catch (_: Exception) { default }
+    }
+
+    private fun readBoolean(key: String, default: Boolean): Boolean {
+        return try { prefs.getBoolean(key, default) } catch (_: Exception) { default }
     }
 
     @Composable

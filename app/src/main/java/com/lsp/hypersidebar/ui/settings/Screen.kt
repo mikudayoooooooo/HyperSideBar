@@ -21,4 +21,7 @@ internal sealed interface SettingsKey : NavKey {
      */
     data class ShortcutEdit(val shortcut: ShortcutAction, val isNew: Boolean) : SettingsKey
     data object ShortcutPicker : SettingsKey
+
+    /** C3（批次 3）：QS 磁贴专属选择器（平铺全部扫到的 TileService，编辑页磁贴分支进入） */
+    data object QsTilePicker : SettingsKey
 }

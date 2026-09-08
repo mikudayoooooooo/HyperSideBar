@@ -8,6 +8,7 @@ import io.github.kyuubiran.ezxhelper.xposed.EzXposed
 import com.lsp.hypersidebar.hook.BaseHook
 import com.lsp.hypersidebar.hook.EdgeGestureHook
 import com.lsp.hypersidebar.hook.FreeformRelayHook
+import com.lsp.hypersidebar.hook.SystemUiHook
 import com.lsp.hypersidebar.hook.TurboLayout
 
 class XposedInit : XposedModule() {
@@ -16,6 +17,7 @@ class XposedInit : XposedModule() {
     private var turboLayoutHook: TurboLayout? = null
     private var freeformRelayHook: FreeformRelayHook? = null
     private var edgeGestureHook: EdgeGestureHook? = null
+    private var systemUiHook: SystemUiHook? = null
 
     override fun onModuleLoaded(param: ModuleLoadedParam) {
         EzXposed.initOnModuleLoaded(this, param)
@@ -32,22 +34,40 @@ class XposedInit : XposedModule() {
         when {
             param.packageName == "com.miui.securitycenter" && procName.endsWith(":ui") -> {
                 // 横屏 B 路线触发端 + 竖屏小白条隐藏穿透宿主 + 执行端（fan 选中动作本进程直执行）
+                // SyncedPrefs 包装（同 home 端批次 2）：总开关/横屏 dwell 等读取走同步广播
+                // 缓存命中，实时性不再单靠 LSPosed push 订阅
+                val prefs = com.lsp.hypersidebar.util.SyncedPrefs(remotePrefsWithProbe())
                 if (turboLayoutHook == null) {
-                    val prefs = remotePrefsWithProbe()
                     turboLayoutHook = TurboLayout(prefs)
                 }
                 if (freeformRelayHook == null) {
-                    freeformRelayHook = FreeformRelayHook()
+                    // prefs 同时供 FreeformRelay 做跨进程广播令牌校验（批次 0 安全修复）
+                    freeformRelayHook = FreeformRelayHook(prefs)
                 }
                 initHooks(turboLayoutHook!!, freeformRelayHook!!)
             }
             param.packageName == "com.miui.home" && procName == "com.miui.home" -> {
                 // 竖屏边缘手势通道（内滑+停顿零干扰透传；横屏触发已移交 :ui B 路线）
                 if (edgeGestureHook == null) {
-                    val prefs = remotePrefsWithProbe()
-                    edgeGestureHook = EdgeGestureHook(prefs)
+                    // SyncedPrefs 包装（批次 2）：配置同步广播缓存命中优先——
+                    // RemotePreferences 本体是死快照且 LSPosed 框架侧还做进程级
+                    // 缓存（重调 API 也是同一实例），配置实时性只能走广播通道
+                    edgeGestureHook = EdgeGestureHook(
+                        com.lsp.hypersidebar.util.SyncedPrefs(remotePrefsWithProbe())
+                    )
                 }
                 initHooks(edgeGestureHook!!)
+            }
+            // 仅主进程：SystemUI 子进程（截图等）若也注册接收器，有序广播可能被
+            // 子进程抢答 resultCode=0 覆盖主进程的点击结果
+            param.packageName == "com.android.systemui" && procName == "com.android.systemui" -> {
+                // 批次 3：QS 磁贴数据层直点桥（click-tile 门禁在回调层，QSTile.click 无约束）
+                if (systemUiHook == null) {
+                    systemUiHook = SystemUiHook(
+                        com.lsp.hypersidebar.util.SyncedPrefs(remotePrefsWithProbe())
+                    )
+                }
+                initHooks(systemUiHook!!)
             }
             else -> Log.d(TAG, "Skip package/process: ${param.packageName} / $procName")
         }

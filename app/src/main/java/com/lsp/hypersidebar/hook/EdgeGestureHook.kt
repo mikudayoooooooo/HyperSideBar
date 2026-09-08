@@ -64,8 +64,11 @@ class EdgeGestureHook(
                     if (alive) breaker.recordSuccess() else breaker.recordFailure("relay dead: $what")
                 },
                 shouldSimulateRelayDead = {
-                    runCatching { remotePrefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false) }
-                        .getOrDefault(false)
+                    // v2.0.0 发布门控（review 定案）：调试开关仅 debug 构建生效——
+                    // 该值跨重装存活，release 若读存量 true=远程用户自造熔断且无法关闭
+                    com.lsp.hypersidebar.BuildConfig.DEBUG &&
+                        runCatching { remotePrefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false) }
+                            .getOrDefault(false)
                 },
                 // 随广播附令牌（:ui 侧 FreeformRelayHook 校验）：每次发送时现读，
                 // 保证令牌下发后的第一次呼出就能带上新值，而不是绑死启动快照

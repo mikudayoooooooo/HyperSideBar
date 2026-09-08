@@ -318,7 +318,7 @@ internal fun AboutPage(
                         }
                     }
                 )
-                SwitchPreference(
+                if (com.lsp.hypersidebar.BuildConfig.DEBUG) SwitchPreference(
                     title = stringResource(R.string.debug_relay_blackhole),
                     summary = stringResource(R.string.debug_relay_blackhole_summary),
                     checked = relayBlackhole,

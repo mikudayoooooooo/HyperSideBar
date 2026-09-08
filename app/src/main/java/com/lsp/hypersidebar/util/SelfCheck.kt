@@ -85,7 +85,8 @@ object SelfCheck {
                 Intent(ACTION_FAN_LAUNCH).putExtra(PrefKeys.PROBE_EXTRA, true),
                 relayToken
             )
-            val debugSwitch = runCatching {
+            // 与 hook 消费端同门控：release 构建该开关不生效（存量毒值压死）
+            val debugSwitch = com.lsp.hypersidebar.BuildConfig.DEBUG && runCatching {
                 prefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false)
             }.getOrDefault(false)
             val framework = runCatching {

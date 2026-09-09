@@ -34,6 +34,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         fallbackPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
+        // 日志采集器（迭代六 §11.2）：注册 REPLY 接收器（幂等），日志页/自检 v2 数据源
+        com.lsp.hypersidebar.util.LogCollector.register(applicationContext)
+
         // D7 修复：改走进程级绑定桥（原自注册 listener 在"设置页先完成绑定后，
         // 本 Activity 重建时二次注册收不到回调"路径下 remotePrefs 永远为 null
         // ——计数 0 的根因；见 RemotePrefsBridge）

@@ -221,4 +221,17 @@
     <string name="shortcut_qs_tile_target">磁贴组件</string>
     <string name="shortcut_qs_tile_note">通过 SystemUI 直接触发系统快捷开关（无须加入控制中心）；需 LSPosed 勾选系统界面作用域，否则自动回退 root 兜底</string>
     <string name="all_apps_title">全部应用</string>
+
+    <!-- 运行日志页（迭代六 §11.2） -->
+    <string name="logs_title">运行日志</string>
+    <string name="logs_entry">运行日志</string>
+    <string name="logs_entry_summary">三进程内存环形缓冲，按进程/级别/关键字过滤，可导出</string>
+    <string name="logs_refresh">刷新</string>
+    <string name="logs_refreshing">正在拉取三进程日志…</string>
+    <string name="logs_export">导出</string>
+    <string name="logs_exporting">导出中…</string>
+    <string name="logs_export_done">运行日志已保存：下载/%s</string>
+    <string name="logs_empty">暂无日志，点「刷新」拉取各进程缓冲</string>
+    <string name="logs_verbose">高频手势日志</string>
+    <string name="logs_verbose_summary">逐手势明细（g#N/s#N），排查呼出灵敏度时开启；默认关（关闭时零开销），开启后下次手势生效</string>
 </resources>

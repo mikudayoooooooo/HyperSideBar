@@ -13,6 +13,7 @@ import android.os.Process
 import android.util.Log
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.RelayToken
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "UnfreezeRelay"
 
@@ -75,12 +76,12 @@ class UnfreezeRelayService : Service() {
         // 单检、再误读 10613 为 :ui——10613 实为模块 App 自身 uid，:ui 真实 uid 未测得，
         // 动态解析杜绝再猜）
         if (callerUid != Process.SYSTEM_UID && !isUiHostUid(callerUid)) {
-            Log.w(TAG, "unfreeze rejected: caller uid=$callerUid (pkg=$pkg)")
+            HLog.w(TAG, "unfreeze rejected: caller uid=$callerUid (pkg=$pkg)")
             return false
         }
         // ② 包名白名单（su 脚本唯一注入面）
         if (!pkg.matches(Regex("[A-Za-z0-9._]+"))) {
-            Log.w(TAG, "unfreeze rejected: malformed pkg=$pkg")
+            HLog.w(TAG, "unfreeze rejected: malformed pkg=$pkg")
             return false
         }
         // ③ 令牌（root 档=严格）：冷启动缓存为空时等桥绑定 ≤3s
@@ -88,11 +89,11 @@ class UnfreezeRelayService : Service() {
         val got = data.getString("token")
         if (RelayToken.current() == null) {
             val provisioned = RemotePrefsBridge.awaitTokenProvision()
-            Log.i(TAG, "unfreeze token cold-provision: ok=$provisioned")
+            HLog.i(TAG, "unfreeze token cold-provision: ok=$provisioned")
         }
         val expected = RelayToken.current()
         if (expected.isNullOrEmpty() || got.isNullOrEmpty() || got != expected) {
-            Log.w(TAG, "unfreeze rejected: bad token (pkg=$pkg, provisioned=${!expected.isNullOrEmpty()})")
+            HLog.w(TAG, "unfreeze rejected: bad token (pkg=$pkg, provisioned=${!expected.isNullOrEmpty()})")
             return false
         }
         // 复合脚本整串作为单个 -c 参数裸传（su -c 引号坑，见 Intent URI 坑链）；
@@ -111,7 +112,7 @@ class UnfreezeRelayService : Service() {
             ok = proc.exitValue() == 0
             detail = "out=[${out.trim()}] err=[${err.trim()}]"
         }.onFailure { detail = "exec failed: ${it.message}" }
-        Log.i(TAG, "unfreeze $pkg: su ok=$ok $detail")
+        HLog.i(TAG, "unfreeze $pkg: su ok=$ok $detail")
         return ok
     }
 }

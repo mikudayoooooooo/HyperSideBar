@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import java.util.concurrent.CopyOnWriteArrayList
+import com.lsp.hypersidebar.util.HLog
 
 /**
  * 进程级 remotePrefs 绑定桥（迭代五 D7 修复）。
@@ -83,14 +84,14 @@ object RemotePrefsBridge : XposedServiceHelper.OnServiceListener {
 
     override fun onServiceBind(service: XposedService) {
         this.service = service
-        Log.i(TAG, "onServiceBind")
+        HLog.i(TAG, "onServiceBind")
         // getRemotePreferences 是一次性同步 binder 拉取全量快照，挪出回调线程
         Thread {
             runCatching { service.getRemotePreferences(PREFS_NAME) }.onSuccess { p ->
                 prefs = p
                 // 令牌同步（模块进程唯一可写端，幂等）：跨进程广播防伪依赖此值
                 RelayToken.sync(p)
-                Log.i(TAG, "remotePrefs bound, customApps=" +
+                HLog.i(TAG, "remotePrefs bound, customApps=" +
                     runCatching { p.getStringSet(com.lsp.hypersidebar.prefs.PrefKeys.CUSTOM_APPS, emptySet()) }
                         .getOrNull()?.size)
                 listeners.forEach { runCatching { it(p) } }
@@ -99,7 +100,7 @@ object RemotePrefsBridge : XposedServiceHelper.OnServiceListener {
     }
 
     override fun onServiceDied(service: XposedService) {
-        Log.w(TAG, "onServiceDied")
+        HLog.w(TAG, "onServiceDied")
         this.service = null
         prefs = null
     }

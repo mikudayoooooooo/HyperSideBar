@@ -11,6 +11,7 @@ import com.lsp.hypersidebar.util.AppMetaCache
 import com.lsp.hypersidebar.util.DataLoader
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutStore
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "FanMenuController"
 
@@ -59,7 +60,7 @@ class FanMenuController(
         // 触摸流断供：手势中止/事件链断裂，UP 收起与滑回重置都不再有人驱动——
         // 0.x"fan 常驻"症状的最后防线（唯一不依赖事件流的收起路径）
         watchdogFires++
-        Log.w(TAG, "idle watchdog: no touch for ${idleMs}ms, self-dismiss (fire #$watchdogFires)")
+        HLog.w(TAG, "idle watchdog: no touch for ${idleMs}ms, self-dismiss (fire #$watchdogFires)")
         dismiss()
     }
 
@@ -77,7 +78,7 @@ class FanMenuController(
         // hook 的触摸回调可能不在主线程（launcher 的 GestureStubView.onTouchEvent 经
         // MiuiMirror 输入线程分发，实测 tid≠主线程）；Compose 生命周期装配必须主线程
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
-            Log.i(TAG, "show: hopping to main thread (from ${Thread.currentThread().name})")
+            HLog.i(TAG, "show: hopping to main thread (from ${Thread.currentThread().name})")
             mainHandler.post { showInternal(context, anchorX, anchorY) }
         } else {
             showInternal(context, anchorX, anchorY)
@@ -87,7 +88,7 @@ class FanMenuController(
     private fun showInternal(context: Context, anchorX: Float, anchorY: Float) {
         // 实测轮七：入口状态遥测——定位 isShowing 被无日志翻转的路径（双开根因）
         Trace.current = Trace.new()
-        Log.i(TAG, tl() + "showInternal enter: isShowing=$isShowing host=${host != null} anchor=($anchorX,$anchorY)")
+        HLog.i(TAG, tl() + "showInternal enter: isShowing=$isShowing host=${host != null} anchor=($anchorX,$anchorY)")
         if (isShowing && host != null) return
         // 耗时锚点（呼出卡顿归因）：cost=本次呼出主线程装配全程；firstAssembly=true
         // =本进程池为空（进程冷启/被杀后首呼出），这是"有时候呼出会卡"的头号嫌疑段
@@ -97,11 +98,11 @@ class FanMenuController(
         // 防御性单窗口不变量：任何状态下不允许两个 fan 窗口并存——
         // 若 isShowing 已被异常翻回 false 而旧 host 仍存活，先拆除再建新
         host?.let { stale ->
-            Log.w(TAG, "showInternal: orphan host detected, tearing down")
+            HLog.w(TAG, "showInternal: orphan host detected, tearing down")
             runCatching { stale.dismiss() }
         }
         host = null
-        Log.i(TAG, "show: anchor=($anchorX, $anchorY)")
+        HLog.i(TAG, "show: anchor=($anchorX, $anchorY)")
 
         try {
             val isLandscape = context.resources.configuration.orientation ==
@@ -176,11 +177,11 @@ class FanMenuController(
                 apps.map { it.packageName }.filter { it != ALL_APPS_PKG }
             )
             onMechanismResult?.invoke(true, "show ok")
-            Log.i(TAG, tl() + "show: fan overlay added (pooled), ${allQuick.size} quick actions, landscape=$isLandscape, " +
+            HLog.i(TAG, tl() + "show: fan overlay added (pooled), ${allQuick.size} quick actions, landscape=$isLandscape, " +
                 "cost=${android.os.SystemClock.elapsedRealtime() - t0}ms, firstAssembly=$firstAssembly")
 
         } catch (e: Throwable) {
-            Log.e(TAG, tl() + "show FAILED: ${e.message}", e)
+            HLog.e(TAG, tl() + "show FAILED: ${e.message}", e)
             isShowing = false
             host = null
             evictIdleHost()
@@ -202,7 +203,7 @@ class FanMenuController(
         val ctx = activeContext ?: throw IllegalStateException("activeContext missing")
         return ComposeFanHost(ctx, prefs).apply {
             onAppSelected = { appInfo ->
-                Log.i(TAG, tl() + "onAppSelected: ${appInfo.packageName}")
+                HLog.i(TAG, tl() + "onAppSelected: ${appInfo.packageName}")
                 val context = activeContext
                 if (context != null) {
                     if (appInfo.packageName == ALL_APPS_PKG) {
@@ -215,7 +216,7 @@ class FanMenuController(
             }
 
             onQuickAppSelected = { appInfo ->
-                Log.i(TAG, tl() + "onQuickAppSelected: ${appInfo.packageName}")
+                HLog.i(TAG, tl() + "onQuickAppSelected: ${appInfo.packageName}")
                 val context = activeContext
                 if (context != null) {
                     if (appInfo.actionHandle != null) {
@@ -242,7 +243,7 @@ class FanMenuController(
         idleHost?.let { h ->
             idleHost = null
             runCatching { h.destroy() }
-                .onFailure { Log.w(TAG, "idle host destroy failed: ${it.message}") }
+                .onFailure { HLog.w(TAG, "idle host destroy failed: ${it.message}") }
         }
     }
 
@@ -277,7 +278,7 @@ class FanMenuController(
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
             doDismiss("main")
         } else {
-            Log.i(TAG, tl() + "dismiss: posted from ${Thread.currentThread().name}")
+            HLog.i(TAG, tl() + "dismiss: posted from ${Thread.currentThread().name}")
             mainHandler.post { doDismiss("posted") }
         }
     }
@@ -289,13 +290,13 @@ class FanMenuController(
             isShowing = false
             return
         }
-        Log.i(TAG, tl() + "doDismiss($via): tearing down host")
+        HLog.i(TAG, tl() + "doDismiss($via): tearing down host")
         // 强一致（1C §3）：先完成视图真实摘除，再清状态位——顺序颠倒会把
         // "视图还活着"伪装成"已收起"，下次呼出在旧窗口之上再叠一个（双开根因）
         try {
             h.dismiss()
         } catch (e: Throwable) {
-            Log.w(TAG, "host.dismiss threw: ${e.message}")
+            HLog.w(TAG, "host.dismiss threw: ${e.message}")
         }
         isShowing = false
         host = null

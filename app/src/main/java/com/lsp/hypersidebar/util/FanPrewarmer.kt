@@ -2,6 +2,7 @@ package com.lsp.hypersidebar.util
 
 import android.content.Context
 import android.util.Log
+import com.lsp.hypersidebar.util.HLog
 
 /**
  * fan 呼出预热器（2026-09-07 方案 2：bind 唤醒 relay + prebind，无 kill）。
@@ -54,7 +55,7 @@ object FanPrewarmer {
             runCatching {
                 Thread.sleep(PREWARM_DELAY_MS)
                 tileTargets.forEach { (pkg, cn) -> prewarmTile(appCtx, pkg, cn, token) }
-            }.onFailure { Log.w(TAG, "prewarm loop failed: ${it.message}") }
+            }.onFailure { HLog.w(TAG, "prewarm loop failed: ${it.message}") }
         }
     }
 
@@ -62,6 +63,6 @@ object FanPrewarmer {
     private fun prewarmTile(context: Context, pkg: String, cn: String, token: String?) {
         UnfreezeBridge.unfreezeBlocking(context, pkg, token)
         val served = QsTileClickBridge.sendPrebindBlocking(context, cn, token)
-        Log.i(TAG, "prewarm: pkg=$pkg cn=$cn prebind=$served")
+        HLog.i(TAG, "prewarm: pkg=$pkg cn=$cn prebind=$served")
     }
 }

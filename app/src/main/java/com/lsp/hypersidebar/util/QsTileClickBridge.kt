@@ -10,6 +10,7 @@ import android.util.Log
 import com.lsp.hypersidebar.prefs.PrefKeys
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import com.lsp.hypersidebar.util.HLog
 
 /**
  * QS 磁贴 SystemUI 直点桥的发送端（批次 3，配对 hook/SystemUiHook）。
@@ -59,11 +60,11 @@ object QsTileClickBridge {
                 Activity.RESULT_OK, null, null
             )
         } catch (e: Exception) {
-            Log.w(TAG, "send failed: ${e.message}")
+            HLog.w(TAG, "send failed: ${e.message}")
             return false
         }
         latch.await(RESULT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-        Log.i(TAG, "${if (prebind) "prebind" else "click"} sent: cn=$componentName delivered=$delivered")
+        HLog.i(TAG, "${if (prebind) "prebind" else "click"} sent: cn=$componentName delivered=$delivered")
         return delivered
     }
 }

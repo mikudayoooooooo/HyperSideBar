@@ -11,6 +11,7 @@ import android.os.Messenger
 import android.os.Process
 import android.util.Log
 import com.lsp.hypersidebar.util.RemotePrefsBridge
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "ConfigPull"
 
@@ -71,19 +72,19 @@ class ConfigPullService : Service() {
     /** 返回全量配置 Map；null=调用方不合法或 remotePrefs 未绑定（含等待超时） */
     private fun handlePull(callerUid: Int): Map<String, Any>? {
         if (!isAllowedUid(callerUid)) {
-            Log.w(TAG, "pull rejected: caller uid=$callerUid")
+            HLog.w(TAG, "pull rejected: caller uid=$callerUid")
             return null
         }
         if (RemotePrefsBridge.prefs == null) {
             val bound = RemotePrefsBridge.awaitPrefsBind()
-            Log.i(TAG, "pull cold-provision: bound=$bound")
+            HLog.i(TAG, "pull cold-provision: bound=$bound")
         }
         val prefs = RemotePrefsBridge.prefs ?: return null
         val map = HashMap<String, Any>()
         for ((k, v) in prefs.all) {
             if (k != null && v != null) map[k] = v
         }
-        Log.i(TAG, "pull served: ${map.size} keys")
+        HLog.i(TAG, "pull served: ${map.size} keys")
         return map
     }
 }

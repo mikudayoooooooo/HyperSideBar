@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "ConfigPullBind"
 
@@ -92,7 +93,7 @@ object ConfigPullBridge {
                         }
                         Messenger(service).send(msg)
                     }.onFailure {
-                        Log.w(TAG, "send pull failed: ${it.message}")
+                        HLog.w(TAG, "send pull failed: ${it.message}")
                         latch.countDown()
                     }
                 }
@@ -104,16 +105,16 @@ object ConfigPullBridge {
                 conn, Context.BIND_AUTO_CREATE
             )
         } catch (e: Exception) {
-            Log.w(TAG, "bind failed: ${e.message}")
+            HLog.w(TAG, "bind failed: ${e.message}")
         }
         val done = latch.await(PULL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         runCatching { conn?.let { appCtx.unbindService(it) } }
         val map = gotMap
         if (done && map != null) {
             ConfigSync.applySync(map)
-            Log.i(TAG, "config pulled: ${map.size} keys, cost=${SystemClock.elapsedRealtime() - t0}ms")
+            HLog.i(TAG, "config pulled: ${map.size} keys, cost=${SystemClock.elapsedRealtime() - t0}ms")
         } else {
-            Log.w(TAG, "pull timeout/unavailable: done=$done cost=${SystemClock.elapsedRealtime() - t0}ms")
+            HLog.w(TAG, "pull timeout/unavailable: done=$done cost=${SystemClock.elapsedRealtime() - t0}ms")
         }
     }
 }

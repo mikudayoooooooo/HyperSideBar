@@ -51,6 +51,21 @@ object PrefKeys {
     /** 调试开关：模拟 :ui 执行端失联（熔断链路验证用；:ui 自然死亡窗口太短无法实测） */
     const val DEBUG_RELAY_BLACKHOLE = "debugRelayBlackhole"
 
+    /** 运行时调试开关：逐手势高频明细日志（g#N/s#N 系列；默认关、release 可开，§11.2）。
+     *  赋值链=各进程 hook init 读一次 + ConfigSync.applySync 随全量配置刷新 */
+    const val DEBUG_VERBOSE_LOGS = "debugVerboseLogs"
+
+    // ===== 运行日志拉取通道（迭代六 §11.2）：模块 App 请求 hook 进程回传 HLog 环形缓冲 =====
+    // 与 manifest 快捷方式桥同模式（REQUEST 广播 → 各进程回 REPLY；模块 App 前台=活进程必收）
+    const val LOG_DUMP_REQUEST = "com.lsp.hypersidebar.action.LOG_DUMP_REQUEST"
+    const val LOG_DUMP_REPLY = "com.lsp.hypersidebar.action.LOG_DUMP_REPLY"
+    /** 回传 extra：进程短名（launcher/ui/app） */
+    const val LOG_DUMP_EXTRA_PROC = "proc"
+    /** 回传 extra：HLog.dumpJson 产物（JSON 数组字符串） */
+    const val LOG_DUMP_EXTRA_LOGS = "logs"
+    /** 回传 extra：进程状态快照（CircuitBreaker 等，JSON 对象字符串，可缺省） */
+    const val LOG_DUMP_EXTRA_STATUS = "status"
+
     // ===== :ui → 模块 App 的快捷方式 root 代发通道（§2.4 实测定案） =====
     // :ui（平台签名特权，非 uid 1000）对非 exported 目标 startActivityAsUser 静默假成功且无 su 授权；
     // 模块 App 进程持 root（su am start 可启动非导出组件，编辑页测试已验证）。

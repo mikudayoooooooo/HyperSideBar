@@ -33,6 +33,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.sqrt
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "ComposeFanHost"
 
@@ -104,7 +105,7 @@ class ComposeFanHost(
         config = buildFanConfig()
         // 诊断（迭代二 P5）：呼出时回显实际读到的配置值——对照滑条改动可判定
         // hook 侧 prefs 是否实时同步（stale=快照不更新）
-        Log.i(
+        HLog.i(
             TAG,
             "config: icon=${config.iconSizeDp} inner=${config.innerRadiusDp}d outer=${config.outerRadiusDp}d " +
                 "dead=${config.deadZoneDp}d outerN=${config.maxAppsOuter} innerN=${config.maxAppsInner} landscape=$isLandscape " +
@@ -128,16 +129,16 @@ class ComposeFanHost(
             if (wrapper.isAttachedToWindow) detachWindow()
             val tAddMs = SystemClock.elapsedRealtime()
             wm.addView(wrapper, buildWindowParams())
-            Log.i(TAG, "addView: ${SystemClock.elapsedRealtime() - tAddMs}ms")
+            HLog.i(TAG, "addView: ${SystemClock.elapsedRealtime() - tAddMs}ms")
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to attach fan window", e)
+            HLog.e(TAG, "Failed to attach fan window", e)
             detachWindow()
             throw e // 上抛给 controller：失败可观测（熔断计数）并弃池
         }
         // 首帧绘制前算几何（origin-before-geometry，1B）：悬浮窗被系统 inset 后
         // 真实原点/尺寸只有布局后才可知。池化后视图多次 attach，OneShot 逐 show 重挂
         OneShotPreDrawListener.add(wrapper) { computeAndPublishGeometry(); true }
-        Log.i(TAG, "fan window attached (pooled=$built, firstBuild=$firstBuild), ${apps.size} apps, ${quickApps.size} quick")
+        HLog.i(TAG, "fan window attached (pooled=$built, firstBuild=$firstBuild), ${apps.size} apps, ${quickApps.size} quick")
     }
 
     /** 逐呼出重置交互态（几何清空 → 首帧前不渲染，touch/选中态归零）。 */
@@ -161,7 +162,7 @@ class ComposeFanHost(
             input.apps, input.quickApps, config, density, input.isLandscape
         )
         geometryState.value = g
-        Log.i(
+        HLog.i(
             TAG,
             "geometry: origin=(${loc[0]},${loc[1]}) winSize=(${wrapper.width},${wrapper.height}) " +
                 "rawAnchor=(${input.anchorX.toInt()},${input.anchorY.toInt()}) anchor=(${g.anchor.x.toInt()},${g.anchor.y.toInt()}) " +
@@ -219,7 +220,7 @@ class ComposeFanHost(
                 if (!originValid && isAttachedToWindow && width > 0) {
                     runCatching { getLocationOnScreen(viewOrigin) }
                     originValid = true
-                    Log.i(TAG, "fan origin=(${viewOrigin[0]},${viewOrigin[1]}) size=(${width},${height})")
+                    HLog.i(TAG, "fan origin=(${viewOrigin[0]},${viewOrigin[1]}) size=(${width},${height})")
                 }
                 // 几何未就绪（首帧布局前的 ~1 帧）：消费事件不解析——屏上无渲染，无图标
                 // 可命中；事件归属本手势，漏给下层应用会成幽灵触摸
@@ -297,7 +298,7 @@ class ComposeFanHost(
                         // 预选时长检查（违反 PRD"预选不足 150ms 松手不启动"）
                         val dwellMs = if (selectedSince == 0L) 0L else SystemClock.uptimeMillis() - selectedSince
                         val hitItem = geometry.items.getOrNull(fanSel)
-                        Log.i(
+                        HLog.i(
                             TAG,
                             "UP resolve: local=(${x.toInt()},${y.toInt()}) raw=(${rawX.toInt()},${rawY.toInt()}) " +
                                 "dist=${dist.toInt()} deg=${"%.1f".format(deg)} fan=$fanSel" +
@@ -322,11 +323,11 @@ class ComposeFanHost(
                                 Log.d(TAG, "dwell too short: ${dwellTime}ms, not launching")
                             }
                             anySelected -> {
-                                Log.i(TAG, "selected fan: ${geometry.items[fanSel].app.packageName}")
+                                HLog.i(TAG, "selected fan: ${geometry.items[fanSel].app.packageName}")
                                 onAppSelected?.invoke(geometry.items[fanSel].app)
                             }
                             anyQuick -> {
-                                Log.i(TAG, "selected quick: ${geometry.quickApps[quickSel].packageName}")
+                                HLog.i(TAG, "selected quick: ${geometry.quickApps[quickSel].packageName}")
                                 onQuickAppSelected?.invoke(geometry.quickApps[quickSel])
                             }
                         }
@@ -372,7 +373,7 @@ class ComposeFanHost(
         } catch (e: Throwable) {
             // "not attached"= 窗口已不在（等价摘除成功）；其余异常窗口同样已脱离
             // 本进程管理——都按"摘除已确认"处理
-            Log.w(TAG, "removeView failed (treated as detached): ${e.message}")
+            HLog.w(TAG, "removeView failed (treated as detached): ${e.message}")
         }
         resetInteractionState()
     }
@@ -391,7 +392,7 @@ class ComposeFanHost(
         composeView?.let { cv ->
             composeView = null
             runCatching { cv.disposeComposition() }
-                .onFailure { Log.w(TAG, "disposeComposition failed: ${it.message}") }
+                .onFailure { HLog.w(TAG, "disposeComposition failed: ${it.message}") }
         }
         lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
@@ -571,7 +572,7 @@ class ComposeFanHost(
             val cy = geometry.quickBarY + barPadding + quickIconPx / 2f
             val d = sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy))
             if (d <= quickIconPx * 0.7f) {
-                Log.i(TAG, "quickSelected: ${quickAppsList[i].packageName} (dist=${d.toInt()}px)")
+                HLog.i(TAG, "quickSelected: ${quickAppsList[i].packageName} (dist=${d.toInt()}px)")
                 onQuickAppSelected?.invoke(quickAppsList[i])
                 return
             }

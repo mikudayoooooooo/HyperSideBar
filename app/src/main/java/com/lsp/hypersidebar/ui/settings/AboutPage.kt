@@ -68,6 +68,7 @@ internal fun AboutPage(
     service: XposedService?,
     prefs: SharedPreferences,
     prefsRevision: Int,
+    onNavigateToLogs: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -291,6 +292,12 @@ internal fun AboutPage(
         item { SmallTitle(text = stringResource(R.string.debug_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
+                // 运行日志页（§11.2）：三进程环形缓冲汇聚/过滤/导出，自检 v2 的日常入口
+                ArrowPreference(
+                    title = stringResource(R.string.logs_entry),
+                    summary = stringResource(R.string.logs_entry_summary),
+                    onClick = onNavigateToLogs
+                )
                 var selfCheckBusy by remember { mutableStateOf(false) }
                 BasicComponent(
                     title = stringResource(R.string.selfcheck_export),

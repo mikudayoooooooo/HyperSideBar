@@ -22,6 +22,7 @@ import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutLauncher
 import com.lsp.hypersidebar.util.SystemLaunchStrategy
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "FanLaunch"
 
@@ -59,7 +60,7 @@ class DirectLaunchStrategy(
             setPackage("com.miui.securitycenter")
         }
         context.sendBroadcast(intent, "com.miui.gamebooster.permission.PANNEL_OPEN")
-        Log.i(TAG, "openNativePanel: broadcast sent")
+        HLog.i(TAG, "openNativePanel: broadcast sent")
         Handler(Looper.getMainLooper()).postDelayed({
             PanelHideState.hidden.set(false)
         }, 5000)
@@ -138,7 +139,7 @@ class DirectLaunchStrategy(
                     check.reason == FailureReason.NOT_EXPORTED)
             ) {
                 if (relayLaunchToModule(context, shortcut)) return
-                Log.w(TAG, "relay launch to module app failed, falling back to local launch")
+                HLog.w(TAG, "relay launch to module app failed, falling back to local launch")
             }
         }
 
@@ -198,10 +199,10 @@ class DirectLaunchStrategy(
                 RelayToken.attach(this, RelayToken.read(remotePrefs))
             }
             context.sendBroadcast(intent)
-            Log.i(TAG, "[${Trace.current ?: "-"}] relay launch to module app sent: id=${shortcut.id} kind=${shortcut.kind}")
+            HLog.i(TAG, "[${Trace.current ?: "-"}] relay launch to module app sent: id=${shortcut.id} kind=${shortcut.kind}")
             true
         }.getOrElse {
-            Log.e(TAG, "relay launch to module app failed", it)
+            HLog.e(TAG, "relay launch to module app failed", it)
             false
         }
     }

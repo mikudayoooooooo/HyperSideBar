@@ -91,6 +91,7 @@ internal fun MainScreen(
         is SettingsKey.AppSelection -> top.title
         SettingsKey.ShortcutList, SettingsKey.ShortcutPicker, SettingsKey.QsTilePicker ->
             stringResource(R.string.shortcuts_add_section)
+        SettingsKey.Logs -> stringResource(R.string.logs_title)
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
     }
 
@@ -211,6 +212,7 @@ internal fun MainScreen(
                                 service = service,
                                 prefs = prefs,
                                 prefsRevision = prefsRevision,
+                                onNavigateToLogs = { aboutStack.add(SettingsKey.Logs) },
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -274,6 +276,14 @@ internal fun MainScreen(
                                 onPickActivity = { settingsStack.add(SettingsKey.ShortcutPicker) },
                                 onPickQsTile = { settingsStack.add(SettingsKey.QsTilePicker) },
                                 onBack = { settingsStack.removeLast() }
+                            )
+                        }
+                    }
+                    SettingsKey.Logs -> NavEntry(key) {
+                        DetailPageContainer {
+                            LogPage(
+                                prefs = prefs,
+                                modifier = Modifier.fillMaxSize()
                             )
                         }
                     }

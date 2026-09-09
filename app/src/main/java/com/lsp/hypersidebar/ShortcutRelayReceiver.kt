@@ -10,6 +10,7 @@ import com.lsp.hypersidebar.util.RelayToken
 import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.ShortcutLauncher
 import org.json.JSONObject
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "ShortcutRelay"
 
@@ -51,7 +52,7 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
         val shortcut = runCatching {
             ShortcutAction.fromJson(JSONObject(json))
         }.getOrNull() ?: run {
-            Log.w(TAG, "[${trace ?: "-"}] relay launch rejected: malformed shortcut json")
+            HLog.w(TAG, "[${trace ?: "-"}] relay launch rejected: malformed shortcut json")
             return
         }
 
@@ -65,11 +66,11 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
                 // remotePrefs 并同步令牌（≤3s；LSPosed 死则超时按拒绝处理，安全档不变）
                 if (com.lsp.hypersidebar.util.RelayToken.current() == null) {
                     val provisioned = awaitTokenProvision()
-                    Log.i(TAG, "[${trace ?: "-"}] relay token cold-provision: ok=$provisioned")
+                    HLog.i(TAG, "[${trace ?: "-"}] relay token cold-provision: ok=$provisioned")
                 }
-                Log.i(TAG, "[${trace ?: "-"}] relay launch: id=${shortcut.id} kind=${shortcut.kind}")
+                HLog.i(TAG, "[${trace ?: "-"}] relay launch: id=${shortcut.id} kind=${shortcut.kind}")
                 val result = ShortcutLauncher.launch(context, shortcut, DefaultLaunchStrategy())
-                Log.i(TAG, "[${trace ?: "-"}] relay launch result: $result")
+                HLog.i(TAG, "[${trace ?: "-"}] relay launch result: $result")
 
                 // 结果回执（2026-09-05）：①写 remotePrefs 供自检报告读取（远程排障
                 // 无需 adb）；②回告 :ui——失败 toast 到前台，成功静默

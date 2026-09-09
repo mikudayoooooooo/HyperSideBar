@@ -11,6 +11,7 @@ import com.lsp.hypersidebar.ui.fan.FanLaunchStrategy
 import com.lsp.hypersidebar.util.RelayToken
 import com.lsp.hypersidebar.util.Trace
 import com.lsp.hypersidebar.util.ShortcutAction
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "FanLaunch"
 
@@ -58,7 +59,7 @@ class BroadcastLaunchStrategy(
         crossinline configure: Intent.() -> Unit
     ) {
         if (shouldSimulateRelayDead()) {
-            Log.w(TAG, "relay blackholed (debug switch): $what")
+            HLog.w(TAG, "relay blackholed (debug switch): $what")
             handleRelayDead(context, what)
             return
         }
@@ -75,18 +76,18 @@ class BroadcastLaunchStrategy(
             object : BroadcastReceiver() {
                 override fun onReceive(c: Context, result: Intent?) {
                     if (resultCode != 0) {
-                        Log.i(TAG, "relay alive: $what delivered")
+                        HLog.i(TAG, "relay alive: $what delivered")
                         onRelayResult?.invoke(true, what)
                         return
                     }
-                    Log.e(TAG, "relay DEAD: $what not delivered (result code untouched)")
+                    HLog.e(TAG, "relay DEAD: $what not delivered (result code untouched)")
                     handleRelayDead(c, what)
                 }
             },
             Handler(Looper.getMainLooper()),
             0, null, null
         )
-        Log.i(TAG, "relay broadcast sent (ordered): $what")
+        HLog.i(TAG, "relay broadcast sent (ordered): $what")
     }
 
     private fun handleRelayDead(context: Context, what: String) {

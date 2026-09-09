@@ -14,6 +14,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.lsp.hypersidebar.UnfreezeRelayService
 import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "UnfreezeBind"
 
@@ -83,7 +84,7 @@ object UnfreezeBridge {
                         }
                         Messenger(service).send(msg)
                     }.onFailure {
-                        Log.w(TAG, "send unfreeze failed: ${it.message}")
+                        HLog.w(TAG, "send unfreeze failed: ${it.message}")
                         latch.countDown()
                     }
                 }
@@ -95,12 +96,12 @@ object UnfreezeBridge {
                 conn, Context.BIND_AUTO_CREATE
             )
         } catch (e: Exception) {
-            Log.w(TAG, "bind failed: ${e.message}")
+            HLog.w(TAG, "bind failed: ${e.message}")
         }
         val done = latch.await(UNFREEZE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
         runCatching { conn?.let { appCtx.unbindService(it) } }
         if (done) lastUnfreezeAt[pkg] = SystemClock.elapsedRealtime()
-        Log.i(TAG, "[${trace ?: "-"}] unfreeze bind: pkg=$pkg ok=$ok done=$done " +
+        HLog.i(TAG, "[${trace ?: "-"}] unfreeze bind: pkg=$pkg ok=$ok done=$done " +
             "cost=${SystemClock.elapsedRealtime() - t0}ms")
         return ok
     }

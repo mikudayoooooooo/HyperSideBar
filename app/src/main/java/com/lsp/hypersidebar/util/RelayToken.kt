@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import com.lsp.hypersidebar.prefs.PrefKeys
 import java.util.UUID
+import com.lsp.hypersidebar.util.HLog
 
 /**
  * 跨进程广播防伪令牌（迭代五批次 0 安全修复）。
@@ -43,12 +44,12 @@ object RelayToken {
         if (token.isNullOrEmpty()) {
             token = UUID.randomUUID().toString()
             prefs.edit().putString(PrefKeys.RELAY_TOKEN, token).commit()
-            Log.i(TAG, "relay token provisioned")
+            HLog.i(TAG, "relay token provisioned")
         }
         cached = token
         token
     }.getOrElse {
-        Log.w(TAG, "relay token sync failed: ${it.message}")
+        HLog.w(TAG, "relay token sync failed: ${it.message}")
         null
     }
 
@@ -72,7 +73,7 @@ object RelayToken {
         if (expected.isNullOrEmpty()) return true
         val got = intent.getStringExtra(PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN)
         if (got.isNullOrEmpty() || got != expected) {
-            Log.w(TAG, "fan relay rejected: bad token")
+            HLog.w(TAG, "fan relay rejected: bad token")
             return false
         }
         return true
@@ -83,7 +84,7 @@ object RelayToken {
         val expected = cached
         val got = intent.getStringExtra(PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN)
         if (expected.isNullOrEmpty() || got.isNullOrEmpty() || got != expected) {
-            Log.w(TAG, "root relay rejected: bad token (provisioned=${!expected.isNullOrEmpty()})")
+            HLog.w(TAG, "root relay rejected: bad token (provisioned=${!expected.isNullOrEmpty()})")
             return false
         }
         return true

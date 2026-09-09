@@ -14,6 +14,7 @@ import android.util.Log
 import com.lsp.hypersidebar.prefs.PrefKeys
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "ShortcutLauncher"
 
@@ -147,7 +148,7 @@ object ShortcutLauncher {
         strategy: LaunchStrategy,
         allowRootFallback: Boolean = true
     ): LaunchResult {
-        Log.i(TAG, "launch: id=${action.id} kind=${action.kind} strategy=${strategy.name}")
+        HLog.i(TAG, "launch: id=${action.id} kind=${action.kind} strategy=${strategy.name}")
 
         // TOOLBOX 类型不走这里，由 TurboLayout 直接处理广播
         if (action.kind == ShortcutKind.TOOLBOX) {
@@ -195,16 +196,16 @@ object ShortcutLauncher {
             if (validation.reason == FailureReason.ACTIVITY_NOT_FOUND &&
                 !targetPkg.isNullOrEmpty()
             ) {
-                Log.w(TAG, "launch: validateIntent refused (${validation.detail}), but package exists, trying direct launch")
+                HLog.w(TAG, "launch: validateIntent refused (${validation.detail}), but package exists, trying direct launch")
                 return tryLaunchDirect(context, intent, strategy, action, allowRootFallback)
             }
             // 验证失败，尝试 ROOT fallback（ROOT 可绕过 exported 检查）
             if (allowRootFallback && isRootAvailable() &&
                 validation.reason == FailureReason.NOT_EXPORTED) {
-                Log.i(TAG, "launch: exported check failed, trying ROOT fallback")
+                HLog.i(TAG, "launch: exported check failed, trying ROOT fallback")
                 return launchViaRoot(action, intent)
             }
-            Log.w(TAG, "launch: validation failed: ${validation.reason}: ${validation.detail}")
+            HLog.w(TAG, "launch: validation failed: ${validation.reason}: ${validation.detail}")
             return validation
         }
 
@@ -212,20 +213,20 @@ object ShortcutLauncher {
         return try {
             strategy.startActivity(context, intent)
             val cn = intent.component ?: intent.resolveActivity(context.packageManager)
-            Log.i(TAG, "launch: SUCCESS via ${strategy.name}, component=$cn")
+            HLog.i(TAG, "launch: SUCCESS via ${strategy.name}, component=$cn")
             LaunchResult.Success(cn)
         } catch (e: SecurityException) {
-            Log.w(TAG, "launch: SecurityException via ${strategy.name}, trying ROOT", e)
+            HLog.w(TAG, "launch: SecurityException via ${strategy.name}, trying ROOT", e)
             if (allowRootFallback && isRootAvailable()) {
                 launchViaRoot(action, intent)
             } else {
                 LaunchResult.Failure(FailureReason.SECURITY_EXCEPTION, e.message ?: "Permission denied")
             }
         } catch (e: android.content.ActivityNotFoundException) {
-            Log.e(TAG, "launch: ActivityNotFoundException via ${strategy.name}", e)
+            HLog.e(TAG, "launch: ActivityNotFoundException via ${strategy.name}", e)
             LaunchResult.Failure(FailureReason.ACTIVITY_NOT_FOUND, e.message ?: "Activity not found")
         } catch (e: Exception) {
-            Log.e(TAG, "launch: exception via ${strategy.name}", e)
+            HLog.e(TAG, "launch: exception via ${strategy.name}", e)
             if (allowRootFallback && isRootAvailable()) {
                 launchViaRoot(action, intent)
             } else {
@@ -308,7 +309,7 @@ object ShortcutLauncher {
         }
 
         val type = detectComponentType(context, pkg, cls)
-        Log.i(TAG, "launchComponent: $pkg/$cls detected as $type")
+        HLog.i(TAG, "launchComponent: $pkg/$cls detected as $type")
 
         return when (type) {
             ComponentType.SERVICE -> launchService(context, action.copy(
@@ -319,7 +320,7 @@ object ShortcutLauncher {
                 // UNKNOWN 时先尝试 Activity（更常见），失败后 fallback 到 Service
                 val activityResult = launchAsActivity(context, action, strategy, allowRootFallback)
                 if (activityResult is LaunchResult.Failure && type == ComponentType.UNKNOWN) {
-                    Log.i(TAG, "launchComponent: activity path failed, trying service")
+                    HLog.i(TAG, "launchComponent: activity path failed, trying service")
                     launchService(context, action.copy(
                         kind = ShortcutKind.SERVICE,
                         serviceName = cls
@@ -387,7 +388,7 @@ object ShortcutLauncher {
             if (isService) return ComponentType.SERVICE
             ComponentType.UNKNOWN
         } catch (e: Exception) {
-            Log.w(TAG, "detectComponentType: failed for $pkg/$cls: ${e.message}")
+            HLog.w(TAG, "detectComponentType: failed for $pkg/$cls: ${e.message}")
             ComponentType.UNKNOWN
         }
     }
@@ -420,7 +421,7 @@ object ShortcutLauncher {
             if (validation.reason == FailureReason.ACTIVITY_NOT_FOUND &&
                 !action.packageName.isNullOrEmpty()
             ) {
-                Log.w(TAG, "launchService: validateService refused (${validation.detail}), trying direct launch")
+                HLog.w(TAG, "launchService: validateService refused (${validation.detail}), trying direct launch")
                 return tryLaunchServiceDirect(context, intent, action, allowRootFallback)
             }
             // 非 exported 或不可见（包可见性限制）→ ROOT 可绕过
@@ -428,7 +429,7 @@ object ShortcutLauncher {
                 (validation.reason == FailureReason.NOT_EXPORTED ||
                  validation.reason == FailureReason.ACTIVITY_NOT_FOUND)
             ) {
-                Log.i(TAG, "launchService: validation failed (${validation.reason}), trying ROOT")
+                HLog.i(TAG, "launchService: validation failed (${validation.reason}), trying ROOT")
                 return launchViaRoot(action)
             }
             return validation
@@ -437,10 +438,10 @@ object ShortcutLauncher {
         // 启动
         return try {
             context.startService(intent)
-            Log.i(TAG, "launchService: SUCCESS via startService, component=${intent.component}")
+            HLog.i(TAG, "launchService: SUCCESS via startService, component=${intent.component}")
             LaunchResult.Success(intent.component)
         } catch (e: SecurityException) {
-            Log.w(TAG, "launchService: SecurityException, trying ROOT", e)
+            HLog.w(TAG, "launchService: SecurityException, trying ROOT", e)
             if (allowRootFallback && isRootAvailable()) {
                 launchViaRoot(action)
             } else {
@@ -448,14 +449,14 @@ object ShortcutLauncher {
             }
         } catch (e: IllegalStateException) {
             // Android 8+ 后台启动限制（从设置页触发时可能出现）
-            Log.w(TAG, "launchService: IllegalStateException (background restriction), trying ROOT", e)
+            HLog.w(TAG, "launchService: IllegalStateException (background restriction), trying ROOT", e)
             if (allowRootFallback && isRootAvailable()) {
                 launchViaRoot(action)
             } else {
                 LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, e.message ?: "Background service restriction")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "launchService: exception", e)
+            HLog.e(TAG, "launchService: exception", e)
             if (allowRootFallback && isRootAvailable()) {
                 launchViaRoot(action)
             } else {
@@ -554,7 +555,7 @@ object ShortcutLauncher {
             val pkgInfo = pm.getPackageInfo(pkgName, PackageManager.GET_SERVICES)
             pkgInfo?.services?.find { it.name == fullClassName }
         } catch (e: Exception) {
-            Log.w(TAG, "findServiceInfo: cannot query $pkgName services: ${e.message}")
+            HLog.w(TAG, "findServiceInfo: cannot query $pkgName services: ${e.message}")
             null
         }
     }
@@ -604,11 +605,11 @@ object ShortcutLauncher {
                 0, null, null
             )
         }.onFailure {
-            Log.w(TAG, "launchShortcutId send failed: ${it.message}")
+            HLog.w(TAG, "launchShortcutId send failed: ${it.message}")
             return LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, it.message ?: "send failed")
         }
         latch.await(3, java.util.concurrent.TimeUnit.SECONDS)
-        Log.i(TAG, "launchShortcutId: pkg=$pkg sid=$sid ok=$ok")
+        HLog.i(TAG, "launchShortcutId: pkg=$pkg sid=$sid ok=$ok")
         return if (ok) {
             LaunchResult.Success(null)
         } else {
@@ -666,7 +667,7 @@ object ShortcutLauncher {
             "/system/bin/cmd statusbar click-tile $pkg/$fullCls; sleep 0.2; " +
             "/system/bin/cmd statusbar collapse"
         val cmd = listOf("su", "-c", script)
-        Log.i(TAG, "launchQsTileViaRoot: $script")
+        HLog.i(TAG, "launchQsTileViaRoot: $script")
         return try {
             val process = ProcessBuilder(cmd).start()
             try {
@@ -675,17 +676,17 @@ object ShortcutLauncher {
                     it.readText().trim()
                 }
                 if (exitCode == 0) {
-                    Log.i(TAG, "launchQsTileViaRoot: SUCCESS")
+                    HLog.i(TAG, "launchQsTileViaRoot: SUCCESS")
                     LaunchResult.Success(null)
                 } else {
-                    Log.w(TAG, "launchQsTileViaRoot: exit=$exitCode, error=$errorOutput")
+                    HLog.w(TAG, "launchQsTileViaRoot: exit=$exitCode, error=$errorOutput")
                     LaunchResult.Failure(FailureReason.ROOT_EXEC_FAILED, "exit=$exitCode: $errorOutput")
                 }
             } finally {
                 process.destroy()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "launchQsTileViaRoot: exception", e)
+            HLog.e(TAG, "launchQsTileViaRoot: exception", e)
             LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, e.message ?: "su exec failed")
         }
     }
@@ -752,7 +753,7 @@ object ShortcutLauncher {
             val pkgInfo = pm.getPackageInfo(pkgName, PackageManager.GET_ACTIVITIES)
             pkgInfo?.activities?.find { it.name == fullClassName }
         } catch (e: Exception) {
-            Log.w(TAG, "findActivityInfo: cannot query $pkgName activities: ${e.message}")
+            HLog.w(TAG, "findActivityInfo: cannot query $pkgName activities: ${e.message}")
             null
         }
     }
@@ -886,7 +887,7 @@ object ShortcutLauncher {
             // resolveActivity 对非 exported Activity 返回 null，
             // 回退用 getActivityInfo 探测：如果 Activity 确实存在，放行让 launch() 去试。
             val component = intent.component ?: run {
-                Log.w(TAG, "validateIntent: resolveActivity null and no component: " +
+                HLog.w(TAG, "validateIntent: resolveActivity null and no component: " +
                     "action=${intent.action} pkg=${intent.`package`} categories=${intent.categories}")
                 return LaunchResult.Failure(
                     FailureReason.ACTIVITY_NOT_FOUND,
@@ -961,7 +962,7 @@ object ShortcutLauncher {
         // su -c expects a single command string, not individual arguments；
         // 参数值可能含 shell 元字符（intent URI 里的 # ; & 空格等），逐参单引号包裹
         val fullCmd = listOf("su", "-c", cmdArgs.joinToString(" ") { shellQuote(it) })
-        Log.i(TAG, "launchViaRoot: ${fullCmd.joinToString(" ")}")
+        HLog.i(TAG, "launchViaRoot: ${fullCmd.joinToString(" ")}")
 
         return try {
             val process = ProcessBuilder(fullCmd).start()
@@ -974,10 +975,10 @@ object ShortcutLauncher {
                 }
 
                 if (exitCode == 0) {
-                    Log.i(TAG, "launchViaRoot: SUCCESS")
+                    HLog.i(TAG, "launchViaRoot: SUCCESS")
                     LaunchResult.Success(null)
                 } else {
-                    Log.w(TAG, "launchViaRoot: exit=$exitCode, error=$errorOutput")
+                    HLog.w(TAG, "launchViaRoot: exit=$exitCode, error=$errorOutput")
                     if (errorOutput.contains("not exported") || errorOutput.contains("Permission Denial")) {
                         LaunchResult.Failure(FailureReason.NOT_EXPORTED, errorOutput)
                     } else {
@@ -988,7 +989,7 @@ object ShortcutLauncher {
                 process.destroy()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "launchViaRoot: exception", e)
+            HLog.e(TAG, "launchViaRoot: exception", e)
             LaunchResult.Failure(FailureReason.ROOT_UNAVAILABLE, e.message ?: "su exec failed")
         }
     }
@@ -1016,7 +1017,7 @@ object ShortcutLauncher {
                     is Boolean -> args += listOf("--ez", key, v.toString())
                     is Float -> args += listOf("--ef", key, v.toString())
                     is Double -> args += listOf("--ef", key, v.toString())
-                    else -> Log.w(TAG, "intentToAmArgs: skip unsupported extra $key=${v::class.java.simpleName}")
+                    else -> HLog.w(TAG, "intentToAmArgs: skip unsupported extra $key=${v::class.java.simpleName}")
                 }
             }
         }
@@ -1040,10 +1041,10 @@ object ShortcutLauncher {
         return try {
             strategy.startActivity(context, intent)
             val cn = intent.component ?: intent.resolveActivity(context.packageManager)
-            Log.i(TAG, "tryLaunchDirect: SUCCESS via ${strategy.name}, component=$cn")
+            HLog.i(TAG, "tryLaunchDirect: SUCCESS via ${strategy.name}, component=$cn")
             LaunchResult.Success(cn)
         } catch (e: SecurityException) {
-            Log.w(TAG, "tryLaunchDirect: SecurityException via ${strategy.name}, trying ROOT", e)
+            HLog.w(TAG, "tryLaunchDirect: SecurityException via ${strategy.name}, trying ROOT", e)
             if (allowRootFallback && isRootAvailable()) {
                 launchViaRoot(action, intent)
             } else {
@@ -1057,14 +1058,14 @@ object ShortcutLauncher {
             if (pkg != null && allowRootFallback) {
                 val pkgInstalled = runCatching { context.packageManager.getPackageInfo(pkg, 0) }.isSuccess
                 if (pkgInstalled && isRootAvailable()) {
-                    Log.w(TAG, "tryLaunchDirect: ActivityNotFoundException but package exists, trying ROOT fallback", e)
+                    HLog.w(TAG, "tryLaunchDirect: ActivityNotFoundException but package exists, trying ROOT fallback", e)
                     return launchViaRoot(action, intent)
                 }
             }
-            Log.e(TAG, "tryLaunchDirect: ActivityNotFoundException via ${strategy.name}", e)
+            HLog.e(TAG, "tryLaunchDirect: ActivityNotFoundException via ${strategy.name}", e)
             LaunchResult.Failure(FailureReason.ACTIVITY_NOT_FOUND, e.message ?: "Activity not found")
         } catch (e: Exception) {
-            Log.e(TAG, "tryLaunchDirect: exception via ${strategy.name}", e)
+            HLog.e(TAG, "tryLaunchDirect: exception via ${strategy.name}", e)
             if (allowRootFallback && isRootAvailable()) {
                 launchViaRoot(action, intent)
             } else {
@@ -1085,10 +1086,10 @@ object ShortcutLauncher {
     ): LaunchResult {
         return try {
             context.startService(intent)
-            Log.i(TAG, "tryLaunchServiceDirect: SUCCESS via startService, component=${intent.component}")
+            HLog.i(TAG, "tryLaunchServiceDirect: SUCCESS via startService, component=${intent.component}")
             LaunchResult.Success(intent.component)
         } catch (e: SecurityException) {
-            Log.w(TAG, "tryLaunchServiceDirect: SecurityException, trying ROOT", e)
+            HLog.w(TAG, "tryLaunchServiceDirect: SecurityException, trying ROOT", e)
             if (allowRootFallback && isRootAvailable()) {
                 launchViaRoot(action)
             } else {
@@ -1096,14 +1097,14 @@ object ShortcutLauncher {
             }
         } catch (e: IllegalStateException) {
             // Android 8+ 后台启动限制（从设置页触发时可能出现）
-            Log.w(TAG, "tryLaunchServiceDirect: IllegalStateException (background restriction), trying ROOT", e)
+            HLog.w(TAG, "tryLaunchServiceDirect: IllegalStateException (background restriction), trying ROOT", e)
             if (allowRootFallback && isRootAvailable()) {
                 launchViaRoot(action)
             } else {
                 LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, e.message ?: "Background service restriction")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "tryLaunchServiceDirect: exception", e)
+            HLog.e(TAG, "tryLaunchServiceDirect: exception", e)
             if (allowRootFallback && isRootAvailable()) {
                 launchViaRoot(action)
             } else {

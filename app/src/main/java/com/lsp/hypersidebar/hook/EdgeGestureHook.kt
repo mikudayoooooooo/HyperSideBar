@@ -22,8 +22,12 @@ import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfte
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createBeforeHook
 import kotlin.math.abs
 import kotlin.math.hypot
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "EdgeGesture"
+
+/** 高频明细（g#N 系列）：默认关（HLog.verboseEnabled），关时零字符串构造（§11.2） */
+private fun vlog(msg: String) { if (HLog.verboseEnabled) HLog.i(TAG, msg) }
 
 /**
  * 边缘手势通道（com.miui.home / GestureStubView）——spike 验证方案的生产化。
@@ -100,21 +104,21 @@ class EdgeGestureHook(
     private var probeRegistered = false
 
     override fun init() {
-        Log.i(TAG, "=== EdgeGestureHook init, pid=${android.os.Process.myPid()} ===")
+        HLog.i(TAG, "=== EdgeGestureHook init, pid=${android.os.Process.myPid()} ===")
         // 熔断器：发布本进程新鲜状态（清掉上进程生命周期遗留的熔断键）+ 熔断动作
         breaker.forceReset()
         breaker.onTripped = { reason ->
             toastOnMain(
                 safeAppContext(), "扇形连续失败，已熔断保护：返回手势不受影响，重启手机或在设置页重试"
             )
-            Log.e(TAG, "breaker tripped: $reason — 后续边缘触摸全透传")
+            HLog.e(TAG, "breaker tripped: $reason — 后续边缘触摸全透传")
         }
         // 数据源死亡停摆（迭代四 §1.3，用户加强语义）：推荐获取连续失败≥5 且缓存含盘
         // 仍空=ROM 不兼容信号 → 边缘手势全透传、扇形不再展示；恢复=重启手机
         //（无自动恢复，同降级语义——盲恢复会反复横跳）
         DataLoader.onDataSourceDead = {
             if (DataDeadState.mark()) {
-                Log.e(TAG, "data source dead: edge gestures passthrough, fan disabled until reboot")
+                HLog.e(TAG, "data source dead: edge gestures passthrough, fan disabled until reboot")
                 if (fanController.isShowing) fanController.dismiss()
             }
         }
@@ -127,16 +131,16 @@ class EdgeGestureHook(
             }
         }
         runCatching { hookProbeReceiver() }
-            .onFailure { Log.e(TAG, "probe receiver hook FAILED: ${it.message}", it) }
+            .onFailure { HLog.e(TAG, "probe receiver hook FAILED: ${it.message}", it) }
         val okTouch = runCatching { hookOnTouchEvent() }
-            .onFailure { Log.e(TAG, "A FAILED hookOnTouchEvent: ${it.message}", it) }
+            .onFailure { HLog.e(TAG, "A FAILED hookOnTouchEvent: ${it.message}", it) }
             .getOrDefault(false)
         val okStop = runCatching { hookOnSwipeStop() }
-            .onFailure { Log.e(TAG, "C FAILED hookOnSwipeStop: ${it.message}", it) }
+            .onFailure { HLog.e(TAG, "C FAILED hookOnSwipeStop: ${it.message}", it) }
             .getOrDefault(false)
         // okStop=真实安装结果（含兜底扫描成功）：此前"未抛异常"就算 true，曾把拦截层
         // 静默失效伪装成 installed（1C 轮一实测教训）
-        Log.i(TAG, "hooks installed: onTouchEvent=$okTouch onSwipeStop=$okStop")
+        HLog.i(TAG, "hooks installed: onTouchEvent=$okTouch onSwipeStop=$okStop")
         // 预热推荐列表缓存：launcher 进程 init 时 EzXposed.appContext 可能尚未就绪
         // （实测 getAppContext 直接抛 NPE 而非返回 null，首轮 prewarm skipped 是
         // "首次呼出只有固定应用"的根因）——prewarmWithRetry 每 5s 重试直到就绪
@@ -171,17 +175,17 @@ class EdgeGestureHook(
                     ctx.registerReceiver(
                         receiver, IntentFilter(PrefKeys.PROBE_ACTION_HOME), Context.RECEIVER_EXPORTED
                     )
-                    Log.i(TAG, "probe receiver registered (via Application.attach)")
+                    HLog.i(TAG, "probe receiver registered (via Application.attach)")
                     // 配置同步通道（批次 2）：收设置页全量推送，根治 hook 进程死快照
                     com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx)
-                    Log.i(TAG, "config sync receiver registered (via Application.attach)")
+                    HLog.i(TAG, "config sync receiver registered (via Application.attach)")
                     registerManifestShortcutsBridge(ctx)
                 } catch (e: Throwable) {
-                    Log.e(TAG, "probe receiver registration failed: ${e.message}", e)
+                    HLog.e(TAG, "probe receiver registration failed: ${e.message}", e)
                 }
             }
         if (hooked == null) {
-            Log.e(TAG, "Application.attach hook failed（状态探针不可用，设置页将显示无应答）")
+            HLog.e(TAG, "Application.attach hook failed（状态探针不可用，设置页将显示无应答）")
         }
     }
 
@@ -257,9 +261,11 @@ class EdgeGestureHook(
                                     .putExtra(PrefKeys.MANIFEST_SHORTCUTS_EXTRA, arr.toString())
                                 RelayToken.attach(reply, RelayToken.read(remotePrefs))
                                 c.sendBroadcast(reply)
-                                Log.i(TAG, "manifest shortcuts replied: ${arr.length()}")
+                                HLog.i(TAG, "manifest shortcuts replied: ${arr.length()}")
                             }.onFailure {
-                                Log.w(TAG, "manifest shortcuts query failed: ${it.message}")
+            // 日志拉取回传（§11.2）：模块 App 请求时回传 HLog 缓冲 + 熔断快照
+            com.lsp.hypersidebar.util.LogDumpBridge.register(ctx) { breaker.snapshot() }
+                                HLog.w(TAG, "manifest shortcuts query failed: ${it.message}")
                             }
                         }.start()
                     }
@@ -267,8 +273,8 @@ class EdgeGestureHook(
                 IntentFilter(PrefKeys.MANIFEST_SHORTCUTS_REQUEST),
                 Context.RECEIVER_EXPORTED
             )
-            Log.i(TAG, "manifest shortcuts request receiver registered (via Application.attach)")
-        }.onFailure { Log.e(TAG, "manifest shortcuts bridge register failed: ${it.message}") }
+            HLog.i(TAG, "manifest shortcuts request receiver registered (via Application.attach)")
+        }.onFailure { HLog.e(TAG, "manifest shortcuts bridge register failed: ${it.message}") }
 
         // 动态/固定快捷方式 startShortcut 代发（2026-09-08）：有序广播进本进程（默认桌面，
         // 桌面角色现成——B2 归档"startShortcut 需桌面角色"的前提在此成立而非阻塞），
@@ -311,7 +317,7 @@ class EdgeGestureHook(
                                     }
                                 }
                             }.onFailure { why = "exception: ${it.message}" }
-                            Log.i(TAG, "startShortcut launch: pkg=$pkg id=$sid ok=$ok $why")
+                            HLog.i(TAG, "startShortcut launch: pkg=$pkg id=$sid ok=$ok $why")
                             pending.resultCode = if (ok) 1 else 0
                             pending.finish()
                         }.start()
@@ -320,8 +326,8 @@ class EdgeGestureHook(
                 IntentFilter(PrefKeys.SHORTCUT_ID_LAUNCH_REQUEST),
                 Context.RECEIVER_EXPORTED
             )
-            Log.i(TAG, "shortcut-id launch receiver registered (via Application.attach)")
-        }.onFailure { Log.e(TAG, "shortcut-id launch register failed: ${it.message}") }
+            HLog.i(TAG, "shortcut-id launch receiver registered (via Application.attach)")
+        }.onFailure { HLog.e(TAG, "shortcut-id launch register failed: ${it.message}") }
     }
 
     /** 记录层：触摸流入口，BeforeHook。返回 true = 消费（拦截原生处理）。 */
@@ -331,7 +337,7 @@ class EdgeGestureHook(
             .filterByParamTypes(MotionEvent::class.java)
             .filterByReturnType(Boolean::class.java)
             .firstOrNull() ?: run {
-            Log.e(TAG, "onTouchEvent NOT FOUND on $STUB_CLASS")
+            HLog.e(TAG, "onTouchEvent NOT FOUND on $STUB_CLASS")
             return false
         }
         method.createBeforeHook {
@@ -356,23 +362,23 @@ class EdgeGestureHook(
     private fun hookOnSwipeStop(): Boolean {
         val cl = ClassLoaderProvider.safeClassLoader
         val stubClass = runCatching { Class.forName(STUB_CLASS, false, cl) }.getOrNull() ?: run {
-            Log.e(TAG, "onSwipeStop: cannot resolve $STUB_CLASS via host classloader")
+            HLog.e(TAG, "onSwipeStop: cannot resolve $STUB_CLASS via host classloader")
             return false
         }
         val direct = runCatching { hookSwipeStopCallback(Class.forName(CALLBACK_CLASS, false, cl), "direct") }
             .getOrDefault(false)
         if (direct) return true
-        Log.w(TAG, "onSwipeStop NOT FOUND on $CALLBACK_CLASS, scanning GestureStubView inner classes")
+        HLog.w(TAG, "onSwipeStop NOT FOUND on $CALLBACK_CLASS, scanning GestureStubView inner classes")
         var hooked = 0
         for (inner in stubClass.declaredClasses) {
             val ok = runCatching { hookSwipeStopCallback(inner, "scan") }.getOrDefault(false)
             if (ok) hooked++
         }
         if (hooked == 0) {
-            Log.e(TAG, "scan fallback: no onSwipeStop(Boolean,...) in any inner class")
+            HLog.e(TAG, "scan fallback: no onSwipeStop(Boolean,...) in any inner class")
             return false
         }
-        Log.i(TAG, "scan fallback: $hooked onSwipeStop callback(s) hooked")
+        HLog.i(TAG, "scan fallback: $hooked onSwipeStop callback(s) hooked")
         return true
     }
 
@@ -387,11 +393,11 @@ class EdgeGestureHook(
                 val shouldBack = it.args[0] as? Boolean ?: return@createBeforeHook
                 if (shouldBack) {
                     it.args[0] = false
-                    Log.i(TAG, "g#$gestureSeq onSwipeStop($via) INTERCEPTED: shouldBack=true -> false")
+                    vlog("g#$gestureSeq onSwipeStop($via) INTERCEPTED: shouldBack=true -> false")
                 }
             }
         }
-        Log.i(TAG, "onSwipeStop hooked ($via): ${cls.name}")
+        HLog.i(TAG, "onSwipeStop hooked ($via): ${cls.name}")
         return true
     }
 
@@ -452,7 +458,7 @@ class EdgeGestureHook(
                 // 触发区外：完全透传（原生返回正常走）；DOWN 全量记录（A2/A7/A8 数据源）
                 val inZone = isInTriggerZone(ev.rawX, ev.rawY, stub)
                 gestureInZone = inZone
-                Log.i(TAG, "g#$gestureSeq DOWN raw=(${ev.rawX.toInt()},${ev.rawY.toInt()}) inZone=$inZone")
+                vlog("g#$gestureSeq DOWN raw=(${ev.rawX.toInt()},${ev.rawY.toInt()}) inZone=$inZone")
                 if (!inZone) return false
             }
 
@@ -465,7 +471,7 @@ class EdgeGestureHook(
 
                 // 滑回边缘：整体重置（PRD 状态机"滑回边缘→待触发"；修 spike 锁存 bug）
                 if (swipeConfirmed && inward < GestureThresholds.SWIPE_CONFIRM_PX) {
-                    Log.i(TAG, "g#$gestureSeq RESET slide-back (inward=${inward.toInt()}px < ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()})")
+                    vlog("g#$gestureSeq RESET slide-back (inward=${inward.toInt()}px < ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()})")
                     resetGesture()
                     return false
                 }
@@ -481,7 +487,7 @@ class EdgeGestureHook(
                         anchorX = ev.rawX
                         anchorY = ev.rawY
                         anchorT = ev.eventTime
-                        Log.i(TAG, "g#$gestureSeq swipe confirmed: inward=${inward.toInt()}px (>= ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()}) angle=${angle.toInt()}")
+                        vlog("g#$gestureSeq swipe confirmed: inward=${inward.toInt()}px (>= ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()}) angle=${angle.toInt()}")
                     }
                 }
 
@@ -493,7 +499,7 @@ class EdgeGestureHook(
                         anchorT = ev.eventTime
                     } else if (ev.eventTime - anchorT >= dwellMs()) {
                         stallFired = true
-                        Log.i(TAG, "g#$gestureSeq STALL ${dwellMs()}ms 达标 anchor=(${anchorX.toInt()},${anchorY.toInt()})")
+                        vlog("g#$gestureSeq STALL ${dwellMs()}ms 达标 anchor=(${anchorX.toInt()},${anchorY.toInt()})")
                         cancelNativeGesture(stub, ev)
                         postShowFan(ev, stub)
                         return true
@@ -502,7 +508,7 @@ class EdgeGestureHook(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                Log.i(TAG, "g#$gestureSeq UP stallFired=$stallFired shown=${fanController.isShowing}")
+                vlog("g#$gestureSeq UP stallFired=$stallFired shown=${fanController.isShowing}")
                 if (stallFired) {
                     cancelPendingShow()
                     // 实测轮七：fan 已落地而手指未预选即松手 → 立即收起。
@@ -520,7 +526,7 @@ class EdgeGestureHook(
     /** 停顿触发 → 主线程弹 fan（launcher 触摸回调在 MiuiMirror 输入线程，Compose 需主线程装配）。 */
     private fun postShowFan(ev: MotionEvent, stub: View?) {
         val ctx = EzXposed.appContext ?: stub?.context ?: run {
-            Log.w(TAG, "postShowFan: no context available")
+            HLog.w(TAG, "postShowFan: no context available")
             return
         }
         val dm = ctx.resources.displayMetrics
@@ -532,13 +538,13 @@ class EdgeGestureHook(
         val (zoneTop, zoneBottom) = zoneBounds(dm)
         val anchorX = if (downX < dm.widthPixels / 2f) 0f else dm.widthPixels.toFloat()
         val anchorY = if (zoneTop < zoneBottom) downY.coerceIn(zoneTop, zoneBottom) else downY
-        Log.i(TAG, "showFan: anchor=($anchorX, $anchorY) downY=$downY dwell=${dwellMs()}ms")
+        HLog.i(TAG, "showFan: anchor=($anchorX, $anchorY) downY=$downY dwell=${dwellMs()}ms")
         // 耗时锚点（呼出卡顿归因）：postLag=launcher 主线程繁忙度——数值大说明
         // 呼出迟到是主线程排队，而不是装配慢
         val postAtMs = android.os.SystemClock.uptimeMillis()
         val r = Runnable {
             pendingShow = null
-            Log.i(TAG, "g#$gestureSeq showFan runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
+            vlog("g#$gestureSeq showFan runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
             fanController.show(ctx, anchorX, anchorY)
         }
         pendingShow = r
@@ -566,8 +572,8 @@ class EdgeGestureHook(
                 ev.downTime, ev.eventTime, MotionEvent.ACTION_UP, ev.rawX, ev.rawY, 0
             )
             try { method.invoke(processor, up, stub) } finally { up.recycle() }
-            Log.i(TAG, "native gesture teardown via synthetic UP")
-        }.onFailure { Log.w(TAG, "cancelNativeGesture failed: ${it.message}") }
+            HLog.i(TAG, "native gesture teardown via synthetic UP")
+        }.onFailure { HLog.w(TAG, "cancelNativeGesture failed: ${it.message}") }
     }
 
     private fun cancelPendingShow() {

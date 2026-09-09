@@ -5,6 +5,7 @@ import android.util.Log
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.*
 import io.github.kyuubiran.ezxhelper.xposed.EzXposed
+import com.lsp.hypersidebar.util.HLog
 import com.lsp.hypersidebar.hook.BaseHook
 import com.lsp.hypersidebar.hook.EdgeGestureHook
 import com.lsp.hypersidebar.hook.FreeformRelayHook
@@ -82,6 +83,10 @@ class XposedInit : XposedModule() {
      */
     private fun remotePrefsWithProbe(): SharedPreferences {
         val prefs = getRemotePreferences("hyperSidebar")
+        // 高频明细日志开关（§11.2）：init 读一次，此后随 ConfigSync.applySync 刷新
+        HLog.verboseEnabled = runCatching {
+            prefs.getBoolean(com.lsp.hypersidebar.prefs.PrefKeys.DEBUG_VERBOSE_LOGS, false)
+        }.getOrDefault(false)
         runCatching {
             prefs.registerOnSharedPreferenceChangeListener { _, key ->
                 Log.d(TAG, "remote prefs push: $key")

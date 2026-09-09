@@ -22,8 +22,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.coroutines.resume
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "SelfCheck"
+
+/** 自检报告附带的每进程日志尾条数（§11.2） */
+private const val LOG_TAIL_PER_PROC = 40
 
 /**
  * 自检报告（2026-09-05 用户拍板：探针双路 + 调试开关实值 + 脱敏配置快照，导出为文本文件）。
@@ -100,6 +104,12 @@ object SelfCheck {
                 .entries.joinToString { "${it.key}=${it.value.size}" }
                 .ifEmpty { "无" }
 
+            // §11.2 自检 v2：拉一轮三进程日志（广播请求 + 等待回传），报告附
+            // 熔断快照与各进程日志尾——远程排障不再依赖 LSPosed 日志页导出
+            LogCollector.requestAndAwait(context)
+            val procLogs = LogCollector.mergedForExport()
+            val statuses = LogCollector.statuses.toMap()
+
             val verdict = when {
                 home == PrefKeys.PROBE_CODE_DEAD ->
                     "桌面侧 hook 未加载：检查 LSPosed 模块总开关与作用域（系统桌面），重启桌面或手机后重测"
@@ -156,6 +166,24 @@ object SelfCheck {
                     prefs.getString(PrefKeys.LAST_RELAY_RESULT, "无记录")
                 }.getOrNull() ?: "无记录")
                 appendLine()
+                appendLine()
+                appendLine("== 进程状态快照 ==")
+                if (statuses.isEmpty()) {
+                    appendLine("无应答（hook 进程未回传状态——进程死或接收器未注册）")
+                } else {
+                    statuses.forEach { (proc, json) -> appendLine("$proc: $json") }
+                }
+                appendLine()
+                appendLine("== 最近日志（各进程尾部 ${LOG_TAIL_PER_PROC} 条，时间升序）==")
+                if (procLogs.isEmpty()) {
+                    appendLine("无（各进程缓冲未回传）")
+                } else {
+                    procLogs.forEach { (proc, list) ->
+                        appendLine("----- [$proc] -----")
+                        list.takeLast(LOG_TAIL_PER_PROC).forEach { appendLine(it.formatLine()) }
+                    }
+                }
+                appendLine()
                 appendLine("== 判读建议 ==")
                 appendLine(verdict)
             }
@@ -176,7 +204,7 @@ object SelfCheck {
                 ?: error("openOutputStream returned null")
             "下载/$fileName"
         }.getOrElse { e ->
-            Log.w(TAG, "MediaStore export failed, fallback to app dir: ${e.message}")
+            HLog.w(TAG, "MediaStore export failed, fallback to app dir: ${e.message}")
             // 兜底：应用私有外部目录（文件管理器可达性差但至少能取到）
             val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
                 ?: context.filesDir

@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "ShortcutModels"
 
@@ -121,7 +122,7 @@ object ShortcutStore {
         val jsonStr = try {
             prefs.getString(KEY, null)
         } catch (e: Exception) {
-            Log.w(TAG, "loadUserShortcuts: read failed", e)
+            HLog.w(TAG, "loadUserShortcuts: read failed", e)
             null
         } ?: return emptyList()
 
@@ -136,7 +137,7 @@ object ShortcutStore {
             }
             list.sortedBy { it.order }
         } catch (e: Exception) {
-            Log.e(TAG, "loadUserShortcuts: parse failed", e)
+            HLog.e(TAG, "loadUserShortcuts: parse failed", e)
             emptyList()
         }
     }
@@ -156,10 +157,10 @@ object ShortcutStore {
         try {
             prefs.edit().putString(KEY, arr.toString()).apply()
             // 诊断锚点：快捷栏缺失问题时区分"保存没落盘"（无此行/条目缺）vs"扇形没读到"
-            Log.i(TAG, "saved ${userItems.size} shortcuts: " +
+            HLog.i(TAG, "saved ${userItems.size} shortcuts: " +
                 userItems.joinToString { "${it.kind}:${it.label}(${if (it.enabled) "on" else "off"})" })
         } catch (e: Exception) {
-            Log.e(TAG, "saveUserShortcuts: write failed", e)
+            HLog.e(TAG, "saveUserShortcuts: write failed", e)
         }
     }
 
@@ -254,7 +255,7 @@ object ShortcutStore {
         val picked = userEnabled.take(maxUser)
         // 诊断锚点：与 saveUserShortcuts 的 "saved N" 配对——读端缓存陈旧时
         // enabled 数与最近一次 saved 数不一致
-        Log.i(TAG, "runtimeQuick: user=${userEnabled.size} out=${picked.size} " +
+        HLog.i(TAG, "runtimeQuick: user=${userEnabled.size} out=${picked.size} " +
             "kinds=${picked.joinToString { it.kind.name }}")
         picked.forEach { result.add(it) }
 

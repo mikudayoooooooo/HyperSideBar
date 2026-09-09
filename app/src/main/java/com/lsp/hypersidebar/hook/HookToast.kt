@@ -6,6 +6,7 @@ import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import io.github.kyuubiran.ezxhelper.xposed.EzXposed
+import com.lsp.hypersidebar.util.HLog
 
 private val toastMainHandler = Handler(Looper.getMainLooper())
 
@@ -18,7 +19,7 @@ internal fun toastOnMain(context: Context?, msg: String) {
     toastMainHandler.post {
         runCatching {
             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-        }.onFailure { Log.w("HookToast", "toast failed: ${it.message}") }
+        }.onFailure { HLog.w("HookToast", "toast failed: ${it.message}") }
     }
 }
 

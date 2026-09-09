@@ -15,6 +15,7 @@ import com.lsp.hypersidebar.util.Trace
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHook
 import org.json.JSONObject
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "FreeformRelay"
 
@@ -39,7 +40,7 @@ class FreeformRelayHook(
     private var registered = false
 
     override fun init() {
-        Log.i(TAG, "=== FreeformRelayHook init ===")
+        HLog.i(TAG, "=== FreeformRelayHook init ===")
         val hooked = MethodFinder.fromClass("android.app.Application")
             .filterByName("attach")
             .filterByParamTypes(Context::class.java)
@@ -50,9 +51,14 @@ class FreeformRelayHook(
                 // 配置同步通道（批次 2 同款，:ui 补接）：收设置页全量推送，
                 // 总开关/横屏 dwell 等 remotePrefs 读取的实时性不再单靠 LSPosed push
                 com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx)
+                // 日志拉取回传（§11.2）：模块 App 请求时回传 HLog 缓冲；:ui 的熔断快照
+                // 在 TurboLayout（同进程），经其伴生句柄取，未初始化时给空快照
+                com.lsp.hypersidebar.util.LogDumpBridge.register(ctx) {
+                    TurboLayout.breakerSnapshot()
+                }
             }
         if (hooked == null) {
-            Log.e(TAG, "Application.attach hook failed（B 链路不可用，边缘通道选中将无响应）")
+            HLog.e(TAG, "Application.attach hook failed（B 链路不可用，边缘通道选中将无响应）")
         }
     }
 
@@ -110,24 +116,24 @@ class FreeformRelayHook(
                     if (isOrderedBroadcast) resultCode = 1
                     when {
                         intent.getBooleanExtra("openPanel", false) -> {
-                            Log.i(TAG, "[${trace ?: "-"}] relay: openPanel")
+                            HLog.i(TAG, "[${trace ?: "-"}] relay: openPanel")
                             strategy.openNativePanel(ctx)
                         }
                         intent.getBooleanExtra("allApps", false) -> {
-                            Log.i(TAG, "[${trace ?: "-"}] relay: allApps")
+                            HLog.i(TAG, "[${trace ?: "-"}] relay: allApps")
                             strategy.launchAllApps(ctx)
                         }
                         intent.getStringExtra("shortcut") != null -> {
                             val json = intent.getStringExtra("shortcut") ?: return
                             runCatching {
                                 val action = com.lsp.hypersidebar.util.ShortcutAction.fromJson(JSONObject(json))
-                                Log.i(TAG, "[${trace ?: "-"}] relay: shortcut id=${action.id}")
+                                HLog.i(TAG, "[${trace ?: "-"}] relay: shortcut id=${action.id}")
                                 strategy.launchShortcut(ctx, action)
-                            }.onFailure { Log.e(TAG, "relay: bad shortcut payload: ${it.message}") }
+                            }.onFailure { HLog.e(TAG, "relay: bad shortcut payload: ${it.message}") }
                         }
                         intent.getStringExtra("pkg") != null -> {
                             val pkg = intent.getStringExtra("pkg") ?: return
-                            Log.i(TAG, "[${trace ?: "-"}] relay: freeform pkg=$pkg")
+                            HLog.i(TAG, "[${trace ?: "-"}] relay: freeform pkg=$pkg")
                             strategy.launchFreeform(ctx, pkg)
                         }
                     }
@@ -141,7 +147,7 @@ class FreeformRelayHook(
                 },
                 Context.RECEIVER_EXPORTED
             )
-            Log.i(TAG, "ACTION_FAN_LAUNCH/REQUEST_SUGGESTIONS receiver registered (via Application.attach)")
+            HLog.i(TAG, "ACTION_FAN_LAUNCH/REQUEST_SUGGESTIONS receiver registered (via Application.attach)")
             // root 代发结果回告接收器（2026-09-05）：模块 App 执行完代发（su 链）后把
             // 结果发回本进程——失败 toast 到前台（成功静默，只进日志与自检报告）。
             // 校验用 verifyFan 对 :ui 快照（模块 App 是令牌权威，快照即真值）
@@ -153,7 +159,7 @@ class FreeformRelayHook(
                         val ok = intent.getBooleanExtra("ok", false)
                         val label = intent.getStringExtra("label") ?: ""
                         val reason = intent.getStringExtra("reason") ?: ""
-                        Log.i(TAG, "[${trace ?: "-"}] relay result: ok=$ok label=$label reason=$reason")
+                        HLog.i(TAG, "[${trace ?: "-"}] relay result: ok=$ok label=$label reason=$reason")
                         if (!ok) {
                             runCatching {
                                 android.widget.Toast.makeText(
@@ -167,9 +173,9 @@ class FreeformRelayHook(
                 IntentFilter(PrefKeys.ACTION_RELAY_RESULT),
                 Context.RECEIVER_EXPORTED
             )
-            Log.i(TAG, "ACTION_RELAY_RESULT receiver registered (via Application.attach)")
+            HLog.i(TAG, "ACTION_RELAY_RESULT receiver registered (via Application.attach)")
         } catch (e: Throwable) {
-            Log.e(TAG, "receiver registration failed: ${e.message}", e)
+            HLog.e(TAG, "receiver registration failed: ${e.message}", e)
         }
     }
 }

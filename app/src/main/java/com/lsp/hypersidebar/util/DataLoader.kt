@@ -2,6 +2,7 @@ package com.lsp.hypersidebar.util
 
 import android.content.Context
 import android.util.Log
+import com.lsp.hypersidebar.util.HLog
 
 /**
  * 扇形菜单数据源（2026-08-25 决策：provider 整条路径退役）。
@@ -91,12 +92,12 @@ object DataLoader {
                 val ctx = runCatching { provider() }.getOrNull()?.applicationContext
                 if (ctx != null) {
                     prewarmed = true
-                    Log.i(TAG, "prewarm ok (attempt ${attempt + 1})")
+                    HLog.i(TAG, "prewarm ok (attempt ${attempt + 1})")
                     prewarm(ctx)
                 } else if (++attempt < maxAttempts) {
                     mainHandler.postDelayed(this, intervalMs)
                 } else {
-                    Log.w(TAG, "prewarm gave up after $maxAttempts attempts")
+                    HLog.w(TAG, "prewarm gave up after $maxAttempts attempts")
                 }
             }
         }
@@ -113,7 +114,7 @@ object DataLoader {
         mainHandler.postDelayed(object : Runnable {
             override fun run() {
                 runCatching { refreshAsync(appContext) }
-                    .onFailure { Log.w(TAG, "backstop dispatch failed: ${it.message}") }
+                    .onFailure { HLog.w(TAG, "backstop dispatch failed: ${it.message}") }
                 mainHandler.postDelayed(this, BACKSTOP_INTERVAL_MS)
             }
         }, BACKSTOP_INTERVAL_MS)
@@ -134,9 +135,9 @@ object DataLoader {
                 // label 预热（1C P3）：扇形呼出主线程逐 pkg 调 AppMetaCache.label，miss 即
                 // PM binder（首呼出最多 14 次）——后台刷新顺带灌缓存，呼出路径恒命中
                 suggestion.forEach { AppMetaCache.label(context, it) }
-                Log.i(TAG, "refreshed ${suggestion.size} suggestion apps in ${android.os.SystemClock.elapsedRealtime() - t0}ms (background)")
+                HLog.i(TAG, "refreshed ${suggestion.size} suggestion apps in ${android.os.SystemClock.elapsedRealtime() - t0}ms (background)")
             } catch (e: Throwable) {
-                Log.w(TAG, "refresh failed: ${e.message}")
+                HLog.w(TAG, "refresh failed: ${e.message}")
                 consecutiveFailures++
                 if (!failureToastShown && cachedResult == null && consecutiveFailures >= DEAD_THRESHOLD) {
                     failureToastShown = true
@@ -179,10 +180,10 @@ object DataLoader {
                 val list = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
                 if (list.isNotEmpty()) {
                     cachedResult = list
-                    Log.i(TAG, "hydrated ${list.size} suggestions from disk (stale, refresh pending)")
+                    HLog.i(TAG, "hydrated ${list.size} suggestions from disk (stale, refresh pending)")
                 }
             }
-        }.onFailure { Log.w(TAG, "hydrate failed: ${it.message}") }
+        }.onFailure { HLog.w(TAG, "hydrate failed: ${it.message}") }
     }
 
     /** 成功刷新落盘：列表没变不写（推荐列表日常稳定，实际写盘趋近于零）；空列表不覆盖。 */
@@ -195,7 +196,7 @@ object DataLoader {
             context.applicationContext
                 .getSharedPreferences(DISK_PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putString(DISK_KEY_SUGGESTIONS, json).apply()
-        }.onFailure { Log.w(TAG, "persist failed: ${it.message}") }
+        }.onFailure { HLog.w(TAG, "persist failed: ${it.message}") }
     }
 
     /** 反射失败直接抛（1C：失败计数/兜底 toast 需要区分"拉取失败"与"合法空列表"）。 */

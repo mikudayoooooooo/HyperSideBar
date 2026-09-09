@@ -24,4 +24,7 @@ internal sealed interface SettingsKey : NavKey {
 
     /** C3（批次 3）：QS 磁贴专属选择器（平铺全部扫到的 TileService，编辑页磁贴分支进入） */
     data object QsTilePicker : SettingsKey
+
+    /** 迭代六 §11.2：运行日志页（三进程 HLog 缓冲汇聚，关于页进入） */
+    data object Logs : SettingsKey
 }

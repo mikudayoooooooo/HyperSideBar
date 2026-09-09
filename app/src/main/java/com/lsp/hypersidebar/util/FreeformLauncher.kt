@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Process
 import android.os.UserHandle
 import android.util.Log
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "FreeformLauncher"
 
@@ -24,7 +25,7 @@ object FreeformLauncher {
     fun launch(context: Context, packageName: String) {
         val clsName = getMainActivity(context, packageName)
         if (clsName == null) {
-            Log.w(TAG, "launch: cannot resolve main activity for $packageName")
+            HLog.w(TAG, "launch: cannot resolve main activity for $packageName")
             toastOnMain(context, "无法打开 $packageName：找不到入口 Activity")
             return
         }
@@ -57,16 +58,16 @@ object FreeformLauncher {
                     Intent::class.java, android.os.Bundle::class.java, UserHandle::class.java
                 )
                 method.invoke(context, intent, options.toBundle(), Process.myUserHandle())
-                Log.i(TAG, "own activity freeform ok: ${activity.simpleName}")
+                HLog.i(TAG, "own activity freeform ok: ${activity.simpleName}")
                 return
             }
-            Log.w(TAG, "own pkg freeform options null (B4: no eligibility?) → plain launch")
+            HLog.w(TAG, "own pkg freeform options null (B4: no eligibility?) → plain launch")
         } catch (e: Throwable) {
-            Log.w(TAG, "own activity freeform failed: ${e.message} → plain launch")
+            HLog.w(TAG, "own activity freeform failed: ${e.message} → plain launch")
         }
         runCatching { context.startActivity(intent) }
             .onFailure {
-                Log.e(TAG, "own activity plain launch failed: ${it.message}")
+                HLog.e(TAG, "own activity plain launch failed: ${it.message}")
                 toastOnMain(context, "面板启动失败：${it.message}")
             }
     }
@@ -81,7 +82,7 @@ object FreeformLauncher {
         try {
             val cls = Class.forName("android.util.MiuiMultiWindowUtils")
             val options = getActivityOptions(cls, context, packageName) ?: run {
-                Log.w(TAG, "MiuiMultiWindow: getActivityOptions returned null")
+                HLog.w(TAG, "MiuiMultiWindow: getActivityOptions returned null")
                 // PRD §9.4 字面措辞（展示与启动之间资格变化的兜底）
                 toastOnMain(context, "该应用不支持小窗")
                 return
@@ -96,9 +97,9 @@ object FreeformLauncher {
                 Intent::class.java, android.os.Bundle::class.java, UserHandle::class.java
             )
             method.invoke(context, intent, options.toBundle(), Process.myUserHandle())
-            Log.i(TAG, "MiuiMultiWindow fallback success: $packageName/$clsName")
+            HLog.i(TAG, "MiuiMultiWindow fallback success: $packageName/$clsName")
         } catch (e: Exception) {
-            Log.e(TAG, "MiuiMultiWindow fallback failed: ${e.message}")
+            HLog.e(TAG, "MiuiMultiWindow fallback failed: ${e.message}")
             toastOnMain(context, "小窗启动失败：$packageName")
         }
     }

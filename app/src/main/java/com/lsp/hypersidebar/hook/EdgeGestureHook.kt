@@ -440,6 +440,9 @@ class EdgeGestureHook(
 
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // 配置新鲜度检查（迭代六 §11.1）：过期才后台 bind 拉取，此处仅 volatile 读，
+                // 不在呼出关键路径上；新配置下次读取生效
+                com.lsp.hypersidebar.util.ConfigPullBridge.refreshIfStale(stub?.context ?: EzXposed.appContext)
                 downX = ev.rawX
                 downY = ev.rawY
                 gestureSeq++

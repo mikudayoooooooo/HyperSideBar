@@ -163,6 +163,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // 配置新鲜度检查（迭代六 §11.1）：过期才后台 bind 拉取，此处仅 volatile 读
+                com.lsp.hypersidebar.util.ConfigPullBridge.refreshIfStale(view.context)
                 sDownX = ev.rawX
                 sDownY = ev.rawY
                 sGestureSeq++

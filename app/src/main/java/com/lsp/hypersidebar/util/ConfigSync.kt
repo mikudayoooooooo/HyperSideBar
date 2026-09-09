@@ -42,10 +42,14 @@ object ConfigSync {
 
     private val cache = ConcurrentHashMap<String, Any>()
 
+    /** 最近一次收到 SYNC 的时刻（elapsedRealtime）；0=从未收到（init 快照兜底态） */
+    @Volatile private var lastSyncAt = 0L
+
     /** 收到 SYNC 全量覆盖（键值均为 Bundle 可序列化基础类型/StringSet）。 */
     fun applySync(map: Map<String, Any>) {
         cache.clear()
         cache.putAll(map)
+        lastSyncAt = android.os.SystemClock.elapsedRealtime()
         Log.i(TAG, "config synced: ${cache.size} keys")
     }
 
@@ -53,6 +57,19 @@ object ConfigSync {
     fun containsOverride(key: String?): Boolean = key != null && cache.containsKey(key)
     fun hasOverride(): Boolean = cache.isNotEmpty()
     fun overrideSnapshot(): Map<String, Any> = HashMap(cache)
+
+    /**
+     * 缓存新鲜度（迭代六 §11.1）：从未同步过，或距上次 SYNC 超过 [STALE_MS] 即视为过期。
+     * 过期≠一定有新配置——只是"模块侧改过设置而 SYNC 广播可能被冻结宿主丢弃"的信号，
+     * 由 [ConfigPullBridge] 决定是否 bind 拉取兜底。手势 DOWN/呼出装配前的低成本检查点
+     * 只做这里的一次 volatile 读。
+     */
+    const val STALE_MS = 60_000L
+
+    fun isStale(): Boolean {
+        val last = lastSyncAt
+        return last == 0L || android.os.SystemClock.elapsedRealtime() - last > STALE_MS
+    }
 
     // ===== 模块进程侧：写入即推送 =====
 

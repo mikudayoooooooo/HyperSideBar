@@ -27,4 +27,7 @@ internal sealed interface SettingsKey : NavKey {
 
     /** 迭代六 §11.2：运行日志页（三进程 HLog 缓冲汇聚，关于页进入） */
     data object Logs : SettingsKey
+
+    /** 迭代六 §11.3：使用统计页（§9.2 指标 + §9.3 派生口径，设置页进入） */
+    data object Stats : SettingsKey
 }

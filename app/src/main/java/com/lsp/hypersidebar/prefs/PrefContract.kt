@@ -65,6 +65,8 @@ object PrefKeys {
     const val LOG_DUMP_EXTRA_LOGS = "logs"
     /** 回传 extra：进程状态快照（CircuitBreaker 等，JSON 对象字符串，可缺省） */
     const val LOG_DUMP_EXTRA_STATUS = "status"
+    /** 回传 extra：StatsRecorder 全量聚合 JSON（§11.3，可缺省） */
+    const val LOG_DUMP_EXTRA_STATS = "stats"
 
     // ===== :ui → 模块 App 的快捷方式 root 代发通道（§2.4 实测定案） =====
     // :ui（平台签名特权，非 uid 1000）对非 exported 目标 startActivityAsUser 静默假成功且无 su 授权；

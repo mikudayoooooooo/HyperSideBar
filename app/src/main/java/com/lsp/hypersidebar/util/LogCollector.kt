@@ -25,6 +25,9 @@ object LogCollector {
     /** proc 短名 → 进程状态快照 JSON（熔断等，可空缺） */
     val statuses = mutableStateMapOf<String, String>()
 
+    /** proc 短名 → StatsRecorder 聚合 JSON（§11.3，可空缺） */
+    val stats = mutableStateMapOf<String, String>()
+
     @Volatile private var registered = false
 
     /** 幂等注册（MainActivity/日志页进入时调用；模块进程内只需一次） */
@@ -40,6 +43,9 @@ object LogCollector {
                         logs[proc] = parse(json)
                         intent.getStringExtra(PrefKeys.LOG_DUMP_EXTRA_STATUS)?.let {
                             if (it.isNotEmpty()) statuses[proc] = it
+                        }
+                        intent.getStringExtra(PrefKeys.LOG_DUMP_EXTRA_STATS)?.let {
+                            if (it.isNotEmpty()) stats[proc] = it
                         }
                     }
                 },

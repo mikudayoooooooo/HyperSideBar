@@ -12,6 +12,7 @@ import com.lsp.hypersidebar.util.DataLoader
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutStore
 import com.lsp.hypersidebar.util.HLog
+import com.lsp.hypersidebar.util.StatsRecorder
 
 private const val TAG = "FanMenuController"
 
@@ -42,6 +43,10 @@ class FanMenuController(
     var isShowing = false
         private set
     private var host: ComposeFanHost? = null
+
+    // ===== 数据记录（§11.3） =====
+    private var showStartElapsed = 0L
+    @Volatile private var exitAfterLaunch = false
 
     // 池=1（1C P2）：dismiss 后 host 不销毁，idleHost 持有供下次呼出复用；
     // activeContext = 最近一次 showInternal 的 context（回调经它取，见 obtainHost）
@@ -169,6 +174,10 @@ class FanMenuController(
             host = fanHost
             fanHost.show(anchorX, anchorY, apps, allQuick, isLandscape)
             touchHeartbeat()
+            // 数据记录（§11.3）：呼出次数/响应时间/两次呼出间隔
+            exitAfterLaunch = false
+            showStartElapsed = android.os.SystemClock.elapsedRealtime()
+            StatsRecorder.onFanShown()
             // 呼出即预热（2026-09-07 预热制）：QS_TILE 目标包 kill+预 bind、图标缓存预灌。
             // 策略差异：仅 :ui 的 DirectLaunchStrategy 覆写有动作，launcher 空实现
             launchStrategy.onFanShown(
@@ -206,7 +215,14 @@ class FanMenuController(
                 HLog.i(TAG, tl() + "onAppSelected: ${appInfo.packageName}")
                 val context = activeContext
                 if (context != null) {
-                    if (appInfo.packageName == ALL_APPS_PKG) {
+                    val isAllApps = appInfo.packageName == ALL_APPS_PKG
+                    // 数据记录（§11.3）：打开次数/全部应用次数/选择时长
+                    StatsRecorder.onOpen(
+                        appInfo.packageName, isAllApps,
+                        (android.os.SystemClock.elapsedRealtime() - showStartElapsed).toInt()
+                    )
+                    exitAfterLaunch = true
+                    if (isAllApps) {
                         launchStrategy.launchAllApps(context)
                     } else {
                         launchStrategy.launchFreeform(context, appInfo.packageName)
@@ -220,6 +236,8 @@ class FanMenuController(
                 val context = activeContext
                 if (context != null) {
                     if (appInfo.actionHandle != null) {
+                        StatsRecorder.onShortcut()
+                        exitAfterLaunch = true
                         appInfo.actionHandle.invoke(context)
                         dismiss()
                     } else {
@@ -291,6 +309,9 @@ class FanMenuController(
             return
         }
         HLog.i(TAG, tl() + "doDismiss($via): tearing down host")
+        // 数据记录（§11.3）：未选中即退出=取消（启动后的自动退出不计）
+        StatsRecorder.onFanClosed(exitAfterLaunch)
+        exitAfterLaunch = false
         // 强一致（1C §3）：先完成视图真实摘除，再清状态位——顺序颠倒会把
         // "视图还活着"伪装成"已收起"，下次呼出在旧窗口之上再叠一个（双开根因）
         try {

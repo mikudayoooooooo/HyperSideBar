@@ -23,6 +23,7 @@ import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createBefo
 import kotlin.math.abs
 import kotlin.math.hypot
 import com.lsp.hypersidebar.util.HLog
+import com.lsp.hypersidebar.util.StatsRecorder
 
 private const val TAG = "EdgeGesture"
 
@@ -66,6 +67,8 @@ class EdgeGestureHook(
                 onRelayResult = { alive, what ->
                     // :ui 执行端失联 = 机制性失败（熔断数据源）；送达 = 连续失败清零
                     if (alive) breaker.recordSuccess() else breaker.recordFailure("relay dead: $what")
+                    // 数据记录（§11.3）：每次转发的确定性结果（成功率口径）
+                    StatsRecorder.onLaunchResult(alive)
                 },
                 shouldSimulateRelayDead = {
                     // v2.0.0 发布门控（review 定案）：调试开关仅 debug 构建生效——
@@ -264,7 +267,13 @@ class EdgeGestureHook(
                                 HLog.i(TAG, "manifest shortcuts replied: ${arr.length()}")
                             }.onFailure {
             // 日志拉取回传（§11.2）：模块 App 请求时回传 HLog 缓冲 + 熔断快照
-            com.lsp.hypersidebar.util.LogDumpBridge.register(ctx) { breaker.snapshot() }
+            com.lsp.hypersidebar.util.LogDumpBridge.register(
+                ctx,
+                statusProvider = { breaker.snapshot() },
+                statsProvider = { StatsRecorder.dump() }
+            )
+            // 数据记录（§11.3）：注入宿主 context（聚合结构落盘宿主本地 prefs）
+            com.lsp.hypersidebar.util.StatsRecorder.init(ctx)
                                 HLog.w(TAG, "manifest shortcuts query failed: ${it.message}")
                             }
                         }.start()
@@ -499,6 +508,7 @@ class EdgeGestureHook(
                         anchorT = ev.eventTime
                     } else if (ev.eventTime - anchorT >= dwellMs()) {
                         stallFired = true
+                        StatsRecorder.onStall()
                         vlog("g#$gestureSeq STALL ${dwellMs()}ms 达标 anchor=(${anchorX.toInt()},${anchorY.toInt()})")
                         cancelNativeGesture(stub, ev)
                         postShowFan(ev, stub)

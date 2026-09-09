@@ -233,5 +233,25 @@
     <string name="logs_export_done">运行日志已保存：下载/%s</string>
     <string name="logs_empty">暂无日志，点「刷新」拉取各进程缓冲</string>
     <string name="logs_verbose">高频手势日志</string>
+    <!-- 使用统计页（迭代六 §11.3，PRD §9.2/§9.3） -->
+    <string name="stats_entry">使用统计</string>
+    <string name="stats_entry_summary">呼出/打开/成功率/误触率等指标（§9.2），可导出 CSV</string>
+    <string name="stats_title">使用统计</string>
+    <string name="stats_refresh">刷新</string>
+    <string name="stats_export">导出 CSV</string>
+    <string name="stats_today">今日</string>
+    <string name="stats_total">累计</string>
+    <string name="stats_invocations">呼出次数</string>
+    <string name="stats_opens">打开应用次数</string>
+    <string name="stats_all_apps">打开全部应用次数</string>
+    <string name="stats_shortcuts">快捷方式次数</string>
+    <string name="stats_cancels">取消退出次数</string>
+    <string name="stats_success_rate">打开成功率</string>
+    <string name="stats_misfire_rate">误触率</string>
+    <string name="stats_avg_select">平均选择时长</string>
+    <string name="stats_avg_response">平均响应时间</string>
+    <string name="stats_avg_gap">平均两次呼出间隔</string>
+    <string name="stats_all_apps_share">全部应用占比</string>
+    <string name="stats_note">口径：成功率=有确定性结果的启动（不含 :ui 本地直启）；误触率=呼出后≤3s 取消且 3s 内无再呼出，基于最近 200 条事件；样本窗=各进程最近 200 条时长。</string>
     <string name="logs_verbose_summary">逐手势明细（g#N/s#N），排查呼出灵敏度时开启；默认关（关闭时零开销），开启后下次手势生效</string>
 </resources>

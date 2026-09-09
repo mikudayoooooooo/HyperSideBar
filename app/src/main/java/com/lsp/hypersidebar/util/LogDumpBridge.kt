@@ -21,8 +21,14 @@ object LogDumpBridge {
     /**
      * @param statusProvider 进程状态快照（JSON 字符串，可 null）——launcher/:ui 传
      *   CircuitBreaker.snapshot()，模块 App 不注册本接收器（直读本地缓冲）
+     * @param statsProvider 使用数据聚合 JSON（§11.3，可 null）——launcher/:ui 传
+     *   StatsRecorder.dump()
      */
-    fun register(context: Context, statusProvider: () -> String? = { null }) {
+    fun register(
+        context: Context,
+        statusProvider: () -> String? = { null },
+        statsProvider: () -> String? = { null }
+    ) {
         runCatching {
             context.registerReceiver(
                 object : BroadcastReceiver() {
@@ -33,6 +39,9 @@ object LogDumpBridge {
                             .putExtra(PrefKeys.LOG_DUMP_EXTRA_LOGS, HLog.dumpJson())
                         statusProvider()?.let {
                             reply.putExtra(PrefKeys.LOG_DUMP_EXTRA_STATUS, it)
+                        }
+                        statsProvider()?.let {
+                            reply.putExtra(PrefKeys.LOG_DUMP_EXTRA_STATS, it)
                         }
                         runCatching { c.sendBroadcast(reply) }
                             .onFailure { HLog.w("LogDump", "reply send failed: ${it.message}") }

@@ -92,6 +92,7 @@ internal fun MainScreen(
         SettingsKey.ShortcutList, SettingsKey.ShortcutPicker, SettingsKey.QsTilePicker ->
             stringResource(R.string.shortcuts_add_section)
         SettingsKey.Logs -> stringResource(R.string.logs_title)
+        SettingsKey.Stats -> stringResource(R.string.stats_title)
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
     }
 
@@ -199,6 +200,9 @@ internal fun MainScreen(
                                 onNavigateToShortcutSelection = {
                                     settingsStack.add(SettingsKey.ShortcutList)
                                 },
+                                onNavigateToStats = {
+                                    settingsStack.add(SettingsKey.Stats)
+                                },
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -285,6 +289,11 @@ internal fun MainScreen(
                                 prefs = prefs,
                                 modifier = Modifier.fillMaxSize()
                             )
+                        }
+                    }
+                    SettingsKey.Stats -> NavEntry(key) {
+                        DetailPageContainer {
+                            StatsPage(modifier = Modifier.fillMaxSize())
                         }
                     }
                     SettingsKey.QsTilePicker -> NavEntry(key) {

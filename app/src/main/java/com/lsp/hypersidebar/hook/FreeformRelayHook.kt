@@ -53,9 +53,13 @@ class FreeformRelayHook(
                 com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx)
                 // 日志拉取回传（§11.2）：模块 App 请求时回传 HLog 缓冲；:ui 的熔断快照
                 // 在 TurboLayout（同进程），经其伴生句柄取，未初始化时给空快照
-                com.lsp.hypersidebar.util.LogDumpBridge.register(ctx) {
-                    TurboLayout.breakerSnapshot()
-                }
+                com.lsp.hypersidebar.util.LogDumpBridge.register(
+                    ctx,
+                    statusProvider = { TurboLayout.breakerSnapshot() },
+                    statsProvider = { com.lsp.hypersidebar.util.StatsRecorder.dump() }
+                )
+                // 数据记录（§11.3）：注入宿主 context（聚合结构落盘宿主本地 prefs）
+                com.lsp.hypersidebar.util.StatsRecorder.init(ctx)
             }
         if (hooked == null) {
             HLog.e(TAG, "Application.attach hook failed（B 链路不可用，边缘通道选中将无响应）")

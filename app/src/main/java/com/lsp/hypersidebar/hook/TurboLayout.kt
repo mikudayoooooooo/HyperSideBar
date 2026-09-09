@@ -22,6 +22,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.sqrt
 import com.lsp.hypersidebar.util.HLog
+import com.lsp.hypersidebar.util.StatsRecorder
 
 private const val TAG = "TurboLayout"
 
@@ -243,6 +244,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         sAnchorT = ev.eventTime
                     } else if (ev.eventTime - sAnchorT >= stripDwellMs()) {
                         sStallFired = true
+                        StatsRecorder.onStall()
                         vlog("s#$sGestureSeq STALL ${stripDwellMs()}ms anchor=(${sAnchorX.toInt()},${sAnchorY.toInt()})")
                         postShowStripFan(view)
                     }

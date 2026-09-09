@@ -9,7 +9,7 @@
 
     <string name="module_section">模块</string>
     <string name="module_enabled">启用 HyperSideBar</string>
-    <string name="module_enabled_summary">替换原生侧边栏为扇形菜单</string>
+    <string name="module_enabled_summary">替换原生侧边栏为扇形菜单；开关下次手势生效</string>
     <string name="status_running">模块运行中</string>
     <string name="status_normal_summary">手势与执行通道工作正常</string>
     <string name="status_abnormal">模块通道异常</string>
@@ -35,7 +35,7 @@
     <string name="apps_section">应用</string>
     <string name="select_apps">扇形应用</string>
     <string name="select_shortcut_apps">快捷应用</string>
-    <string name="selected_apps_summary">已选择 %1$d 个应用</string>
+    <string name="selected_apps_summary">已选择 %1$d 个应用；改动下次呼出生效</string>
     <string name="selected_apps_group">已选（%1$d）</string>
     <string name="selected_apps_count">已选择 %1$d 个</string>
     <string name="search_apps_hint">搜索应用…</string>
@@ -54,14 +54,14 @@
     <string name="system_colors_summary">使用 HyperOS 系统动态颜色</string>
     <string name="interaction_section">交互</string>
     <string name="trigger_dwell_title">呼出停顿</string>
-    <string name="trigger_dwell_summary">贴边停顿 %1$d ms 后展开扇形</string>
+    <string name="trigger_dwell_summary">贴边停顿 %1$d ms 后展开扇形；改动即时生效</string>
     <string name="fan_fog_title">扇形背景雾化</string>
-    <string name="fan_fog_summary">雾化浓度 %1$d%%（0 为关闭填充）</string>
+    <string name="fan_fog_summary">雾化浓度 %1$d%%（0 为关闭填充）；改动下次呼出生效</string>
     <string name="fan_dim_title">背景压暗</string>
-    <string name="fan_dim_summary">呼出扇形时全屏压暗 24%，突出菜单</string>
+    <string name="fan_dim_summary">呼出扇形时全屏压暗 24%，突出菜单；改动下次呼出生效</string>
     <string name="defaults_section">重置</string>
     <string name="restore_defaults">恢复默认值</string>
-    <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，立即生效</string>
+    <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，下次呼出生效</string>
     <string name="restore_defaults_confirm">将全部布局与交互参数恢复为默认值，应用选择与快捷方式不受影响。</string>
     <string name="restore_defaults_done">已恢复默认布局与参数</string>
     <string name="reset_confirm">确认</string>
@@ -71,7 +71,7 @@
     <string name="layout_sheet_save">保存</string>
     <string name="layout_sheet_restore_default">恢复默认</string>
     <string name="layout_inner_clamped">已按“内圈 ≤ 外圈×80%”上限钳制</string>
-    <string name="layout_preview_hint">拖动滑条实时预览，保存后生效</string>
+    <string name="layout_preview_hint">拖动滑条实时预览，保存后下次呼出生效</string>
 
     <string name="icon_size">图标大小</string>
     <string name="inner_radius">内圈半径</string>
@@ -155,7 +155,7 @@
     <string name="shortcut_select_all">全选</string>
     <string name="shortcut_batch_delete_confirm">将删除已选的 %d 个快捷方式。</string>
     <string name="shortcuts_at_store_limit">最多可添加 %d 个快捷方式</string>
-    <string name="shortcut_entry_summary">已添加 %1$d · 启用 %2$d</string>
+    <string name="shortcut_entry_summary">已添加 %1$d · 启用 %2$d；改动下次呼出生效</string>
     <string name="shortcut_unnamed">未命名</string>
     <string name="shortcut_enabled">启用</string>
     <string name="shortcut_new">新建快捷方式</string>

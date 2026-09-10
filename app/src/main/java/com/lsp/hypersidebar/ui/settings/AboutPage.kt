@@ -68,7 +68,7 @@ internal fun AboutPage(
     service: XposedService?,
     prefs: SharedPreferences,
     prefsRevision: Int,
-    onNavigateToLogs: () -> Unit = {},
+    onNavigateToDiagnostics: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -292,38 +292,12 @@ internal fun AboutPage(
         item { SmallTitle(text = stringResource(R.string.debug_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                // 运行日志页（§11.2）：三进程环形缓冲汇聚/过滤/导出，自检 v2 的日常入口
+                // 诊断与统计（0909 拍板）：调试区只留一个父入口，点进去再选
+                // 运行日志/使用统计/导出自检报告——本页不再平铺诊断功能行
                 ArrowPreference(
-                    title = stringResource(R.string.logs_entry),
-                    summary = stringResource(R.string.logs_entry_summary),
-                    onClick = onNavigateToLogs
-                )
-                var selfCheckBusy by remember { mutableStateOf(false) }
-                BasicComponent(
-                    title = stringResource(R.string.selfcheck_export),
-                    summary = if (selfCheckBusy) {
-                        stringResource(R.string.selfcheck_exporting)
-                    } else {
-                        stringResource(R.string.selfcheck_export_summary)
-                    },
-                    onClick = {
-                        if (selfCheckBusy) return@BasicComponent
-                        selfCheckBusy = true
-                        updateScope.launch {
-                            val path = runCatching {
-                                val content = SelfCheck.generate(context, service, effectivePrefs)
-                                SelfCheck.export(context, content)
-                            }.getOrElse { context.getString(R.string.unknown) + " (${it.message})" }
-                            selfCheckBusy = false
-                            runCatching {
-                                Toast.makeText(
-                                    context,
-                                    context.getString(R.string.selfcheck_export_done, path),
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        }
-                    }
+                    title = stringResource(R.string.diagnostics_entry),
+                    summary = stringResource(R.string.diagnostics_entry_summary),
+                    onClick = onNavigateToDiagnostics
                 )
                 if (com.lsp.hypersidebar.BuildConfig.DEBUG) SwitchPreference(
                     title = stringResource(R.string.debug_relay_blackhole),

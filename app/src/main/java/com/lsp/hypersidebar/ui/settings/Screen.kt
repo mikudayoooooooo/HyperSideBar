@@ -25,9 +25,12 @@ internal sealed interface SettingsKey : NavKey {
     /** C3（批次 3）：QS 磁贴专属选择器（平铺全部扫到的 TileService，编辑页磁贴分支进入） */
     data object QsTilePicker : SettingsKey
 
-    /** 迭代六 §11.2：运行日志页（三进程 HLog 缓冲汇聚，关于页进入） */
+    /** 迭代六 §11.2：运行日志页（三进程 HLog 缓冲汇聚，诊断与统计页进入） */
     data object Logs : SettingsKey
 
-    /** 迭代六 §11.3：使用统计页（§9.2 指标 + §9.3 派生口径，设置页进入） */
+    /** 迭代六 §11.3：使用统计页（§9.2 指标 + §9.3 派生口径，诊断与统计页进入） */
     data object Stats : SettingsKey
+
+    /** 诊断与统计汇聚页（0909 用户拍板：诊断类功能收进关于页调试区，加一层父入口） */
+    data object Diagnostics : SettingsKey
 }

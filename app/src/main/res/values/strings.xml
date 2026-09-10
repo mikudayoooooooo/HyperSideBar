@@ -235,6 +235,11 @@
     <string name="logs_export_done">运行日志已保存：下载/%s</string>
     <string name="logs_empty">暂无日志，点「刷新」拉取各进程缓冲</string>
     <string name="logs_verbose">高频手势日志</string>
+    <!-- 诊断与统计汇聚页（0909 拍板：调试区父入口，点进去再选具体页面） -->
+    <string name="diagnostics_section">诊断项目</string>
+    <string name="diagnostics_entry">诊断与统计</string>
+    <string name="diagnostics_entry_summary">运行日志、使用统计、导出自检报告</string>
+
     <!-- 使用统计页（迭代六 §11.3，PRD §9.2/§9.3） -->
     <string name="stats_entry">使用统计</string>
     <string name="stats_entry_summary">呼出/打开/成功率/误触率等指标（§9.2），可导出 CSV</string>

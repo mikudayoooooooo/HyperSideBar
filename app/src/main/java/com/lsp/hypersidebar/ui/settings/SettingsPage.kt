@@ -59,7 +59,6 @@ internal fun SettingsPage(
     onThemeModeChange: (ThemeMode) -> Unit,
     onNavigateToAppSelection: () -> Unit,
     onNavigateToShortcutSelection: () -> Unit,
-    onNavigateToStats: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // D1：绑定晚到时参数 prefs 仍是本地空壳（remember 首读即 0 且 revision 通道只覆盖
@@ -198,12 +197,6 @@ internal fun SettingsPage(
                             R.string.shortcut_entry_summary, shortcutStats.first, shortcutStats.second
                         ),
                         onClick = onNavigateToShortcutSelection
-                    )
-                    // 使用统计（§11.3）：呼出/打开/成功率等 §9.2 指标
-                    ArrowPreference(
-                        title = stringResource(R.string.stats_entry),
-                        summary = stringResource(R.string.stats_entry_summary),
-                        onClick = onNavigateToStats
                     )
                 }
             }

@@ -93,6 +93,7 @@ internal fun MainScreen(
             stringResource(R.string.shortcuts_add_section)
         SettingsKey.Logs -> stringResource(R.string.logs_title)
         SettingsKey.Stats -> stringResource(R.string.stats_title)
+        SettingsKey.Diagnostics -> stringResource(R.string.diagnostics_entry)
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
     }
 
@@ -200,9 +201,6 @@ internal fun MainScreen(
                                 onNavigateToShortcutSelection = {
                                     settingsStack.add(SettingsKey.ShortcutList)
                                 },
-                                onNavigateToStats = {
-                                    settingsStack.add(SettingsKey.Stats)
-                                },
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -216,7 +214,9 @@ internal fun MainScreen(
                                 service = service,
                                 prefs = prefs,
                                 prefsRevision = prefsRevision,
-                                onNavigateToLogs = { aboutStack.add(SettingsKey.Logs) },
+                                onNavigateToDiagnostics = {
+                                    aboutStack.add(SettingsKey.Diagnostics)
+                                },
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -294,6 +294,16 @@ internal fun MainScreen(
                     SettingsKey.Stats -> NavEntry(key) {
                         DetailPageContainer {
                             StatsPage(modifier = Modifier.fillMaxSize())
+                        }
+                    }
+                    SettingsKey.Diagnostics -> NavEntry(key) {
+                        DetailPageContainer {
+                            DiagnosticsPage(
+                                service = service,
+                                prefs = prefs,
+                                onNavigateToLogs = { aboutStack.add(SettingsKey.Logs) },
+                                onNavigateToStats = { aboutStack.add(SettingsKey.Stats) }
+                            )
                         }
                     }
                     SettingsKey.QsTilePicker -> NavEntry(key) {

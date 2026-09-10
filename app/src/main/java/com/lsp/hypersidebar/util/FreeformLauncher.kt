@@ -90,7 +90,13 @@ object FreeformLauncher {
             val intent = Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_LAUNCHER)
                 setClassName(packageName, clsName)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                // 只带 NEW_TASK 不带 MULTIPLE_TASK（0909 用户报告：对已全屏运行的应用
+                // 小窗化时"先弹小窗再关原应用"两段式观感）。MULTIPLE_TASK 强制开新任务
+                // 实例——MIUI 随后清理原全屏任务=两段式闪变；去掉后 NEW_TASK 命中既有
+                // 任务，AMS 携小窗 options 把任务整体移入 freeform（单次过渡，原生侧边栏
+                // 同语义）。未运行的应用照常全新拉起；已在本模块小窗的应用=把该窗带到
+                // 前台。AllApps 面板（launchSelfFreeform）本就只带 NEW_TASK，不受影响
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             val method = context.javaClass.getMethod(
                 "startActivityAsUser",

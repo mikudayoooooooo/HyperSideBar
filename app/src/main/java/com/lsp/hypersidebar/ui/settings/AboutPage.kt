@@ -325,7 +325,9 @@ internal fun AboutPage(
                         }
                     }
                 )
-                if (com.lsp.hypersidebar.BuildConfig.DEBUG) ArrowPreference(
+                // 重启 hook 宿主不限 debug（0912 拍板：调试区仅失联开关 debug 专属）——
+                // 远程排障/模块更新后重启三宿主是运维规程，release 用户同样需要
+                ArrowPreference(
                     title = stringResource(R.string.debug_host_restart),
                     summary = stringResource(R.string.debug_host_restart_summary),
                     onClick = { showHostRestart = true }

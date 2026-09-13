@@ -25,6 +25,17 @@ import org.json.JSONObject
  */
 object HLog {
 
+    /**
+     * 进程短名（[proc] 产出 ↔ LogPage 过滤 chip 消费，0912 收口单源）。
+     * "app" 分支匹配 applicationId（=真实进程名，经 BuildConfig 单源）而非源码
+     * namespace——包名迁移后两者分叉，曾致模块进程短名落进 else 兜底、
+     * 日志页"本应用"过滤 chip 永远过滤不到东西。
+     */
+    const val PROC_LAUNCHER = "launcher"
+    const val PROC_UI = "ui"
+    const val PROC_SYS = "sys"
+    const val PROC_APP = "app"
+
     /** 缓冲容量（约 150KB/进程，实现假设值 §11.2） */
     private const val CAPACITY = 1000
 
@@ -75,10 +86,10 @@ object HLog {
             clz.getMethod("currentProcessName").invoke(null) as? String
         }.getOrNull() ?: "?"
         val short = when {
-            raw == HostPackages.HOME -> "launcher"
-            raw.endsWith(HostPackages.UI_PROCESS_SUFFIX) -> "ui"
-            raw == HostPackages.SYSTEM_UI -> "sys"
-            raw == FreeformLauncher.MODULE_CLASS_NAMESPACE || raw.isEmpty() -> "app"
+            raw == HostPackages.HOME -> PROC_LAUNCHER
+            raw.endsWith(HostPackages.UI_PROCESS_SUFFIX) -> PROC_UI
+            raw == HostPackages.SYSTEM_UI -> PROC_SYS
+            raw == FreeformLauncher.MODULE_PACKAGE || raw.isEmpty() -> PROC_APP
             else -> raw.substringAfterLast('.').take(12)
         }
         procName = short

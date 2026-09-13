@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.content.SharedPreferences
 import android.os.Build
 import android.util.Log
+import com.lsp.hypersidebar.BuildConfig
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import com.lsp.hypersidebar.prefs.HostPackages
@@ -38,8 +39,10 @@ import com.lsp.hypersidebar.util.HLog
 object ConfigSync {
 
     private const val TAG = "ConfigSync"
-    const val ACTION_SYNC = "io.github.mikudayoooooooo.hypersidebar.CONFIG_SYNC"
-    const val ACTION_REQUEST = "io.github.mikudayoooooooo.hypersidebar.CONFIG_REQUEST"
+    // action 前缀取 BuildConfig（=gradle applicationId，编译期常量）：改包名自动跟随，
+    // 不再与 FreeformLauncher.MODULE_PACKAGE 各写一份字面量
+    const val ACTION_SYNC = BuildConfig.APPLICATION_ID + ".CONFIG_SYNC"
+    const val ACTION_REQUEST = BuildConfig.APPLICATION_ID + ".CONFIG_REQUEST"
 
     /** SYNC 定向投递目标（唯一消费方=两个 hook 宿主；隐式广播任意 App 可收，禁止回退隐式） */
     private val HOOK_HOST_PKGS = listOf(HostPackages.HOME, HostPackages.UI_HOST)

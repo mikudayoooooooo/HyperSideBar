@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Process
 import android.os.UserHandle
 import android.util.Log
+import com.lsp.hypersidebar.BuildConfig
 import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "FreeformLauncher"
@@ -17,8 +18,9 @@ object FreeformLauncher {
      *  注册在模块包，跨进程拉起必须显式用模块包名。
      *
      *  迭代五批次 0：必须等于 app/build.gradle.kts 的 applicationId（APK 身份），
-     *  与源码 namespace（com.lsp.hypersidebar）解耦——改包名时此处同步改。 */
-    const val MODULE_PACKAGE = "io.github.mikudayoooooooo.hypersidebar"
+     *  与源码 namespace（com.lsp.hypersidebar）解耦——0912 起直接取 BuildConfig
+     *  （编译期常量内联），gradle 改包名此处自动跟随，不再依赖注释约定手工同步。 */
+    const val MODULE_PACKAGE = BuildConfig.APPLICATION_ID
     /** 源码命名空间（类路径前缀）：与 applicationId 解耦，跨进程寻址"包名 + 类路径"时拼接用。 */
     const val MODULE_CLASS_NAMESPACE = "com.lsp.hypersidebar"
 
@@ -111,17 +113,6 @@ object FreeformLauncher {
         } catch (e: Exception) {
             HLog.e(TAG, "MiuiMultiWindow fallback failed: ${e.message}")
             toastOnMain(context, "小窗启动失败：$packageName")
-        }
-    }
-
-    private fun toastOnMain(context: Context, msg: String) {
-        val show = Runnable {
-            runCatching {
-                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
-            }
-        }
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) show.run() else {
-            android.os.Handler(android.os.Looper.getMainLooper()).post(show)
         }
     }
 

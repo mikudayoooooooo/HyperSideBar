@@ -23,6 +23,7 @@ import kotlin.math.hypot
 import kotlin.math.sqrt
 import com.lsp.hypersidebar.util.HLog
 import com.lsp.hypersidebar.util.StatsRecorder
+import com.lsp.hypersidebar.util.toastOnMain
 
 private const val TAG = "TurboLayout"
 

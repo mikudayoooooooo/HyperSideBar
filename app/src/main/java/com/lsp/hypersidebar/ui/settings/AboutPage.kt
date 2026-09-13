@@ -370,10 +370,10 @@ internal fun AboutPage(
     )
 }
 
-// 项目地址取自仓库 origin（github.com/mikudayoooooooo/HyperSideBar）——改仓库时同步改这里
+// 项目地址与作者链接（0912 收口）：仓库名单源 UpdateChecker.REPO_PATH——改仓库只改那里
 private const val AUTHOR_HANDLE = "mikudayoooooooo"
-private const val AUTHOR_URL = "https://github.com/mikudayoooooooo"
-private const val PROJECT_URL = "https://github.com/mikudayoooooooo/HyperSideBar"
+private const val AUTHOR_URL = "https://github.com/" + AUTHOR_HANDLE
+private const val PROJECT_URL = UpdateChecker.REPO_URL
 
 /** 检查更新 UI 态；Failed 可重试，Available 点击跳 Release 页 */
 private sealed interface UpdateCheckState {

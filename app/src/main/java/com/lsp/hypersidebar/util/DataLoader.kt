@@ -143,13 +143,7 @@ object DataLoader {
                 if (!failureToastShown && cachedResult == null && consecutiveFailures >= DEAD_THRESHOLD) {
                     failureToastShown = true
                     mainHandler.post {
-                        runCatching {
-                            android.widget.Toast.makeText(
-                                context,
-                                "推荐数据获取失败",
-                                android.widget.Toast.LENGTH_LONG
-                            ).show()
-                        }
+                        toastOnMain(context, "推荐数据获取失败")
                         onDataSourceDead?.invoke()
                     }
                 }

@@ -159,9 +159,9 @@ internal fun LogPage(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Chip("全部", procFilter == "all") { procFilter = "all" }
-            Chip("桌面", procFilter == "launcher") { procFilter = "launcher" }
-            Chip("执行端", procFilter == "ui") { procFilter = "ui" }
-            Chip("本应用", procFilter == "app") { procFilter = "app" }
+            Chip("桌面", procFilter == HLog.PROC_LAUNCHER) { procFilter = HLog.PROC_LAUNCHER }
+            Chip("执行端", procFilter == HLog.PROC_UI) { procFilter = HLog.PROC_UI }
+            Chip("本应用", procFilter == HLog.PROC_APP) { procFilter = HLog.PROC_APP }
             Chip(if (warnOnly) "警告+" else "全级别", warnOnly) { warnOnly = !warnOnly }
         }
         TextField(

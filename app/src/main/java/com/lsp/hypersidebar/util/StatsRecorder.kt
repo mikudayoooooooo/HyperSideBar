@@ -129,27 +129,35 @@ object StatsRecorder {
      * 误触率：呼出后 ≤3s 内取消，且取消后 3s 内无再次呼出的事件 / 总呼出。
      * recent 容量有限（200 条），窗口外事件不参与——页面注明口径。
      */
-    fun misfireRate(): Pair<Int, Int>? {
-        val evs = synchronized(recent) { recent.toList() }
-        if (evs.isEmpty()) return null
+    fun misfireRate(): Pair<Int, Int>? =
+        misfireRateFrom(synchronized(recent) {
+            recent.toList().map { it.optLong("ts") to it.optString("type") }
+        })
+
+    /**
+     * 误触率纯函数（0912 收口：StatsPage 对合并 dump 的同逻辑副本并此，阈值 3s 单源）。
+     * events=(ts, type) 需时间升序；返回 (误触数, 总呼出)，无呼出返回 null。
+     */
+    fun misfireRateFrom(events: List<Pair<Long, String>>): Pair<Int, Int>? {
+        if (events.isEmpty()) return null
         var shows = 0
         var misfires = 0
-        for (i in evs.indices) {
-            val e = evs[i]
-            if (e.optString("type") != "show") continue
+        for (i in events.indices) {
+            val (ts, type) = events[i]
+            if (type != "show") continue
             shows++
             // 找本次呼出后的第一个 cancel/再次 show
             var j = i + 1
             var misfired = false
-            while (j < evs.size) {
-                when (evs[j].optString("type")) {
+            while (j < events.size) {
+                when (events[j].second) {
                     "cancel" -> {
                         // 迅速取消（呼出→取消 ≤3s 由 show/cancel 时差体现）且
                         // 取消后 3s 内无 show → 误触
-                        val nextShow = (j + 1 until evs.size)
-                            .firstOrNull { evs[it].optString("type") == "show" }
-                        val gap = if (nextShow != null) evs[nextShow].optLong("ts") - evs[j].optLong("ts") else Long.MAX_VALUE
-                        if (evs[j].optLong("ts") - e.optLong("ts") <= 3000 && gap > 3000) misfired = true
+                        val nextShow = (j + 1 until events.size)
+                            .firstOrNull { events[it].second == "show" }
+                        val gap = if (nextShow != null) events[nextShow].first - events[j].first else Long.MAX_VALUE
+                        if (events[j].first - ts <= 3_000 && gap > 3_000) misfired = true
                         break
                     }
                     "show" -> break
@@ -254,7 +262,8 @@ object StatsRecorder {
 
     // ===== 内部 =====
 
-    private fun dayKey(): String =
+    /** 当天键（StatsPage 合并 dump 取今日计数同用——日期格式此前两处各写一份） */
+    fun dayKey(): String =
         java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
             .format(java.util.Date())
 

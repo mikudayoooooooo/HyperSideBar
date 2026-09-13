@@ -58,7 +58,7 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
         runCatching { StatsRecorder.mergeDumps(LogCollector.stats.values.toList()) }
             .getOrDefault(JSONObject())
     }
-    val today = dayCounters(merged, todayKey())
+    val today = dayCounters(merged, StatsRecorder.dayKey())
     val total = totalCounters(merged)
     val samples = Samples(
         selectMs = intList(merged, "selectMs"),
@@ -173,9 +173,6 @@ private data class Samples(
     val gapMs: List<Long>
 )
 
-private fun todayKey(): String =
-    java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-
 private fun dayCounters(root: JSONObject, day: String): Map<String, Int> =
     root.optJSONObject("days")?.optJSONObject(day)?.let { o ->
         o.keys().asSequence().map { it to o.optInt(it) }.toMap()
@@ -219,30 +216,14 @@ private fun allAppsShare(opens: Int?, allApps: Int?): String? {
     return (a * 100 / o).toString()
 }
 
-/** 误触率文本：StatsRecorder 误触判定（取消≤3s 且取消后 3s 内无再呼出）跑在合并 recent 上 */
+/** 误触率文本：判据与 3s 阈值单源 StatsRecorder.misfireRateFrom（0912 收口去重） */
 private fun misfireRateText(merged: JSONObject): String? {
     val recent = merged.optJSONArray("recent") ?: return null
-    var shows = 0
-    var misfires = 0
-    val evs = (0 until recent.length()).map { recent.optJSONObject(it) }.filterNotNull()
-    for (i in evs.indices) {
-        if (evs[i].optString("type") != "show") continue
-        shows++
-        var j = i + 1
-        while (j < evs.size) {
-            when (evs[j].optString("type")) {
-                "cancel" -> {
-                    val nextShow = ((j + 1) until evs.size).firstOrNull { evs[it].optString("type") == "show" }
-                    val gap = if (nextShow != null) evs[nextShow].optLong("ts") - evs[j].optLong("ts") else Long.MAX_VALUE
-                    if (evs[j].optLong("ts") - evs[i].optLong("ts") <= 3000 && gap > 3000) misfires++
-                    break
-                }
-                "show" -> break
-            }
-            j++
-        }
+    val events = (0 until recent.length()).mapNotNull { recent.optJSONObject(it) }
+        .map { it.optLong("ts") to it.optString("type") }
+    return StatsRecorder.misfireRateFrom(events)?.let { (misfires, shows) ->
+        (misfires * 100 / shows).toString()
     }
-    return if (shows == 0) null else (misfires * 100 / shows).toString()
 }
 
 /** 导出按天 CSV（下载目录，复用 SelfCheck 的 MediaStore 路径）：表头与行同源 MetricKeys，防漂移 */

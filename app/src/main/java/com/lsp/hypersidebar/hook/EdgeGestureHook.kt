@@ -24,6 +24,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import com.lsp.hypersidebar.util.HLog
 import com.lsp.hypersidebar.util.StatsRecorder
+import com.lsp.hypersidebar.util.toastOnMain
 
 private const val TAG = "EdgeGesture"
 

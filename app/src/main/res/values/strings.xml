@@ -143,7 +143,7 @@
     <string name="debug_relay_confirm_action_counting">确认开启（%d）</string>
     <string name="debug_host_restart">重启 hook 宿主</string>
     <string name="debug_host_restart_summary">root 强制结束勾选的宿主进程并由系统拉回，用于模块更新后重载 hook</string>
-    <string name="debug_host_restart_dialog_summary">模块更新后需三个宿主全部重启才会重新加载 hook（漏系统界面=磁贴成功率回退）。勾选后点「重启」：桌面回 HOME，系统界面自动重启，手机管家下次呼出侧边栏时拉起。</string>
+    <string name="debug_host_restart_dialog_summary">模块更新后需三个宿主全部重启才会重新加载 hook（漏系统界面=磁贴成功率回退）。勾选后点「重启」：桌面回 HOME，系统界面会黑屏一闪后自动重启（黑屏即重启成功的标志），手机管家下次呼出侧边栏时拉起。</string>
     <string name="debug_host_restart_action">重启</string>
     <string name="debug_host_restart_busy">重启中…</string>
     <string name="selfcheck_export">导出自检报告</string>

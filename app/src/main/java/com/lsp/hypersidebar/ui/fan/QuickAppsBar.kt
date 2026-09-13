@@ -1,7 +1,7 @@
 package com.lsp.hypersidebar.ui.fan
 
 import android.content.Context
-import android.graphics.drawable.Drawable
+import android.graphics.Bitmap
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -27,6 +27,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -34,14 +35,21 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.core.graphics.drawable.toBitmap
+import com.lsp.hypersidebar.prefs.LayoutDefaults
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.blur.BlendColorEntry
+import top.yukonga.miuix.kmp.blur.BlurBlendMode
+import top.yukonga.miuix.kmp.blur.BlurColors
+import top.yukonga.miuix.kmp.blur.BlurDefaults
+import top.yukonga.miuix.kmp.blur.LayerBackdrop
+import top.yukonga.miuix.kmp.blur.textureBlur
 
 @Composable
 fun QuickAppsBar(
     geometry: FanGeometry,
     selectedIndex: Int,
     colors: FanThemeColors,
+    frostedBackdrop: LayerBackdrop?,
     onQuickAppSelected: (FanAppInfo) -> Unit
 ) {
     val context = LocalContext.current
@@ -95,8 +103,36 @@ fun QuickAppsBar(
                         geometry.quickBarY.toInt()
                     )
                 }
+                // 毛玻璃底板（0913 路线③）：对 layerBackdrop 录制的"弧+图标"子树做窗口内
+                // textureBlur（miuix-blur，AGSL RuntimeShader）；frostedBackdrop=null 时
+                // 此节点不参与（enabled=false 跳过特效，零采样成本）。
+                // HyperOS 风格=亮磨砂：blur 后叠主题 surface 高调白混（首测"暗色矩形只有
+                // 压暗感"——雾化=0 时窗口内背景透明，blur 无感，观感全靠染色；改白混提亮）
+                .then(
+                    frostedBackdrop?.let { bd ->
+                        Modifier.textureBlur(
+                            backdrop = bd,
+                            shape = RoundedCornerShape((iconSizeDp / 2f + 4f).dp),
+                            blurRadius = LayoutDefaults.FAN_FROSTED_QUICK_BAR_BLUR_DP * density,
+                            noiseCoefficient = BlurDefaults.NoiseCoefficient,
+                            colors = BlurColors(
+                                blendColors = listOf(
+                                    BlendColorEntry(
+                                        colors.surfaceContainerHigh.copy(alpha = 0.5f),
+                                        BlurBlendMode.SrcOver
+                                    )
+                                )
+                            ),
+                            enabled = true
+                        )
+                    } ?: Modifier
+                )
                 .clip(RoundedCornerShape((iconSizeDp / 2f + 4f).dp))
-                .background(colors.surfaceContainer.copy(alpha = 0.9f))
+                .background(
+                    // 亮混已承担染色：毛玻璃态不再叠暗色底（否则回退成压暗观感）
+                    if (frostedBackdrop != null) Color.Transparent
+                    else colors.surfaceContainer.copy(alpha = 0.9f)
+                )
                 .padding(
                     horizontal = (iconSizeDp * 0.25f).dp,
                     vertical = (iconSizeDp * 0.25f).dp
@@ -127,7 +163,7 @@ private fun QuickAppIcon(
     colors: FanThemeColors,
     onClick: () -> Unit
 ) {
-    val (drawable, fallbackColor) = rememberAppIcon(context, app)
+    val (bitmap, fallbackColor) = rememberAppIcon(context, app)
     val targetScale = if (isSelected) SELECTED_ICON_SCALE else 1f
     val targetAlpha = if (isSelected) 1f else 0.75f
     val iconScale by animateFloatAsState(targetValue = targetScale, animationSpec = tween(100))
@@ -148,7 +184,7 @@ private fun QuickAppIcon(
         contentAlignment = Alignment.Center
     ) {
         AppIconImage(
-            drawable = drawable,
+            bitmap = bitmap,
             fallbackColor = fallbackColor,
             appName = app.appName,
             size = iconSize,
@@ -173,32 +209,21 @@ private fun QuickAppIcon(
 
 @Composable
 fun AppIconImage(
-    drawable: Drawable?,
+    bitmap: Bitmap?,
     fallbackColor: Int,
     appName: String,
     size: Float,
     colors: FanThemeColors
 ) {
-    if (drawable != null) {
-        val bitmap = rememberIconBitmap(drawable)
-        if (bitmap != null) {
-            Image(
-                painter = BitmapPainter(bitmap.asImageBitmap()),
-                contentDescription = appName,
-                modifier = Modifier.size(size.dp)
-            )
-        } else {
-            FallbackIcon(appName, size, fallbackColor, colors)
-        }
+    if (bitmap != null) {
+        val painter = remember(bitmap) { BitmapPainter(bitmap.asImageBitmap()) }
+        Image(
+            painter = painter,
+            contentDescription = appName,
+            modifier = Modifier.size(size.dp)
+        )
     } else {
         FallbackIcon(appName, size, fallbackColor, colors)
-    }
-}
-
-@Composable
-private fun rememberIconBitmap(drawable: Drawable): android.graphics.Bitmap? {
-    return remember(drawable) {
-        runCatching { drawable.toBitmap(width = 128, height = 128) }.getOrNull()
     }
 }
 

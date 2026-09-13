@@ -82,6 +82,8 @@ class SettingsRepository(val prefs: SharedPreferences) {
         prefs.getFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
     fun fanDimEnabled(): Boolean =
         prefs.getBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)
+    fun fanFrostedEnabled(): Boolean =
+        prefs.getBoolean(PrefKeys.FAN_FROSTED_ENABLED, LayoutDefaults.FAN_FROSTED_ENABLED)
 
     fun customApps(): Set<String> = prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty()
 

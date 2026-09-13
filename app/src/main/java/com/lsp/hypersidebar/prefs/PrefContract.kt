@@ -31,6 +31,9 @@ object PrefKeys {
     const val FAN_FOG_INTENSITY = "fanFogIntensity"
     /** 呼出扇形时全屏压暗开关（Compose scrim 24% 黑，与菜单同步淡入） */
     const val FAN_DIM_ENABLED = "fanDimEnabled"
+    /** 毛玻璃总开关（0913 用户拍板）：开=窗口收缩包围盒+系统 blur-behind（真模糊身后内容）
+     *  +快捷栏底板窗口内 textureBlur；系统模糊被关（isCrossWindowBlurEnabled=false）时自动降级全屏窗口 */
+    const val FAN_FROSTED_ENABLED = "fanFrostedEnabled"
 
     const val CUSTOM_APPS = "customApps"
     // 已选固定应用的拖动排序（JSON 数组字符串，仅含已选包名；StringSet 不保序，
@@ -217,7 +220,25 @@ object LayoutDefaults {
 
     const val DEAD_ZONE = 12f
     const val TRIGGER_DWELL_MS = 250
-    const val TRIGGER_MIN_DISTANCE_DP = 30f
+
+    // ===== 滑条量程契约（0913 用户拍板：量程/步进与默认值同源定义，UI 禁止内联数字）=====
+    /** 滑动距离滑条（dp）：min / max / 步进。默认值=上方 TRIGGER_MIN_DISTANCE_DP，须落在格点上 */
+    const val TRIGGER_SWIPE_DISTANCE_MIN_DP = 10
+    const val TRIGGER_SWIPE_DISTANCE_MAX_DP = 150
+    const val TRIGGER_SWIPE_DISTANCE_STEP_DP = 5
+    /** 呼出停顿滑条（ms）：min / max / 步进（D2 定稿档位）。默认值=上方 TRIGGER_DWELL_MS */
+    const val TRIGGER_DWELL_MIN_MS = 150
+    const val TRIGGER_DWELL_MAX_MS = 350
+    const val TRIGGER_DWELL_STEP_MS = 50
+    /** 扇形雾化滑条：min / max / 步进。默认值=下方 FAN_FOG_INTENSITY */
+    const val FAN_FOG_MIN = 0f
+    const val FAN_FOG_MAX = 0.70f
+    const val FAN_FOG_STEP = 0.05f
+
+    // 滑动距离（呼出确认线，dp）：原 GestureThresholds.SWIPE_CONFIRM_PX=40px 死值改可配置
+    //（0913 用户拍板"40px 太极端"；15dp≈40px@440dpi 手感不变）。重置阈值=确认距离一半
+    //（滞回，见 GestureThresholds.SWIPE_RESET_RATIO）。此键原为 PRD §9.5 预留死键，本次接管。
+    const val TRIGGER_MIN_DISTANCE_DP = 15f
 
     // 扇形背景视觉（路线 C）：雾化默认 0.55（弧缘 100% → 锚点 35% 反向渐变，2026-09-06
     // 用户拍板：暗色主题下正向渐变的密度落在屏边不可见区，观感"没区别"）；压暗默认关
@@ -225,6 +246,12 @@ object LayoutDefaults {
     const val FAN_FOG_INTENSITY = 0.55f
     const val FAN_DIM_ENABLED = false
     const val FAN_DIM_AMOUNT = 0.24f
+
+    // 毛玻璃（0913）：默认关（未真机验证 HyperOS 悬浮窗 blur-behind 前保守 opt-in）；
+    // blurBehindRadius=窗缘圆角模糊半径；quickBarFrostBlur=快捷栏底板窗口内模糊半径
+    const val FAN_FROSTED_ENABLED = false
+    const val FAN_FROSTED_BLUR_BEHIND_RADIUS_DP = 36f
+    const val FAN_FROSTED_QUICK_BAR_BLUR_DP = 20f
 
     /** 所有布局相关键。恢复默认时批量写回。 */
     val layoutKeys = listOf(

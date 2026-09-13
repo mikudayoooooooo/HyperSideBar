@@ -13,7 +13,8 @@ data class FanAppInfo(
 
 data class FanConfig(
     val iconSizeDp: Float = 48f,
-    val quickIconSizeDp: Float = 36f,
+    // 快捷栏图标无独立尺寸：恒跟随扇形图标生效尺寸（FanGeometry quickIconSizeDpEff，
+    // PRD §9.5"与扇形应用图标大小一致，跟随"）——旧 quickIconSizeDp 字段是死值已删
     val innerRadiusDp: Float = 110f,
     val outerRadiusDp: Float = 150f,
     val defaultSpanAngle: Float = 150f,

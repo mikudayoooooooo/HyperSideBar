@@ -84,8 +84,14 @@ object DataLoader {
      * 带重试的预热（修"首次呼出只有固定应用"）：hook init 时宿主 appContext 可能未就绪
      * （launcher 实测直接抛 NPE，prewarm skipped），首轮呼出必然冷缓存。此方法每 intervalMs
      * 重试 provider 直到拿到上下文或耗尽次数，成功即 prewarm（刷新+兜底循环）。
+     * [onReady] = 上下文就绪后的追加动作（后台线程回调，如图标预灌），失败不影响预热本体。
      */
-    fun prewarmWithRetry(provider: () -> Context?, maxAttempts: Int = 12, intervalMs: Long = 5000L) {
+    fun prewarmWithRetry(
+        provider: () -> Context?,
+        maxAttempts: Int = 12,
+        intervalMs: Long = 5000L,
+        onReady: ((Context) -> Unit)? = null
+    ) {
         val task = object : Runnable {
             var attempt = 0
             override fun run() {
@@ -95,6 +101,12 @@ object DataLoader {
                     prewarmed = true
                     HLog.i(TAG, "prewarm ok (attempt ${attempt + 1})")
                     prewarm(ctx)
+                    if (onReady != null) {
+                        executor.execute {
+                            runCatching { onReady(ctx) }
+                                .onFailure { HLog.w(TAG, "prewarm onReady failed: ${it.message}") }
+                        }
+                    }
                 } else if (++attempt < maxAttempts) {
                     mainHandler.postDelayed(this, intervalMs)
                 } else {

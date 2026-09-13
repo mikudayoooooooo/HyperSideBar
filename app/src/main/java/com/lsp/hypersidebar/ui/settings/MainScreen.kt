@@ -42,19 +42,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.anim.AccelerateEasing
 import top.yukonga.miuix.kmp.anim.DecelerateEasing
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.NavigationBar
 import top.yukonga.miuix.kmp.basic.NavigationBarDisplayMode
 import top.yukonga.miuix.kmp.basic.NavigationBarItem
 import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Info
+import top.yukonga.miuix.kmp.icon.extended.SelectAll
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.UUID
@@ -96,6 +95,8 @@ internal fun MainScreen(
         SettingsKey.Stats -> stringResource(R.string.stats_title)
         SettingsKey.Diagnostics -> stringResource(R.string.diagnostics_entry)
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
+        SettingsKey.InvokeSettings -> stringResource(R.string.invoke_section)
+        SettingsKey.FanBackground -> stringResource(R.string.fan_background_section)
     }
 
     // 批量选择顶栏桥（ShortcutListPage 写 / 本处顶栏读）：HyperOS 批量模式=顶栏变形
@@ -116,6 +117,9 @@ internal fun MainScreen(
                 } else {
                     currentTitle
                 },
+                // 批量模式取小标题形态：miuix TopAppBar 小标题自动水平居中，
+                // 与 HyperOS 闹钟批量顶栏（居中"已选择N项"）同款
+                largeTitle = if (inBatchSelection) "" else currentTitle,
                 navigationIcon = {
                     if (inBatchSelection) {
                         // 批量模式：返回箭头 → ✕ 退出选择（HyperOS 批量惯例）
@@ -148,19 +152,14 @@ internal fun MainScreen(
                 },
                 actions = {
                     if (inBatchSelection) {
-                        // 标签恒"全选"，行为=全选/取消全选切换（MIUI 批量惯例）
-                        TextButton(
-                            text = stringResource(R.string.shortcut_select_all),
-                            onClick = { shortcutSelectionBar.onToggleAll?.invoke() }
-                        )
-                        TextButton(
-                            text = stringResource(R.string.shortcut_delete),
-                            onClick = { shortcutSelectionBar.onRequestDelete?.invoke() },
-                            enabled = shortcutSelectionBar.count > 0,
-                            colors = ButtonDefaults.textButtonColors(
-                                color = MiuixTheme.colorScheme.error
+                        // 右侧全选图标（HyperOS 闹钟批量顶栏同槽位）；标签恒"全选"，
+                        // 行为=全选/取消全选切换（MIUI 批量惯例）
+                        IconButton(onClick = { shortcutSelectionBar.onToggleAll?.invoke() }) {
+                            Icon(
+                                imageVector = MiuixIcons.SelectAll,
+                                contentDescription = stringResource(R.string.shortcut_select_all)
                             )
-                        )
+                        }
                     }
                 }
             )
@@ -201,6 +200,12 @@ internal fun MainScreen(
                                 },
                                 onNavigateToShortcutSelection = {
                                     settingsStack.add(SettingsKey.ShortcutList)
+                                },
+                                onNavigateToInvokeSettings = {
+                                    settingsStack.add(SettingsKey.InvokeSettings)
+                                },
+                                onNavigateToFanBackground = {
+                                    settingsStack.add(SettingsKey.FanBackground)
                                 },
                                 modifier = Modifier.weight(1f)
                             )
@@ -304,6 +309,22 @@ internal fun MainScreen(
                                 prefs = prefs,
                                 onNavigateToLogs = { aboutStack.add(SettingsKey.Logs) },
                                 onNavigateToStats = { aboutStack.add(SettingsKey.Stats) }
+                            )
+                        }
+                    }
+                    SettingsKey.InvokeSettings -> NavEntry(key) {
+                        DetailPageContainer {
+                            InvokeSettingsPage(
+                                prefs = prefs,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                    SettingsKey.FanBackground -> NavEntry(key) {
+                        DetailPageContainer {
+                            FanBackgroundPage(
+                                prefs = prefs,
+                                modifier = Modifier.fillMaxSize()
                             )
                         }
                     }

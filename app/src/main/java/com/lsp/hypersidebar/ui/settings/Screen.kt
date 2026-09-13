@@ -33,4 +33,10 @@ internal sealed interface SettingsKey : NavKey {
 
     /** 诊断与统计汇聚页（0909 用户拍板：诊断类功能收进关于页调试区，加一层父入口） */
     data object Diagnostics : SettingsKey
+
+    /** 呼出设置二级页（0913 用户拍板）：滑动距离 + 呼出停顿，首页交互区入口进入 */
+    data object InvokeSettings : SettingsKey
+
+    /** 扇形背景二级页（0913 用户拍板）：雾化 + 压暗，首页交互区入口进入 */
+    data object FanBackground : SettingsKey
 }

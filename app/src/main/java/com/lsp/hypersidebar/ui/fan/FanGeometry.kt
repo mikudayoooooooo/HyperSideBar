@@ -25,6 +25,8 @@ data class FanItemLayout(
 
 data class FanGeometry(
     val anchor: Offset,
+    /** 几何所用的窗口尺寸（锚点/各项坐标均为窗口本地系）——入场动画按此归一化缩放原点 */
+    val windowSize: IntSize,
     val direction: FanDirection,
     val startAngle: Float,
     val endAngle: Float,
@@ -86,9 +88,12 @@ fun computeFanGeometry(
     val outerCount = minOf(if (isLandscape) config.landscapeMaxAppsOuter else config.maxAppsOuter, appCount)
     val innerCount = (appCount - outerCount).coerceIn(0, if (isLandscape) config.landscapeMaxAppsInner else config.maxAppsInner)
 
-    // 快捷栏占位估算（供下侧房间预留；渲染用生效图标重算，估算偏大属保守）
+    // 快捷栏占位估算（供下侧房间预留）：跟随用户图标尺寸设置——快捷栏图标=扇形生效尺寸
+    // （PRD §9.5"与扇形应用图标大小一致，跟随"），拟合只会缩小 ⇒ 配置值=保守上界，
+    // 预留偏大不偏小。旧值固定 36dp 在大图标设置下预留不足，快捷栏顶到扇形下缘
     val quickList = quickApps.take(6)
-    val estBarBlockPx = config.quickIconSizeDp * density * 2.6f   // barGap(0.6) + 栏高(icon+上下各 0.5 padding)
+    val estBarBlockPx = (if (isLandscape) config.landscapeIconSizeDp else config.iconSizeDp) *
+        density * 2.6f   // barGap(0.6) + 栏高(icon+上下各 0.5 padding)
 
     // ===== 展开角自适应 =====
     // 半径先取配置值（不收窄）
@@ -183,6 +188,7 @@ fun computeFanGeometry(
 
     return FanGeometry(
         anchor = settledAnchor,
+        windowSize = IntSize(width.toInt(), height.toInt()),
         direction = direction,
         startAngle = startAngle,
         endAngle = endAngle,
@@ -203,8 +209,9 @@ fun computeFanGeometry(
 
 private fun degSin(deg: Float): Float = sin(Math.toRadians(deg.toDouble())).toFloat()
 
-/** [startAngle, endAngle] 扫描区间内 sin/cos 的极值（4° 步进采样，布局精度足够）。 */
-private fun sweepExtremes(startAngle: Float, endAngle: Float): FloatArray {
+/** [startAngle, endAngle] 扫描区间内 sin/cos 的极值（4° 步进采样，布局精度足够）。
+ *  internal=毛玻璃包围盒（ComposeFanHost）复用同一极值源，勿再各写一份角度采样。 */
+internal fun sweepExtremes(startAngle: Float, endAngle: Float): FloatArray {
     var minSin = 1f
     var maxSin = -1f
     var minCos = 1f
@@ -381,3 +388,16 @@ fun computeSelectedIndex(
 
     return bestIndex
 }
+
+/**
+ * 几何平移到窗口本地系（毛玻璃包围盒窗口专用，0913）：computeFanGeometry 恒在"屏幕
+ * 参考系"下做边距自适应/收角（需要全屏尺寸做房间计算），产物先按全屏系得出，再由
+ * 本函数平移进"包围盒窗口本地系"。全屏窗口 dx=dy=0 恒等（原路径不受影响）。
+ */
+internal fun FanGeometry.offsetBy(dx: Float, dy: Float, windowSize: IntSize): FanGeometry = copy(
+    anchor = Offset(anchor.x + dx, anchor.y + dy),
+    windowSize = windowSize,
+    items = items.map { it.copy(centerX = it.centerX + dx, centerY = it.centerY + dy) },
+    quickBarX = quickBarX + dx,
+    quickBarY = quickBarY + dy
+)

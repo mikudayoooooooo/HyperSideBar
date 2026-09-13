@@ -40,9 +40,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 /**
- * 使用统计页（迭代六 §11.3，PRD §9.2/§9.3）。
+ * 使用统计页（迭代六 §11.3，PRD §9.2）。
  * 数据源=launcher/:ui 两进程 StatsRecorder 聚合（经日志拉取同通道回传），按天合并；
- * 指标含误触率等派生值，口径在文案中注明；支持导出 CSV。
+ * 口径在文案中注明；支持导出 CSV。
  */
 @Composable
 internal fun StatsPage(modifier: Modifier = Modifier) {
@@ -114,10 +114,6 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
             MetricRow(
                 stringResource(R.string.stats_success_rate),
                 successRate(today[StatsRecorder.MetricKeys.LAUNCH_OK], today[StatsRecorder.MetricKeys.LAUNCH_FAIL]), isRate = true
-            )
-            MetricRow(
-                stringResource(R.string.stats_misfire_rate),
-                misfireRateText(merged), isRate = true
             )
             MetricRow(stringResource(R.string.stats_avg_select), avgMs(samples.selectMs), suffix = "ms")
             MetricRow(stringResource(R.string.stats_avg_response), avgMs(samples.responseMs), suffix = "ms")
@@ -214,16 +210,6 @@ private fun allAppsShare(opens: Int?, allApps: Int?): String? {
     val a = allApps ?: 0
     if (o == 0) return null
     return (a * 100 / o).toString()
-}
-
-/** 误触率文本：判据与 3s 阈值单源 StatsRecorder.misfireRateFrom（0912 收口去重） */
-private fun misfireRateText(merged: JSONObject): String? {
-    val recent = merged.optJSONArray("recent") ?: return null
-    val events = (0 until recent.length()).mapNotNull { recent.optJSONObject(it) }
-        .map { it.optLong("ts") to it.optString("type") }
-    return StatsRecorder.misfireRateFrom(events)?.let { (misfires, shows) ->
-        (misfires * 100 / shows).toString()
-    }
 }
 
 /** 导出按天 CSV（下载目录，复用 SelfCheck 的 MediaStore 路径）：表头与行同源 MetricKeys，防漂移 */

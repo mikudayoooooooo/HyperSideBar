@@ -25,8 +25,9 @@ import org.json.JSONObject
  *   :ui=root 代发回告 ACTION_RELAY_RESULT；DirectLaunchStrategy 本地直启无结果
  *   回调，不产 launchOk/Fail——成功率口径=有确定性结果的启动）
  *
- * 误触率（§9.3：呼出后迅速取消且 3s 内不再呼出占总呼出比率）由 [misfireRate]
- * 基于 recent 事件窗计算；全部应用占比=allApps/opens。
+ * 误触率下线（0913）：现行定义判不准（"看了不用"被计入、误弹→关→重试链被豁免）；
+ * recent 事件流（show/cancel…）继续采集，待明细数据攒够后重新定义上线。
+ * 全部应用占比=allApps/opens。
  */
 object StatsRecorder {
 
@@ -121,52 +122,6 @@ object StatsRecorder {
         bump(if (ok) MetricKeys.LAUNCH_OK else MetricKeys.LAUNCH_FAIL)
         addEvent(if (ok) "launchOk" else "launchFail")
         scheduleSave()
-    }
-
-    // ===== 误触率（§9.3 定义，recent 窗口内计算） =====
-
-    /**
-     * 误触率：呼出后 ≤3s 内取消，且取消后 3s 内无再次呼出的事件 / 总呼出。
-     * recent 容量有限（200 条），窗口外事件不参与——页面注明口径。
-     */
-    fun misfireRate(): Pair<Int, Int>? =
-        misfireRateFrom(synchronized(recent) {
-            recent.toList().map { it.optLong("ts") to it.optString("type") }
-        })
-
-    /**
-     * 误触率纯函数（0912 收口：StatsPage 对合并 dump 的同逻辑副本并此，阈值 3s 单源）。
-     * events=(ts, type) 需时间升序；返回 (误触数, 总呼出)，无呼出返回 null。
-     */
-    fun misfireRateFrom(events: List<Pair<Long, String>>): Pair<Int, Int>? {
-        if (events.isEmpty()) return null
-        var shows = 0
-        var misfires = 0
-        for (i in events.indices) {
-            val (ts, type) = events[i]
-            if (type != "show") continue
-            shows++
-            // 找本次呼出后的第一个 cancel/再次 show
-            var j = i + 1
-            var misfired = false
-            while (j < events.size) {
-                when (events[j].second) {
-                    "cancel" -> {
-                        // 迅速取消（呼出→取消 ≤3s 由 show/cancel 时差体现）且
-                        // 取消后 3s 内无 show → 误触
-                        val nextShow = (j + 1 until events.size)
-                            .firstOrNull { events[it].second == "show" }
-                        val gap = if (nextShow != null) events[nextShow].first - events[j].first else Long.MAX_VALUE
-                        if (events[j].first - ts <= 3_000 && gap > 3_000) misfired = true
-                        break
-                    }
-                    "show" -> break
-                }
-                j++
-            }
-            if (misfired) misfires++
-        }
-        return if (shows == 0) null else misfires to shows
     }
 
     // ===== 展示侧读取 =====

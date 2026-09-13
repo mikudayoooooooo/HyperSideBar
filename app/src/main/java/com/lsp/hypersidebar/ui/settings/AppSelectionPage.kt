@@ -329,7 +329,7 @@ private fun AppSelectionRow(
     val appInfo = remember(app.packageName, app.label) {
         FanAppInfo(packageName = app.packageName, appName = app.label)
     }
-    val (drawable, fallbackColor) = rememberAppIcon(context, appInfo)
+    val (bitmap, fallbackColor) = rememberAppIcon(context, appInfo)
     val colors = currentFanThemeColors()
 
     BasicComponent(
@@ -337,7 +337,7 @@ private fun AppSelectionRow(
         summary = app.packageName,
         startAction = {
             AppIconImage(
-                drawable = drawable,
+                bitmap = bitmap,
                 fallbackColor = fallbackColor,
                 appName = app.label,
                 size = 36f,

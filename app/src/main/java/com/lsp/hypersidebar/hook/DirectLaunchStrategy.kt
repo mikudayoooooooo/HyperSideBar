@@ -180,7 +180,13 @@ class DirectLaunchStrategy(
                 pkg to "$pkg/$full"
             }
             .distinctBy { it.second }
-        FanPrewarmer.onFanShown(context, tileTargets, fanAppPkgs, RelayToken.read(remotePrefs))
+        FanPrewarmer.onFanShown(
+            context,
+            tileTargets,
+            // 图标预灌覆盖快捷栏宿主（此前只灌扇形包名，快捷栏图标冷呼出占位）
+            fanAppPkgs + quickActions.mapNotNull { it.packageName },
+            RelayToken.read(remotePrefs)
+        )
     }
 
     /** :ui → 模块 App root 代发：完整 ShortcutAction JSON 随广播携带（接收端无需读 prefs）。

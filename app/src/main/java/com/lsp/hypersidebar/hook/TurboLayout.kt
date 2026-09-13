@@ -161,6 +161,10 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private var sFanSeen = false
     private var sPendingShow: Runnable? = null
 
+    // 滑动确认/重置阈值（px）：滑动距离设置项换算缓存，DOWN 时刷新（与竖屏通道同键同滞回）
+    private var sConfirmPx = GestureThresholds.SWIPE_CONFIRM_PX
+    private var sResetPx = GestureThresholds.SWIPE_CONFIRM_PX * GestureThresholds.SWIPE_RESET_RATIO
+
     private fun handleStripGesture(view: View, ev: MotionEvent) {
         // fan 展示中：转发驱动；手势中途落地先合成 DOWN 起始选择状态（边缘通道同款：
         // showInternal 主线程阻塞期间丢 DOWN 会导致窗口原点/选中起点全部失效）
@@ -192,6 +196,16 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 sFanSeen = false
                 // 内滑轴：DOWN 点就近角落的对角线（指向屏幕内部）
                 val dm = view.context.resources.displayMetrics
+                // 滑动距离换算（dp→px，DOWN 一次缓存整条手势；设置项即时经 ConfigSync 生效）
+                val distanceDp = try {
+                    remotePrefs.getFloat(
+                        PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
+                    )
+                } catch (_: Exception) {
+                    LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
+                }
+                sConfirmPx = distanceDp * dm.density
+                sResetPx = sConfirmPx * GestureThresholds.SWIPE_RESET_RATIO
                 val inv = 1f / sqrt(2f)
                 sInwardUx = (if (sDownX < dm.widthPixels / 2f) 1f else -1f) * inv
                 sInwardUy = (if (sDownY < dm.heightPixels / 2f) 1f else -1f) * inv
@@ -210,15 +224,16 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 val inward = dx * sInwardUx + dy * sInwardUy
                 val perp = abs(dx * sInwardUy - dy * sInwardUx)
 
-                // 滑回条：整体重置（PRD 状态机"滑回边缘→待触发"）
-                if (sSwipeConfirmed && inward < GestureThresholds.SWIPE_CONFIRM_PX) {
-                    vlog("s#$sGestureSeq RESET slide-back (inward=${inward.toInt()}px < ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()})")
+                // 滑回条：整体重置（PRD 状态机"滑回边缘→待触发"；滞回=确认距离一半，
+                // 与竖屏通道同款——修零滞回下近阈值悬停微漂整条清零）
+                if (sSwipeConfirmed && inward < sResetPx) {
+                    vlog("s#$sGestureSeq RESET slide-back (inward=${inward.toInt()}px < ${sResetPx.toInt()})")
                     resetStripGesture()
                     return
                 }
 
                 if (!sSwipeConfirmed) {
-                    // PRD §9.5：内滑距离 ≥40px 且与内滑轴夹角 ≤60°（atan2 点积/叉积形式）。
+                    // PRD §9.5：内滑距离达确认线（可配置，默认 15dp）且与内滑轴夹角 ≤60°（atan2 点积/叉积形式）。
                     // 距离项用锥内位移幅值而非对角线投影——投影对纯水平/竖直内滑只有
                     // 0.707 倍（实际要滑 57px 才确认），是实测"横屏响应不如竖屏"的主因
                     // （竖屏轴=水平方向，40px 即确认，无此衰减）
@@ -226,14 +241,14 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         Math.atan2(perp.toDouble(), inward.toDouble())
                     ).toFloat()
                     val travel = hypot(dx, dy)
-                    if (travel >= GestureThresholds.SWIPE_CONFIRM_PX && inward > 0f &&
+                    if (travel >= sConfirmPx && inward > 0f &&
                         angle <= GestureThresholds.MAX_SWIPE_ANGLE_DEG
                     ) {
                         sSwipeConfirmed = true
                         sAnchorX = ev.rawX
                         sAnchorY = ev.rawY
                         sAnchorT = ev.eventTime
-                        vlog("s#$sGestureSeq swipe confirmed: travel=${travel.toInt()}px (>= ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()}) angle=${angle.toInt()}")
+                        vlog("s#$sGestureSeq swipe confirmed: travel=${travel.toInt()}px (>= ${sConfirmPx.toInt()}) angle=${angle.toInt()}")
                     }
                 }
 
@@ -364,9 +379,18 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         }
         HLog.i(TAG, "init done: ${getStats()}")
         // 预热推荐列表缓存（:ui 侧 B 路线横屏呼出共用 DataLoader；反射 ~1s 不进呼出关键路径）。
-        // :ui 的 appContext 一般立即可用；带重试防未就绪（与边缘通道同款）
+        // :ui 的 appContext 一般立即可用；带重试防未就绪（与边缘通道同款）。
+        // onReady 顺带图标预灌+空闲预热装配（与 EdgeGestureHook 同款；本进程=:ui 侧横屏
+        // fan 渲染源，横屏游戏首呼出卡顿 0913 实锤后接入试装配）
         com.lsp.hypersidebar.util.DataLoader.prewarmWithRetry(
-            provider = { runCatching { EzXposed.appContext }.getOrNull() }
+            provider = { runCatching { EzXposed.appContext }.getOrNull() },
+            onReady = { ctx ->
+                com.lsp.hypersidebar.util.FanPrewarmer.preloadConfiguredFanIcons(ctx, remotePrefs)
+                mainHandler.postDelayed({
+                    runCatching { fanController.warmupAssembly(ctx) }
+                        .onFailure { HLog.w(TAG, "warmupAssembly failed: ${it.message}") }
+                }, com.lsp.hypersidebar.util.FanPrewarmer.WARMUP_ASSEMBLY_DELAY_MS)
+            }
         )
         // 扇形 UI 类族后台预载（同 EdgeGestureHook）：:ui 侧横屏首呼出同样受益
         com.lsp.hypersidebar.util.FanUiWarmup.warm()

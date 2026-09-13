@@ -146,7 +146,6 @@ internal fun LayoutPreviewCard(
 
 internal fun buildPreviewConfig(repo: SettingsRepository): FanConfig = FanConfig(
     iconSizeDp = repo.iconSize(),
-    quickIconSizeDp = LayoutDefaults.QUICK_ICON_SIZE,
     innerRadiusDp = repo.innerRadius(),
     outerRadiusDp = repo.outerRadiusMax(),
     deadZoneDp = repo.deadZone(),

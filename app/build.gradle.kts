@@ -117,6 +117,8 @@ dependencies {
     implementation(libs.miuix.ui)
     implementation(libs.miuix.preference)
     implementation(libs.miuix.icons)
+    // 毛玻璃（0913 用户拍板路线③）：窗口内组件 backdrop 模糊（AGSL RuntimeShader，API 33+=minSdk）
+    implementation(libs.miuix.blur)
     implementation(libs.miuix.navigation3.ui)
     // miuix-navigation3-ui 只内嵌 ui/scene 包，runtime（NavKey/NavBackStack/NavEntry）需显式引入
     implementation(libs.androidx.navigation3.runtime)

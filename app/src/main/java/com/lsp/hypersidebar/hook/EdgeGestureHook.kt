@@ -102,6 +102,11 @@ class EdgeGestureHook(
     private var gestureSeq = 0   // 手势取证 id：贯穿 DOWN/确认/停顿/拦截/UP 日志（S 门数据源）
     private var gestureInZone = false  // DOWN 判定的触发区归属；区外手势整条透传
 
+    // 滑动确认/重置阈值（px）：滑动距离设置项换算缓存，DOWN 时刷新。
+    // 重置=确认×滞回系数（0913 取证 g#44/45：零滞回下近阈值悬停 1~2px 外漂即整条清零）
+    private var confirmPx = GestureThresholds.SWIPE_CONFIRM_PX
+    private var resetPx = GestureThresholds.SWIPE_CONFIRM_PX * GestureThresholds.SWIPE_RESET_RATIO
+
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingShow: Runnable? = null
     private var fanSeenThisGesture = false
@@ -149,7 +154,20 @@ class EdgeGestureHook(
         // （实测 getAppContext 直接抛 NPE 而非返回 null，首轮 prewarm skipped 是
         // "首次呼出只有固定应用"的根因）——prewarmWithRetry 每 5s 重试直到就绪
         com.lsp.hypersidebar.util.DataLoader.prewarmWithRetry(
-            provider = { runCatching { EzXposed.appContext }.getOrNull() }
+            provider = { runCatching { EzXposed.appContext }.getOrNull() },
+            onReady = { ctx ->
+                // 图标预灌（AppIconCache 统一后，本进程=launcher 侧渲染源）：固定应用+快捷栏
+                // 宿主+推荐区前 24。此前 fan 渲染走 IconLoader 无任何预热点，进程冷启首呼出
+                // 必然字母占位闪变
+                com.lsp.hypersidebar.util.FanPrewarmer.preloadConfiguredFanIcons(ctx, remotePrefs)
+                // 空闲预热装配：首次 composition+首帧绘制（含 blur 着色器首编译）是一次性
+                // 大成本，游戏场景 GPU/CPU 争用下"首呼出动画卡顿"实锤（0913）——1×1 离屏
+                // 窗口试装配挪到 init 空闲期，真呼出走池化快路径
+                mainHandler.postDelayed({
+                    runCatching { fanController.warmupAssembly(ctx) }
+                        .onFailure { HLog.w(TAG, "warmupAssembly failed: ${it.message}") }
+                }, com.lsp.hypersidebar.util.FanPrewarmer.WARMUP_ASSEMBLY_DELAY_MS)
+            }
         )
         // 扇形 UI 类族后台预载：把 ART 校验从首呼出主线程挪走（"有时候呼出会卡"实凶）
         com.lsp.hypersidebar.util.FanUiWarmup.warm()
@@ -465,6 +483,18 @@ class EdgeGestureHook(
                 swipeConfirmed = false
                 stallFired = false
                 anchorT = -1L
+                // 滑动距离换算（dp→px，DOWN 一次缓存整条手势；设置项即时经 ConfigSync 生效）
+                (stub?.context ?: EzXposed.appContext)?.resources?.displayMetrics?.let { dm ->
+                    val distanceDp = try {
+                        remotePrefs.getFloat(
+                            PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
+                        )
+                    } catch (_: Exception) {
+                        LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
+                    }
+                    confirmPx = distanceDp * dm.density
+                    resetPx = confirmPx * GestureThresholds.SWIPE_RESET_RATIO
+                }
                 // 触发区外：完全透传（原生返回正常走）；DOWN 全量记录（A2/A7/A8 数据源）
                 val inZone = isInTriggerZone(ev.rawX, ev.rawY, stub)
                 gestureInZone = inZone
@@ -479,25 +509,26 @@ class EdgeGestureHook(
 
                 val inward = inwardDx(ev.rawX)
 
-                // 滑回边缘：整体重置（PRD 状态机"滑回边缘→待触发"；修 spike 锁存 bug）
-                if (swipeConfirmed && inward < GestureThresholds.SWIPE_CONFIRM_PX) {
-                    vlog("g#$gestureSeq RESET slide-back (inward=${inward.toInt()}px < ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()})")
+                // 滑回边缘：整体重置（PRD 状态机"滑回边缘→待触发"；滞回=确认距离一半，
+                // 修零滞回下近阈值悬停微漂整条清零——0913 取证 g#44/45）
+                if (swipeConfirmed && inward < resetPx) {
+                    vlog("g#$gestureSeq RESET slide-back (inward=${inward.toInt()}px < ${resetPx.toInt()})")
                     resetGesture()
                     return false
                 }
 
                 if (!swipeConfirmed) {
                     val dy = abs(ev.rawY - downY)
-                    // PRD §9.5：距离 ≥40px 且与水平方向夹角 ≤60°（atan2，弃用 0.x 的 dx>dy/2 近似）
+                    // PRD §9.5：距离达确认线（可配置，默认 15dp）且与水平方向夹角 ≤60°（atan2，弃用 0.x 的 dx>dy/2 近似）
                     val angle = Math.toDegrees(
                         Math.atan2(dy.toDouble(), inward.toDouble())
                     ).toFloat()
-                    if (inward >= GestureThresholds.SWIPE_CONFIRM_PX && angle <= GestureThresholds.MAX_SWIPE_ANGLE_DEG) {
+                    if (inward >= confirmPx && angle <= GestureThresholds.MAX_SWIPE_ANGLE_DEG) {
                         swipeConfirmed = true
                         anchorX = ev.rawX
                         anchorY = ev.rawY
                         anchorT = ev.eventTime
-                        vlog("g#$gestureSeq swipe confirmed: inward=${inward.toInt()}px (>= ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()}) angle=${angle.toInt()}")
+                        vlog("g#$gestureSeq swipe confirmed: inward=${inward.toInt()}px (>= ${confirmPx.toInt()}) angle=${angle.toInt()}")
                     }
                 }
 

@@ -9,6 +9,7 @@ import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -37,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.BuildConfig
@@ -54,6 +56,7 @@ import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -154,6 +157,12 @@ internal fun AboutPage(
             countdown--
         }
     }
+
+    // 重启 hook 宿主（0912）：两段式确认——勾选只改选择，点「重启」才真正执行；
+    // 执行中禁用取消/再触发（WindowDialog 的 onDismissRequest 同步上锁）
+    var showHostRestart by remember { mutableStateOf(false) }
+    var selectedRestarts by remember { mutableStateOf(emptySet<String>()) }
+    var hostRestartBusy by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = modifier
@@ -316,6 +325,11 @@ internal fun AboutPage(
                         }
                     }
                 )
+                if (com.lsp.hypersidebar.BuildConfig.DEBUG) ArrowPreference(
+                    title = stringResource(R.string.debug_host_restart),
+                    summary = stringResource(R.string.debug_host_restart_summary),
+                    onClick = { showHostRestart = true }
+                )
             }
         }
     }
@@ -362,6 +376,94 @@ internal fun AboutPage(
                         showBlackholeConfirm = false
                     },
                     enabled = countdown <= 0,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColors(color = MiuixTheme.colorScheme.error)
+                )
+            }
+        }
+    )
+
+    // 重启 hook 宿主弹窗：样式对齐黑hole 确认弹窗（WindowDialog + 双等宽 TextButton）。
+    // 勾选行=Row 整体 clickable + Checkbox 仅作状态显示（触摸行内任意处均可切换）；
+    // 确认按钮无选中时禁用（变暗），执行中两键同锁防重复 force-stop
+    WindowDialog(
+        show = showHostRestart,
+        title = stringResource(R.string.debug_host_restart),
+        onDismissRequest = { if (!hostRestartBusy) showHostRestart = false },
+        content = {
+            Text(
+                text = stringResource(R.string.debug_host_restart_dialog_summary),
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                style = MiuixTheme.textStyles.footnote1
+            )
+            Spacer(Modifier.height(10.dp))
+            HostRestarter.HOSTS.forEach { host ->
+                val checked = host.pkg in selectedRestarts
+                val toggle = {
+                    if (!hostRestartBusy) {
+                        selectedRestarts = if (checked) selectedRestarts - host.pkg
+                        else selectedRestarts + host.pkg
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !hostRestartBusy, onClick = toggle)
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(host.label, style = MiuixTheme.textStyles.body2)
+                        Text(
+                            host.summary,
+                            style = MiuixTheme.textStyles.footnote1,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        )
+                    }
+                    // 行与勾选框共用同一 toggle：点行/点框都切换（checkbox 消费自身触摸，
+                    // 不会与 Row 的 clickable 叠加二次触发）
+                    Checkbox(ToggleableState(checked), toggle)
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(
+                    text = stringResource(R.string.layout_sheet_cancel),
+                    onClick = {
+                        selectedRestarts = emptySet()
+                        showHostRestart = false
+                    },
+                    enabled = !hostRestartBusy,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(20.dp))
+                TextButton(
+                    text = stringResource(
+                        if (hostRestartBusy) R.string.debug_host_restart_busy
+                        else R.string.debug_host_restart_action
+                    ),
+                    onClick = {
+                        val targets = HostRestarter.HOSTS.filter { it.pkg in selectedRestarts }
+                        if (targets.isEmpty() || hostRestartBusy) return@TextButton
+                        hostRestartBusy = true
+                        updateScope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                HostRestarter.restart(targets)
+                            }
+                            hostRestartBusy = false
+                            selectedRestarts = emptySet()
+                            showHostRestart = false
+                            val msg = buildString {
+                                if (result.ok.isNotEmpty()) append("已重启：").append(result.ok.joinToString("、"))
+                                if (result.failed.isNotEmpty()) {
+                                    if (isNotEmpty()) append("；")
+                                    append("失败：").append(result.failed.joinToString("、")).append("（检查 root 授权）")
+                                }
+                            }
+                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                        }
+                    },
+                    enabled = !hostRestartBusy && selectedRestarts.isNotEmpty(),
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.textButtonColors(color = MiuixTheme.colorScheme.error)
                 )

@@ -7,6 +7,7 @@ import android.content.Intent
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -42,7 +43,10 @@ object QsTileClickBridge {
     private fun send(context: Context, componentName: String, token: String?, prebind: Boolean): Boolean {
         val latch = CountDownLatch(1)
         var delivered = false
+        // 显式定向 SystemUI 主进程（SystemUiHook 接收器所在）：本广播携带令牌，
+        // 隐式发送任意 App 的动态接收器都能截收（0912 审查，与 sendSync 同类修复）
         val intent = Intent(PrefKeys.QS_TILE_CLICK_ACTION)
+            .setPackage(HostPackages.SYSTEM_UI)
             .putExtra(PrefKeys.QS_TILE_CLICK_EXTRA, componentName)
             .putExtra(PrefKeys.QS_TILE_PREBIND_EXTRA, prebind)
         RelayToken.attach(intent, token)

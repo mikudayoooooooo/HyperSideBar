@@ -69,7 +69,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.prefs.PrefsFiles
 import com.lsp.hypersidebar.theme.HyperSidebarTheme
 import com.lsp.hypersidebar.theme.ThemeModes
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
@@ -91,7 +93,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.Locale
 
 private const val TAG = "AllAppsActivity"
-private const val PREFS_NAME = "hyperSidebar_prefs"
+private const val PREFS_NAME = PrefsFiles.APP_LOCAL
 private const val MAX_DATA_WAIT_MS = 1500L
 
 /** 磁贴圆角提为常量：避免每磁贴每次重组重复分配 Shape。A3：14→18dp（MIUI 抽屉近亲） */
@@ -151,8 +153,8 @@ class AllAppsActivity : ComponentActivity() {
                         // startActivityAsUser）；本进程直启必降级全屏（blocklist）
                         runCatching {
                             Intent(ACTION_FAN_LAUNCH).apply {
-                                setPackage("com.miui.securitycenter")
-                                putExtra("pkg", pkg)
+                                setPackage(HostPackages.UI_HOST)
+                                putExtra(PrefKeys.FAN_EXTRA_PKG, pkg)
                                 // 跨进程防伪令牌（:ui 侧 FreeformRelayHook 校验）
                                 RelayToken.attach(this, RelayToken.current())
                             }.let { applicationContext.sendBroadcast(it) }

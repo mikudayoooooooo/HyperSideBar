@@ -8,6 +8,7 @@ import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import com.lsp.hypersidebar.ShortcutRelayReceiver
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.FanLaunchStrategy
 import com.lsp.hypersidebar.util.FailureReason
@@ -25,6 +26,9 @@ import com.lsp.hypersidebar.util.SystemLaunchStrategy
 import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "FanLaunch"
+
+/** 打开原生面板后恢复 dock 可见性的延时（openNativePanel → PanelHideState 复位） */
+private const val PANEL_HIDE_RESTORE_MS = 5_000L
 
 /**
  * securitycenter:ui 进程的直调策略。
@@ -57,13 +61,13 @@ class DirectLaunchStrategy(
     override fun openNativePanel(context: Context) {
         PanelHideState.hidden.set(true)
         val intent = Intent("com.miui.gamebooster.PANNEL_OPEN").apply {
-            setPackage("com.miui.securitycenter")
+            setPackage(HostPackages.UI_HOST)
         }
         context.sendBroadcast(intent, "com.miui.gamebooster.permission.PANNEL_OPEN")
         HLog.i(TAG, "openNativePanel: broadcast sent")
         Handler(Looper.getMainLooper()).postDelayed({
             PanelHideState.hidden.set(false)
-        }, 5000)
+        }, PANEL_HIDE_RESTORE_MS)
     }
 
     override fun launchShortcut(context: Context, shortcut: ShortcutAction) {

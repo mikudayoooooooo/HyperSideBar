@@ -77,8 +77,8 @@ object UnfreezeBridge {
                     runCatching {
                         val msg = Message.obtain(null, UnfreezeRelayService.MSG_UNFREEZE).apply {
                             data = Bundle().apply {
-                                putString("pkg", pkg)
-                                putString(PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN, token)
+                                putString(PrefKeys.UNFREEZE_EXTRA_PKG, pkg)
+                                putString(PrefKeys.UNFREEZE_EXTRA_TOKEN, token)
                             }
                             replyTo = Messenger(replyHandler)
                         }

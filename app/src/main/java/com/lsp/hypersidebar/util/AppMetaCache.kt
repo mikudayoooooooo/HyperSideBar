@@ -3,6 +3,7 @@ package com.lsp.hypersidebar.util
 import android.content.Context
 import android.util.Log
 import android.util.LruCache
+import com.lsp.hypersidebar.prefs.PrefsFiles
 import com.lsp.hypersidebar.util.HLog
 
 /**
@@ -17,7 +18,7 @@ import com.lsp.hypersidebar.util.HLog
 object AppMetaCache {
 
     private const val TAG = "AppMetaCache"
-    private const val MIRROR_PREFS = "hyperSidebar_prefs"
+    private const val MIRROR_PREFS = PrefsFiles.APP_LOCAL
 
     private val labels = LruCache<String, String>(256)
 

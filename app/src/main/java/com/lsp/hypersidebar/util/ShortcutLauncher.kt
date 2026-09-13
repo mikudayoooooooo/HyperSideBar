@@ -74,7 +74,7 @@ class SystemLaunchStrategy : LaunchStrategy {
             // 必须用运行时类（ContextImpl）查找：startActivityAsUser 不声明在抽象 Context 上，
             // 用 Context::class.java 会永远 NoSuchMethodException 然后静默降级
             val method = context.javaClass.getMethod(
-                "startActivityAsUser", Intent::class.java, UserHandle::class.java
+                FreeformLauncher.START_ACTIVITY_AS_USER, Intent::class.java, UserHandle::class.java
             )
             method.isAccessible = true
             method.invoke(context, intent, userHandle)
@@ -105,6 +105,9 @@ object ShortcutLauncher {
     private val rootAvailable = java.util.concurrent.atomic.AtomicReference<Boolean?>(null)
     private var lastRootCheckTime = 0L
     private val ROOT_CACHE_TIMEOUT_MS = 30_000L
+
+    /** SHORTCUT_ID 有序广播等 launcher startShortcut 回执的预算（bind 冷启动同量级） */
+    private const val SHORTCUT_ID_REPLY_TIMEOUT_MS = 3_000L
     private val PKG_ACTIVITY_REGEX = Regex("^([a-zA-Z_][a-zA-Z0-9_]*(?:[.][a-zA-Z_][a-zA-Z0-9_]*)*|[.][a-zA-Z_][a-zA-Z0-9_.]*)$")
 
     /**
@@ -498,7 +501,7 @@ object ShortcutLauncher {
                 ?: return LaunchResult.Failure(FailureReason.ACTIVITY_NOT_FOUND, "Resolved but no serviceInfo")
 
             // exported 检查（UID 1000 跳过）
-            if (!serviceInfo.exported && android.os.Process.myUid() != 1000 /* SYSTEM_UID */) {
+            if (!serviceInfo.exported && android.os.Process.myUid() != android.os.Process.SYSTEM_UID) {
                 return LaunchResult.Failure(
                     FailureReason.NOT_EXPORTED,
                     "Service not exported: ${serviceInfo.packageName}/${serviceInfo.name}"
@@ -512,7 +515,7 @@ object ShortcutLauncher {
         try {
             @Suppress("DEPRECATION")
             val si = pm.getServiceInfo(component, 0)
-            if (!si.exported && android.os.Process.myUid() != 1000) {
+            if (!si.exported && android.os.Process.myUid() != android.os.Process.SYSTEM_UID) {
                 return LaunchResult.Failure(
                     FailureReason.NOT_EXPORTED,
                     "Service not exported: ${si.packageName}/${si.name}"
@@ -523,7 +526,7 @@ object ShortcutLauncher {
             // 再试 GET_SERVICES 遍历
             val found = findServiceInfo(pm, component)
             if (found != null) {
-                if (!found.exported && android.os.Process.myUid() != 1000) {
+                if (!found.exported && android.os.Process.myUid() != android.os.Process.SYSTEM_UID) {
                     return LaunchResult.Failure(
                         FailureReason.NOT_EXPORTED,
                         "Service not exported: ${found.packageName}/${found.name}"
@@ -608,7 +611,7 @@ object ShortcutLauncher {
             HLog.w(TAG, "launchShortcutId send failed: ${it.message}")
             return LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, it.message ?: "send failed")
         }
-        latch.await(3, java.util.concurrent.TimeUnit.SECONDS)
+        latch.await(SHORTCUT_ID_REPLY_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
         HLog.i(TAG, "launchShortcutId: pkg=$pkg sid=$sid ok=$ok")
         return if (ok) {
             LaunchResult.Success(null)
@@ -931,7 +934,7 @@ object ShortcutLauncher {
         // :ui，实为模块 App 自身 uid）——本判断的实际语义是"除字面 uid 1000 外一律不做非 exported 直启"，
         // :ui 直启非导出实测静默假成功（SUCCESS via SYSTEM 但不启动），统一走 root relay；
         // 仅普通应用进程（如设置页测试启动）之外的 uid-1000 进程理论上可直启
-        if (!activityInfo.exported && android.os.Process.myUid() != 1000 /* SYSTEM_UID */) {
+        if (!activityInfo.exported && android.os.Process.myUid() != android.os.Process.SYSTEM_UID) {
             return LaunchResult.Failure(
                 FailureReason.NOT_EXPORTED,
                 "Activity not exported: ${activityInfo.packageName}/${activityInfo.name}"

@@ -22,6 +22,10 @@ object FreeformLauncher {
     /** 源码命名空间（类路径前缀）：与 applicationId 解耦，跨进程寻址"包名 + 类路径"时拼接用。 */
     const val MODULE_CLASS_NAMESPACE = "com.lsp.hypersidebar"
 
+    /** 反射靶点（本类与 DataLoader 共用；ROM 漂移时按反编译同步这里） */
+    const val MIUI_MULTI_WINDOW_UTILS = "android.util.MiuiMultiWindowUtils"
+    const val START_ACTIVITY_AS_USER = "startActivityAsUser"
+
     fun launch(context: Context, packageName: String) {
         val clsName = getMainActivity(context, packageName)
         if (clsName == null) {
@@ -50,11 +54,11 @@ object FreeformLauncher {
             configure?.invoke(this)
         }
         try {
-            val cls = Class.forName("android.util.MiuiMultiWindowUtils")
+            val cls = Class.forName(MIUI_MULTI_WINDOW_UTILS)
             val options = getActivityOptions(cls, context, context.packageName)
             if (options != null) {
                 val method = context.javaClass.getMethod(
-                    "startActivityAsUser",
+                    START_ACTIVITY_AS_USER,
                     Intent::class.java, android.os.Bundle::class.java, UserHandle::class.java
                 )
                 method.invoke(context, intent, options.toBundle(), Process.myUserHandle())
@@ -80,7 +84,7 @@ object FreeformLauncher {
      */
     private fun tryMiuiMultiWindow(context: Context, packageName: String, clsName: String) {
         try {
-            val cls = Class.forName("android.util.MiuiMultiWindowUtils")
+            val cls = Class.forName(MIUI_MULTI_WINDOW_UTILS)
             val options = getActivityOptions(cls, context, packageName) ?: run {
                 HLog.w(TAG, "MiuiMultiWindow: getActivityOptions returned null")
                 // PRD §9.4 字面措辞（展示与启动之间资格变化的兜底）
@@ -99,7 +103,7 @@ object FreeformLauncher {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             val method = context.javaClass.getMethod(
-                "startActivityAsUser",
+                START_ACTIVITY_AS_USER,
                 Intent::class.java, android.os.Bundle::class.java, UserHandle::class.java
             )
             method.invoke(context, intent, options.toBundle(), Process.myUserHandle())

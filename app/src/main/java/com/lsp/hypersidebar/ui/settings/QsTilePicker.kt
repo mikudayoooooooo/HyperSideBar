@@ -10,7 +10,9 @@ import android.os.Process
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.prefs.PrefsFiles
 import com.lsp.hypersidebar.util.RelayToken
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
@@ -156,7 +158,7 @@ object ManifestShortcutsBridge {
 
     @Volatile private var registered = false
 
-    private const val LOCAL_PREFS = "hyperSidebar_prefs"
+    private const val LOCAL_PREFS = PrefsFiles.APP_LOCAL
     private const val CACHE_KEY = "manifest_shortcuts_cache"
 
     fun ensureRegistered(context: Context) {
@@ -186,7 +188,10 @@ object ManifestShortcutsBridge {
     /** 向 launcher 进程请求最新清单（后台查询+应答，到达后 shortcuts 状态驱动重组）。 */
     fun request(context: Context) {
         runCatching {
+            // 显式定向 launcher 桥宿主（唯一接收方）：请求携带令牌，隐式发送可被
+            // 任意 App 截收（0912 审查，与 sendSync 同类修复）
             val intent = Intent(PrefKeys.MANIFEST_SHORTCUTS_REQUEST)
+                .setPackage(HostPackages.HOME)
             RelayToken.attach(intent, RelayToken.current())
             context.sendBroadcast(intent)
         }.onFailure { Log.w(TAG, "manifest bridge request failed: ${it.message}") }

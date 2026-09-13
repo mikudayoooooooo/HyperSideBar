@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import com.lsp.hypersidebar.prefs.PrefsFiles
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -29,7 +30,22 @@ import org.json.JSONObject
  */
 object StatsRecorder {
 
-    private const val PREFS_NAME = "hyperSidebar_stats"
+    /**
+     * 计数键（0912 收口）：本对象写入 ↔ StatsPage 展示/CSV 导出读取的配对键，
+     * 删键/改名只动这里。注意与 recent 事件类型（"show"/"open"/"cancel"…）是
+     * 两套词表，勿混用。
+     */
+    object MetricKeys {
+        const val SHOWS = "shows"
+        const val OPENS = "opens"
+        const val ALL_APPS = "allApps"
+        const val SHORTCUTS = "shortcuts"
+        const val CANCELS = "cancels"
+        const val LAUNCH_OK = "launchOk"
+        const val LAUNCH_FAIL = "launchFail"
+    }
+
+    private const val PREFS_NAME = PrefsFiles.STATS
     private const val KEY_STATS = "stats"
     private const val SAVE_DELAY_MS = 2000L
     private const val MAX_SAMPLES = 200
@@ -70,15 +86,15 @@ object StatsRecorder {
             pushSample(gapMs, gap)
         }
         lastShowAt = now
-        bump("shows")
+        bump(MetricKeys.SHOWS)
         addEvent("show")
         scheduleSave()
     }
 
     /** 选中并打开应用（全部应用入口 isAllApps=true）；selMs=展示→选中 */
     fun onOpen(pkg: String, isAllApps: Boolean, selMs: Int) {
-        bump("opens")
-        if (isAllApps) bump("allApps")
+        bump(MetricKeys.OPENS)
+        if (isAllApps) bump(MetricKeys.ALL_APPS)
         pushSample(selectMs, selMs.coerceAtLeast(0))
         addEvent(if (isAllApps) "allApps" else "open", pkg, selMs)
         scheduleSave()
@@ -86,7 +102,7 @@ object StatsRecorder {
 
     /** 选中快捷栏快捷方式（PRD §9.2 未单列，独立计数供观察） */
     fun onShortcut() {
-        bump("shortcuts")
+        bump(MetricKeys.SHORTCUTS)
         addEvent("shortcut")
         scheduleSave()
     }
@@ -94,7 +110,7 @@ object StatsRecorder {
     /** 扇形收起：launched=false = 未选中取消退出（PRD"取消选中并退出的次数"） */
     fun onFanClosed(launched: Boolean) {
         if (!launched) {
-            bump("cancels")
+            bump(MetricKeys.CANCELS)
             addEvent("cancel")
             scheduleSave()
         }
@@ -102,7 +118,7 @@ object StatsRecorder {
 
     /** 有确定性结果的启动回告（alive/ok=true 计成功） */
     fun onLaunchResult(ok: Boolean) {
-        bump(if (ok) "launchOk" else "launchFail")
+        bump(if (ok) MetricKeys.LAUNCH_OK else MetricKeys.LAUNCH_FAIL)
         addEvent(if (ok) "launchOk" else "launchFail")
         scheduleSave()
     }

@@ -2,6 +2,7 @@ package com.lsp.hypersidebar.util
 
 import android.os.SystemClock
 import android.util.Log
+import com.lsp.hypersidebar.prefs.HostPackages
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -74,10 +75,10 @@ object HLog {
             clz.getMethod("currentProcessName").invoke(null) as? String
         }.getOrNull() ?: "?"
         val short = when {
-            raw == "com.miui.home" -> "launcher"
-            raw.endsWith(":ui") -> "ui"
-            raw == "com.android.systemui" -> "sys"
-            raw == "com.lsp.hypersidebar" || raw.isEmpty() -> "app"
+            raw == HostPackages.HOME -> "launcher"
+            raw.endsWith(HostPackages.UI_PROCESS_SUFFIX) -> "ui"
+            raw == HostPackages.SYSTEM_UI -> "sys"
+            raw == FreeformLauncher.MODULE_CLASS_NAMESPACE || raw.isEmpty() -> "app"
             else -> raw.substringAfterLast('.').take(12)
         }
         procName = short

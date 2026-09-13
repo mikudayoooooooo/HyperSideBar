@@ -2,6 +2,7 @@ package com.lsp.hypersidebar
 
 import com.lsp.hypersidebar.prefs.savePref
 import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.prefs.PrefsFiles
 import android.content.SharedPreferences
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -22,7 +23,7 @@ import com.lsp.hypersidebar.util.ConfigSync
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import io.github.libxposed.service.XposedService
 
-private const val PREFS_NAME = "hyperSidebar_prefs"
+private const val PREFS_NAME = PrefsFiles.APP_LOCAL
 
 class MainActivity : ComponentActivity() {
 

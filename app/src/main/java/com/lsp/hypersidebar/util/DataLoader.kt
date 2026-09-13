@@ -2,6 +2,7 @@ package com.lsp.hypersidebar.util
 
 import android.content.Context
 import android.util.Log
+import com.lsp.hypersidebar.prefs.PrefsFiles
 import com.lsp.hypersidebar.util.HLog
 
 /**
@@ -32,7 +33,7 @@ object DataLoader {
     private const val TAG = "DataLoader"
     private const val CACHE_TTL_MS = 30_000L
     private const val BACKSTOP_INTERVAL_MS = 5 * 60_000L
-    private const val DISK_PREFS_NAME = "hyperSidebar_data"
+    private const val DISK_PREFS_NAME = PrefsFiles.DATA
     private const val DISK_KEY_SUGGESTIONS = "suggestions"
 
     /**
@@ -201,7 +202,7 @@ object DataLoader {
 
     /** 反射失败直接抛（1C：失败计数/兜底 toast 需要区分"拉取失败"与"合法空列表"）。 */
     private fun loadSuggestionApps(context: Context): List<String> {
-        val cls = Class.forName("android.util.MiuiMultiWindowUtils")
+        val cls = Class.forName(FreeformLauncher.MIUI_MULTI_WINDOW_UTILS)
         val method = try {
             cls.getMethod("getFreeformSuggestionList", Context::class.java)
         } catch (_: NoSuchMethodException) {

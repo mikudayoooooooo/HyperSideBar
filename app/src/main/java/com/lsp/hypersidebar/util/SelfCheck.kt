@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
@@ -82,11 +83,15 @@ object SelfCheck {
 
     suspend fun generate(context: Context, service: XposedService?, prefs: SharedPreferences): String =
         withContext(Dispatchers.IO) {
-            val home = probe(context, Intent(PrefKeys.PROBE_ACTION_HOME))
+            // 探针显式定向宿主包（接收器 RECEIVER_EXPORTED；executor 附带令牌，
+            // 隐式发送可被任意 App 截收——0912 审查，与 sendSync 同类修复）
+            val home = probe(context, Intent(PrefKeys.PROBE_ACTION_HOME).setPackage(HostPackages.HOME))
             val relayToken = RelayToken.read(prefs)
             val executor = probe(
                 context,
-                Intent(ACTION_FAN_LAUNCH).putExtra(PrefKeys.PROBE_EXTRA, true),
+                Intent(ACTION_FAN_LAUNCH)
+                    .setPackage(HostPackages.UI_HOST)
+                    .putExtra(PrefKeys.PROBE_EXTRA, true),
                 relayToken
             )
             // 与 hook 消费端同门控：release 构建该开关不生效（存量毒值压死）

@@ -11,6 +11,8 @@ import android.os.Message
 import android.os.Messenger
 import android.os.Process
 import android.util.Log
+import com.lsp.hypersidebar.prefs.HostPackages
+import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.RelayToken
 import com.lsp.hypersidebar.util.HLog
@@ -36,9 +38,6 @@ class UnfreezeRelayService : Service() {
     companion object {
         /** 请求：data 带 pkg / token。应答（replyTo）arg1=1 su 已执行 / 0 失败 */
         const val MSG_UNFREEZE = 1
-
-        /** :ui 宿主包名（动态解析其 uid 做 ACL，勿硬编码 uid——HyperOS 3 实测 10613 非 system） */
-        private const val UI_HOST_PKG = "com.miui.securitycenter"
     }
 
     private lateinit var messenger: Messenger
@@ -66,11 +65,11 @@ class UnfreezeRelayService : Service() {
 
     private fun isUiHostUid(uid: Int): Boolean =
         runCatching {
-            packageManager.getPackagesForUid(uid)?.contains(UI_HOST_PKG) == true
+            packageManager.getPackagesForUid(uid)?.contains(HostPackages.UI_HOST) == true
         }.getOrDefault(false)
 
     private fun handleUnfreeze(callerUid: Int, data: Bundle?): Boolean {
-        val pkg = data?.getString("pkg") ?: return false
+        val pkg = data?.getString(PrefKeys.UNFREEZE_EXTRA_PKG) ?: return false
         // ① 调用方 uid：仅接受 system 或 :ui 宿主（com.miui.securitycenter）。
         // Binder uid 由内核强制不可伪造；uid 动态解析（0907 修正史：先误设 SYSTEM_UID
         // 单检、再误读 10613 为 :ui——10613 实为模块 App 自身 uid，:ui 真实 uid 未测得，
@@ -86,7 +85,7 @@ class UnfreezeRelayService : Service() {
         }
         // ③ 令牌（root 档=严格）：冷启动缓存为空时等桥绑定 ≤3s
         //（0907 实锤：漏等待=静默拒绝，解冻从未执行）
-        val got = data.getString("token")
+        val got = data.getString(PrefKeys.UNFREEZE_EXTRA_TOKEN)
         if (RelayToken.current() == null) {
             val provisioned = RemotePrefsBridge.awaitTokenProvision()
             HLog.i(TAG, "unfreeze token cold-provision: ok=$provisioned")

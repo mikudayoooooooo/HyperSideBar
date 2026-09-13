@@ -105,6 +105,10 @@ object ShortcutStore {
     private const val TOOLBOX_PACKAGE = "com.miui.securitycenter"
     private const val TOOLBOX_ID = "__toolbox__"
 
+    /** 游戏箱/视频箱 boost 状态键（MIUI 私有 Settings.Secure；两函数四处读取，收口于此） */
+    private const val KEY_GB_BOOSTING = "gb_boosting"
+    private const val KEY_VTB_BOOSTING = "vtb_boosting"
+
     /**
      * 扇形快捷栏展示上限（PRD §7.1：6 个**含面板占位**——占位在场时运行时
      * 只取前 5 个用户项，占位隐藏时 6 个全上）。仅约束展示，不约束存储。
@@ -267,8 +271,8 @@ object ShortcutStore {
      */
     fun isToolboxAvailable(context: android.content.Context): Boolean {
         val cr = context.contentResolver
-        return android.provider.Settings.Secure.getInt(cr, "gb_boosting", 0) == 1 ||
-            android.provider.Settings.Secure.getInt(cr, "vtb_boosting", 0) == 1
+        return android.provider.Settings.Secure.getInt(cr, KEY_GB_BOOSTING, 0) == 1 ||
+            android.provider.Settings.Secure.getInt(cr, KEY_VTB_BOOSTING, 0) == 1
     }
 
     /**
@@ -277,8 +281,8 @@ object ShortcutStore {
     fun getToolboxLabel(context: android.content.Context): String {
         val cr = context.contentResolver
         return when {
-            android.provider.Settings.Secure.getInt(cr, "gb_boosting", 0) == 1 -> "游戏工具箱"
-            android.provider.Settings.Secure.getInt(cr, "vtb_boosting", 0) == 1 -> "视频工具箱"
+            android.provider.Settings.Secure.getInt(cr, KEY_GB_BOOSTING, 0) == 1 -> "游戏工具箱"
+            android.provider.Settings.Secure.getInt(cr, KEY_VTB_BOOSTING, 0) == 1 -> "视频工具箱"
             else -> "打开面板"
         }
     }

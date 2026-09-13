@@ -10,6 +10,8 @@ import android.os.Message
 import android.os.Messenger
 import android.os.Process
 import android.util.Log
+import com.lsp.hypersidebar.prefs.HostPackages
+import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.HLog
 
@@ -37,7 +39,7 @@ class ConfigPullService : Service() {
         /** 请求拉取全量配置；应答（replyTo）arg1=1 成功（data.map=Serializable Map）/ 0 配置不可用 */
         const val MSG_PULL_CONFIG = 1
 
-        private val HOST_PKGS = setOf("com.miui.home", "com.miui.securitycenter")
+        private val HOST_PKGS = setOf(HostPackages.HOME, HostPackages.UI_HOST)
     }
 
     private lateinit var messenger: Messenger
@@ -55,7 +57,7 @@ class ConfigPullService : Service() {
                 runCatching {
                     msg.replyTo?.send(Message.obtain(null, 0).apply {
                         arg1 = if (map != null) 1 else 0
-                        if (map != null) data = Bundle().apply { putSerializable("map", HashMap(map)) }
+                        if (map != null) data = Bundle().apply { putSerializable(PrefKeys.CONFIG_PULL_EXTRA_MAP, HashMap(map)) }
                     })
                 }
             }

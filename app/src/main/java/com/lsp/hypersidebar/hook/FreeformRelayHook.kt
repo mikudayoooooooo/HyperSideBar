@@ -119,24 +119,24 @@ class FreeformRelayHook(
                     // 里 setResult 会抛 RuntimeException——必须先判 isOrderedBroadcast
                     if (isOrderedBroadcast) resultCode = 1
                     when {
-                        intent.getBooleanExtra("openPanel", false) -> {
+                        intent.getBooleanExtra(PrefKeys.FAN_EXTRA_OPEN_PANEL, false) -> {
                             HLog.i(TAG, "[${trace ?: "-"}] relay: openPanel")
                             strategy.openNativePanel(ctx)
                         }
-                        intent.getBooleanExtra("allApps", false) -> {
+                        intent.getBooleanExtra(PrefKeys.FAN_EXTRA_ALL_APPS, false) -> {
                             HLog.i(TAG, "[${trace ?: "-"}] relay: allApps")
                             strategy.launchAllApps(ctx)
                         }
-                        intent.getStringExtra("shortcut") != null -> {
-                            val json = intent.getStringExtra("shortcut") ?: return
+                        intent.getStringExtra(PrefKeys.FAN_EXTRA_SHORTCUT) != null -> {
+                            val json = intent.getStringExtra(PrefKeys.FAN_EXTRA_SHORTCUT) ?: return
                             runCatching {
                                 val action = com.lsp.hypersidebar.util.ShortcutAction.fromJson(JSONObject(json))
                                 HLog.i(TAG, "[${trace ?: "-"}] relay: shortcut id=${action.id}")
                                 strategy.launchShortcut(ctx, action)
                             }.onFailure { HLog.e(TAG, "relay: bad shortcut payload: ${it.message}") }
                         }
-                        intent.getStringExtra("pkg") != null -> {
-                            val pkg = intent.getStringExtra("pkg") ?: return
+                        intent.getStringExtra(PrefKeys.FAN_EXTRA_PKG) != null -> {
+                            val pkg = intent.getStringExtra(PrefKeys.FAN_EXTRA_PKG) ?: return
                             HLog.i(TAG, "[${trace ?: "-"}] relay: freeform pkg=$pkg")
                             strategy.launchFreeform(ctx, pkg)
                         }
@@ -160,9 +160,9 @@ class FreeformRelayHook(
                     override fun onReceive(ctx: Context, intent: Intent) {
                         if (!RelayToken.verifyFan(intent, RelayToken.read(remotePrefs))) return
                         val trace = intent.getStringExtra(Trace.EXTRA)
-                        val ok = intent.getBooleanExtra("ok", false)
-                        val label = intent.getStringExtra("label") ?: ""
-                        val reason = intent.getStringExtra("reason") ?: ""
+                        val ok = intent.getBooleanExtra(PrefKeys.RELAY_RESULT_EXTRA_OK, false)
+                        val label = intent.getStringExtra(PrefKeys.RELAY_RESULT_EXTRA_LABEL) ?: ""
+                        val reason = intent.getStringExtra(PrefKeys.RELAY_RESULT_EXTRA_REASON) ?: ""
                         HLog.i(TAG, "[${trace ?: "-"}] relay result: ok=$ok label=$label reason=$reason")
                         if (!ok) {
                             runCatching {

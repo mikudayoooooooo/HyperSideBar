@@ -13,6 +13,7 @@ import android.os.Messenger
 import android.os.SystemClock
 import android.util.Log
 import com.lsp.hypersidebar.ConfigPullService
+import com.lsp.hypersidebar.prefs.PrefKeys
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -79,7 +80,7 @@ object ConfigPullBridge {
         val replyHandler = object : Handler(replyThread.looper) {
             override fun handleMessage(msg: Message) {
                 @Suppress("UNCHECKED_CAST")
-                gotMap = msg.data?.getSerializable("map") as? Map<String, Any>
+                gotMap = msg.data?.getSerializable(PrefKeys.CONFIG_PULL_EXTRA_MAP) as? Map<String, Any>
                 latch.countDown()
             }
         }

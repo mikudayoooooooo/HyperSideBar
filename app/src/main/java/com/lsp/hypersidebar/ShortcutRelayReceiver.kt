@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.util.DefaultLaunchStrategy
 import com.lsp.hypersidebar.util.RelayToken
@@ -84,10 +85,10 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
                 }
                 runCatching {
                     val reply = Intent(PrefKeys.ACTION_RELAY_RESULT)
-                        .setPackage("com.miui.securitycenter")
-                        .putExtra("ok", ok)
-                        .putExtra("label", shortcut.label)
-                        .putExtra("reason", reason)
+                        .setPackage(HostPackages.UI_HOST)
+                        .putExtra(PrefKeys.RELAY_RESULT_EXTRA_OK, ok)
+                        .putExtra(PrefKeys.RELAY_RESULT_EXTRA_LABEL, shortcut.label)
+                        .putExtra(PrefKeys.RELAY_RESULT_EXTRA_REASON, reason)
                         .putExtra(com.lsp.hypersidebar.util.Trace.EXTRA, trace)
                     com.lsp.hypersidebar.util.RelayToken.attach(
                         reply, com.lsp.hypersidebar.util.RelayToken.current()
@@ -101,13 +102,10 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
     }
 
     /**
-     * 冷启动等令牌：RemotePrefsBridge.addListener 幂等——已绑定立即同步回调，
-     * 未绑定走异步绑定（onServiceBind 线程内 RelayToken.sync 填充缓存后才通知）。
-     * 超时=绑定不可用，返回 false 交由 verifyRelay 按无令牌拒绝。
+     * 冷启动等令牌：直接复用 RemotePrefsBridge 的通用等待（addListener 幂等——已绑定
+     * 立即同步回调；超时=绑定不可用，返回 false 交由 verifyRelay 按无令牌拒绝）。
+     * 原为本文件手写的同逻辑闩锁副本（0912 收口去重）。
      */
-    private fun awaitTokenProvision(): Boolean {
-        val latch = java.util.concurrent.CountDownLatch(1)
-        com.lsp.hypersidebar.util.RemotePrefsBridge.addListener { _ -> latch.countDown() }
-        return latch.await(3, java.util.concurrent.TimeUnit.SECONDS)
-    }
+    private fun awaitTokenProvision(): Boolean =
+        com.lsp.hypersidebar.util.RemotePrefsBridge.awaitTokenProvision()
 }

@@ -106,14 +106,14 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
 
         SmallTitle(text = stringResource(R.string.stats_today))
         Card(Modifier.fillMaxWidth()) {
-            MetricRow(stringResource(R.string.stats_invocations), today["shows"])
-            MetricRow(stringResource(R.string.stats_opens), today["opens"])
-            MetricRow(stringResource(R.string.stats_all_apps), today["allApps"])
-            MetricRow(stringResource(R.string.stats_shortcuts), today["shortcuts"])
-            MetricRow(stringResource(R.string.stats_cancels), today["cancels"])
+            MetricRow(stringResource(R.string.stats_invocations), today[StatsRecorder.MetricKeys.SHOWS])
+            MetricRow(stringResource(R.string.stats_opens), today[StatsRecorder.MetricKeys.OPENS])
+            MetricRow(stringResource(R.string.stats_all_apps), today[StatsRecorder.MetricKeys.ALL_APPS])
+            MetricRow(stringResource(R.string.stats_shortcuts), today[StatsRecorder.MetricKeys.SHORTCUTS])
+            MetricRow(stringResource(R.string.stats_cancels), today[StatsRecorder.MetricKeys.CANCELS])
             MetricRow(
                 stringResource(R.string.stats_success_rate),
-                successRate(today["launchOk"], today["launchFail"]), isRate = true
+                successRate(today[StatsRecorder.MetricKeys.LAUNCH_OK], today[StatsRecorder.MetricKeys.LAUNCH_FAIL]), isRate = true
             )
             MetricRow(
                 stringResource(R.string.stats_misfire_rate),
@@ -126,16 +126,16 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
 
         SmallTitle(text = stringResource(R.string.stats_total))
         Card(Modifier.fillMaxWidth()) {
-            MetricRow(stringResource(R.string.stats_invocations), total["shows"])
-            MetricRow(stringResource(R.string.stats_opens), total["opens"])
-            MetricRow(stringResource(R.string.stats_all_apps), total["allApps"])
+            MetricRow(stringResource(R.string.stats_invocations), total[StatsRecorder.MetricKeys.SHOWS])
+            MetricRow(stringResource(R.string.stats_opens), total[StatsRecorder.MetricKeys.OPENS])
+            MetricRow(stringResource(R.string.stats_all_apps), total[StatsRecorder.MetricKeys.ALL_APPS])
             MetricRow(
                 stringResource(R.string.stats_all_apps_share),
-                allAppsShare(total["opens"], total["allApps"]), isRate = true
+                allAppsShare(total[StatsRecorder.MetricKeys.OPENS], total[StatsRecorder.MetricKeys.ALL_APPS]), isRate = true
             )
             MetricRow(
                 stringResource(R.string.stats_success_rate),
-                successRate(total["launchOk"], total["launchFail"]), isRate = true
+                successRate(total[StatsRecorder.MetricKeys.LAUNCH_OK], total[StatsRecorder.MetricKeys.LAUNCH_FAIL]), isRate = true
             )
         }
         Text(
@@ -245,21 +245,25 @@ private fun misfireRateText(merged: JSONObject): String? {
     return if (shows == 0) null else (misfires * 100 / shows).toString()
 }
 
-/** 导出按天 CSV（下载目录，复用 SelfCheck 的 MediaStore 路径） */
+/** 导出按天 CSV（下载目录，复用 SelfCheck 的 MediaStore 路径）：表头与行同源 MetricKeys，防漂移 */
 private suspend fun exportStatsCsv(context: Context, merged: JSONObject): String =
     withContext(Dispatchers.IO) {
-        val sb = StringBuilder("date,shows,opens,allApps,shortcuts,cancels,launchOk,launchFail\n")
+        val keys = listOf(
+            StatsRecorder.MetricKeys.SHOWS,
+            StatsRecorder.MetricKeys.OPENS,
+            StatsRecorder.MetricKeys.ALL_APPS,
+            StatsRecorder.MetricKeys.SHORTCUTS,
+            StatsRecorder.MetricKeys.CANCELS,
+            StatsRecorder.MetricKeys.LAUNCH_OK,
+            StatsRecorder.MetricKeys.LAUNCH_FAIL
+        )
+        val sb = StringBuilder("date," + keys.joinToString(",") + "\n")
         merged.optJSONObject("days")?.let { ds ->
             ds.keys().asSequence().sorted().forEach { d ->
                 val c = ds.getJSONObject(d)
-                sb.append(d).append(',')
-                    .append(c.optInt("shows")).append(',')
-                    .append(c.optInt("opens")).append(',')
-                    .append(c.optInt("allApps")).append(',')
-                    .append(c.optInt("shortcuts")).append(',')
-                    .append(c.optInt("cancels")).append(',')
-                    .append(c.optInt("launchOk")).append(',')
-                    .append(c.optInt("launchFail")).append('\n')
+                sb.append(d)
+                keys.forEach { k -> sb.append(',').append(c.optInt(k)) }
+                sb.append('\n')
             }
         }
         com.lsp.hypersidebar.util.SelfCheck.export(context, sb.toString())

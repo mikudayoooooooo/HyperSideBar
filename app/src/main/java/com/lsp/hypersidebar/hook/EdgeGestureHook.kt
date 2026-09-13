@@ -183,6 +183,14 @@ class EdgeGestureHook(
                     com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx)
                     HLog.i(TAG, "config sync receiver registered (via Application.attach)")
                     registerManifestShortcutsBridge(ctx)
+                    // 日志拉取回传（§11.2）：模块 App 请求时回传 HLog 缓冲 + 熔断快照
+                    com.lsp.hypersidebar.util.LogDumpBridge.register(
+                        ctx,
+                        statusProvider = { breaker.snapshot() },
+                        statsProvider = { StatsRecorder.dump() }
+                    )
+                    // 数据记录（§11.3）：注入宿主 context（聚合结构落盘宿主本地 prefs）
+                    com.lsp.hypersidebar.util.StatsRecorder.init(ctx)
                 } catch (e: Throwable) {
                     HLog.e(TAG, "probe receiver registration failed: ${e.message}", e)
                 }
@@ -266,14 +274,6 @@ class EdgeGestureHook(
                                 c.sendBroadcast(reply)
                                 HLog.i(TAG, "manifest shortcuts replied: ${arr.length()}")
                             }.onFailure {
-            // 日志拉取回传（§11.2）：模块 App 请求时回传 HLog 缓冲 + 熔断快照
-            com.lsp.hypersidebar.util.LogDumpBridge.register(
-                ctx,
-                statusProvider = { breaker.snapshot() },
-                statsProvider = { StatsRecorder.dump() }
-            )
-            // 数据记录（§11.3）：注入宿主 context（聚合结构落盘宿主本地 prefs）
-            com.lsp.hypersidebar.util.StatsRecorder.init(ctx)
                                 HLog.w(TAG, "manifest shortcuts query failed: ${it.message}")
                             }
                         }.start()

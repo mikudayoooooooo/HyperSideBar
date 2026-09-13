@@ -258,7 +258,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                             readField(tile, "mWindowManager")?.let { wm ->
                                 wm.javaClass.methods
                                     .firstOrNull { it.name == "addWindowToken" && it.parameterCount == 4 }
-                                    ?.invoke(wm, token, 2035, 0, null)
+                                    ?.invoke(wm, token, TILE_WINDOW_TOKEN_TYPE, 0, null)
                             }
                         }.onFailure { HLog.w(TAG, "addWindowToken failed: ${it.message}") }
                         val svc = readField(tile, "mService") ?: error("mService field is null")
@@ -318,6 +318,13 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
 
         /** 投递后诊断延迟：等 bindService→onServiceConnected 冲刷完成后再查 pendingClick */
         const val DELIVERY_DIAG_DELAY_MS = 800L
+
+        /**
+         * addWindowToken 的窗口类型（取值来自反编译 SystemUI handleClick 链路）：为磁贴
+         * 授予"磁贴内启动"窗口权限。ROM 内部类型未考证到公开常量名——语义勿改，ROM
+         * 升级若磁贴内启动失效优先怀疑此值漂移
+         */
+        const val TILE_WINDOW_TOKEN_TYPE = 2035
 
         /** createTile 现场创建的实例按 spec 缓存复用（上界=用户添加的磁贴快捷方式数） */
         val createdTiles = java.util.concurrent.ConcurrentHashMap<String, Any>()

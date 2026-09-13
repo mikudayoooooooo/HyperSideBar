@@ -85,6 +85,26 @@ object PrefKeys {
      *  原硬编码常量 RELAY_LAUNCH_TOKEN 已废止——反编译即可读出，等同零校验。 */
     const val RELAY_TOKEN = "relayToken"
 
+    // ===== FAN relay（launcher/AllApps → :ui）extra 键（0912 收口：此前裸字符串三方配对）=====
+    // 注意 FAN_EXTRA_SHORTCUT/FAN_EXTRA_PKG 与 RELAY_LAUNCH_EXTRA_SHORTCUT/
+    // SHORTCUT_ID_LAUNCH_EXTRA_PKG 值相同纯属两个通道取了同一个词——语义不同，勿合并常量
+    const val FAN_EXTRA_PKG = "pkg"
+    const val FAN_EXTRA_ALL_APPS = "allApps"
+    const val FAN_EXTRA_SHORTCUT = "shortcut"
+    const val FAN_EXTRA_OPEN_PANEL = "openPanel"
+
+    // ===== root 代发结果回告（模块 App → :ui）extra 键（ShortcutRelayReceiver 写、FreeformRelayHook 读）=====
+    const val RELAY_RESULT_EXTRA_OK = "ok"
+    const val RELAY_RESULT_EXTRA_LABEL = "label"
+    const val RELAY_RESULT_EXTRA_REASON = "reason"
+
+    // ===== 解冻 relay（:ui → 模块 App Messenger）data 键（UnfreezeBridge 写、UnfreezeRelayService 读）=====
+    const val UNFREEZE_EXTRA_PKG = "pkg"
+    const val UNFREEZE_EXTRA_TOKEN = "token"
+
+    /** 配置拉取应答（模块 App → hook 宿主 Messenger）data 键（ConfigPullService 写、ConfigPullBridge 读） */
+    const val CONFIG_PULL_EXTRA_MAP = "map"
+
     // ===== manifest 快捷方式 launcher 桥（批次 3）=====
     // 背景（2026-09-05 实锤）：LauncherApps.getShortcuts 对非默认桌面应用抛
     // SecurityException（Caller can't access shortcut information）——模块 App 无法直查。
@@ -101,7 +121,7 @@ object PrefKeys {
     const val SHORTCUT_ID_LAUNCH_EXTRA_PKG = "pkg"
     const val SHORTCUT_ID_LAUNCH_EXTRA_ID = "sid"
     /** 代发目标=hook 宿主（默认桌面进程） */
-    const val SHORTCUT_ID_LAUNCH_TARGET = "com.miui.home"
+    const val SHORTCUT_ID_LAUNCH_TARGET = HostPackages.HOME
 
     // ===== QS 磁贴 SystemUI 直点桥（批次 3，SystemUiHook）=====
     // click-tile 门禁在 CommandQueue 回调层（控制中心样式早退），QSTile.click 无约束——
@@ -150,6 +170,34 @@ object PrefKeys {
 // channelMode（EDGE/HANDLE）已废弃（1B：EDGE 为唯一产品形态，HANDLE 遗留调试通道代码
 // 一并移除）；activeZone 已废弃（运行时唯一用途是 1A 拆除的距离门控——正是"完全没有
 // 选中反馈"的根因，选中语义由死区/内外取消区派生即可）。旧 key 残留在 prefs 文件中无害。
+
+/**
+ * hook 宿主包名与进程名（0912 审查收口）：此前 ~20 处裸字面量散落在广播寻址/
+ * uid ACL/进程判定里，此处为唯一来源，改宿主名/加宿主只改这里。
+ */
+object HostPackages {
+    /** 执行端宿主：fan 直启 / root 代发请求方 / QS 磁贴点击接收方（:ui 进程） */
+    const val UI_HOST = "com.miui.securitycenter"
+    /** 触发端宿主：边缘手势 + manifest 清单桥 + startShortcut 代发（默认桌面） */
+    const val HOME = "com.miui.home"
+    /** QS 磁贴数据层直点桥宿主（主进程） */
+    const val SYSTEM_UI = "com.android.systemui"
+    /** 执行端子进程名后缀（XposedInit 进程判定 / HLog 短名判定共用） */
+    const val UI_PROCESS_SUFFIX = ":ui"
+}
+
+/** prefs 文件名（0912 审查收口）：跨进程/跨文件共用名的唯一来源。 */
+object PrefsFiles {
+    /** LSPosed remotePrefs——wire 契约：XposedInit 与 RemotePrefsBridge 必须同源，
+     *  写错=hook 进程读到另一份空配置（模块静默失联级） */
+    const val REMOTE = "hyperSidebar"
+    /** 模块 App 本地 prefs（AllApps fallback + label 镜像 + manifest 快捷方式缓存） */
+    const val APP_LOCAL = "hyperSidebar_prefs"
+    /** hook 进程推荐列表落盘（DataLoader） */
+    const val DATA = "hyperSidebar_data"
+    /** 使用数据落盘（StatsRecorder，各 hook 进程本地） */
+    const val STATS = "hyperSidebar_stats"
+}
 
 /** 布局与交互参数默认值（竖屏/横屏独立），与 PRD 参数表对齐。 */
 object LayoutDefaults {

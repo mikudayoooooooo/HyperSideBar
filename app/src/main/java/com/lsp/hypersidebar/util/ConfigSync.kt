@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Log
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.util.HLog
 
 /**
@@ -28,16 +29,20 @@ import com.lsp.hypersidebar.util.HLog
  *   [ACTION_REQUEST] 请求模块回推（模块进程活着时秒回，死了等用户开设置页）
  * - 读取：[SyncedPrefs] 装饰器——缓存命中优先，回落启动快照（双保险）
  *
- * 安全口径：SYNC 广播**不带令牌校验**——伪造的代价是"侧边栏观感被改"（低危害），
- * 而冷启动序下令牌可能尚未生成（拒掉合法同步的代价更高）。涉及启动行为的
- * 广播（FAN_LAUNCH）仍走 RelayToken 严格校验。
+ * 安全口径（0912 审查修订）：SYNC 广播**显式定向两个 hook 宿主**且**剔除 relayToken**——
+ * 此前隐式全量广播把 root 代发防伪令牌送给了任意监听 App（拿到即可伪造 ShortcutRelay
+ * 广播借 root 启动任意非导出组件=提权），且伪造配置可注入扇形启动项。接收端仍无来源
+ * 校验（广播信道的固有限制），攻击面从"全网可收"收窄为"仅宿主进程内代码"。
+ * 涉及启动行为的广播（FAN_LAUNCH）仍走 RelayToken 严格校验。
  */
 object ConfigSync {
 
     private const val TAG = "ConfigSync"
     const val ACTION_SYNC = "io.github.mikudayoooooooo.hypersidebar.CONFIG_SYNC"
     const val ACTION_REQUEST = "io.github.mikudayoooooooo.hypersidebar.CONFIG_REQUEST"
-    private const val GROUP = "hyperSidebar"
+
+    /** SYNC 定向投递目标（唯一消费方=两个 hook 宿主；隐式广播任意 App 可收，禁止回退隐式） */
+    private val HOOK_HOST_PKGS = listOf(HostPackages.HOME, HostPackages.UI_HOST)
 
     // ===== hook 进程侧：同步缓存 =====
 
@@ -108,16 +113,24 @@ object ConfigSync {
         }
     }
 
-    /** 全量广播当前配置（getAll 值均 Serializable：String/Int/Float/Boolean/StringSet）。 */
+    /**
+     * 全量广播当前配置（getAll 值均 Serializable：String/Int/Float/Boolean/StringSet）。
+     * relayToken 必须剔除：hook 宿主经 LSPosed remotePrefs 自行读令牌，广播通道纯属冗余；
+     * 带令牌的广播一旦离开定向范围即等于把 root 代发防伪令牌送人。
+     */
     fun sendSync(context: Context, prefs: SharedPreferences) {
         runCatching {
             val map = HashMap<String, Any>()
             for ((k, v) in prefs.all) {
+                if (k == com.lsp.hypersidebar.prefs.PrefKeys.RELAY_TOKEN) continue
                 if (k != null && v != null) map[k] = v
             }
-            val intent = Intent(ACTION_SYNC)
-                .putExtra("map", map as java.io.Serializable)
-            context.sendBroadcast(intent)
+            for (host in HOOK_HOST_PKGS) {
+                val intent = Intent(ACTION_SYNC)
+                    .setPackage(host)
+                    .putExtra("map", map as java.io.Serializable)
+                context.sendBroadcast(intent)
+            }
             // 诊断锚点：与 hook 侧 "config synced" 配对——推了没收到=投递问题，
             // 没推=写入监听/绑定问题
             HLog.i(TAG, "sendSync: ${map.size} keys, iconSize=${map[com.lsp.hypersidebar.prefs.PrefKeys.ICON_SIZE]}")

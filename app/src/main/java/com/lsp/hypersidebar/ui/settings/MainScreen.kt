@@ -30,6 +30,7 @@ import androidx.navigation3.ui.NavDisplay
 import androidx.navigation3.ui.defaultPopTransitionSpec
 import androidx.navigation3.ui.defaultTransitionSpec
 import com.lsp.hypersidebar.R
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.theme.ThemeMode
@@ -438,7 +439,7 @@ private fun moduleStatusOf(service: XposedService?): ModuleStatus {
     // 仅在 service 首次绑定（启动时）验证一次，结果固定不再实时刷新。
     if (service == null) return ModuleStatus.INACTIVE
     val scope = runCatching { service.scope }.getOrDefault(emptyList())
-    return if (scope.contains("com.miui.securitycenter")) {
+    return if (scope.contains(HostPackages.UI_HOST)) {
         ModuleStatus.ACTIVE
     } else {
         ModuleStatus.INACTIVE

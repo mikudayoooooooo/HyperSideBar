@@ -27,12 +27,13 @@ object PrefKeys {
     const val TRIGGER_DWELL_MS = "triggerDwellMs"
     const val TRIGGER_MIN_DISTANCE = "triggerMinDistance"
 
-    /** 扇形背景雾化浓度（0~0.70，0=关闭填充；路线 C 纯视觉增强，无真模糊） */
+    /** 磨砂板浓度（0~0.70，0=透明；0914 起全模式统一连体亮磨砂板，键名沿用旧雾化键保用户数值） */
     const val FAN_FOG_INTENSITY = "fanFogIntensity"
     /** 呼出扇形时全屏压暗开关（Compose scrim 24% 黑，与菜单同步淡入） */
     const val FAN_DIM_ENABLED = "fanDimEnabled"
     /** 毛玻璃总开关（0913 用户拍板）：开=窗口收缩包围盒+系统 blur-behind（真模糊身后内容）
-     *  +快捷栏底板窗口内 textureBlur；系统模糊被关（isCrossWindowBlurEnabled=false）时自动降级全屏窗口 */
+     *  +磨砂板（雾化滑条控浓度，延伸覆盖快捷栏=连体玻璃板）；系统模糊被关
+     *  （isCrossWindowBlurEnabled=false）时自动降级全屏窗口 */
     const val FAN_FROSTED_ENABLED = "fanFrostedEnabled"
 
     const val CUSTOM_APPS = "customApps"
@@ -247,11 +248,10 @@ object LayoutDefaults {
     const val FAN_DIM_ENABLED = false
     const val FAN_DIM_AMOUNT = 0.24f
 
-    // 毛玻璃（0913）：默认关（未真机验证 HyperOS 悬浮窗 blur-behind 前保守 opt-in）；
-    // blurBehindRadius=窗缘圆角模糊半径；quickBarFrostBlur=快捷栏底板窗口内模糊半径
+    // 毛玻璃（0913）：默认关（保守 opt-in，真机已验 HyperOS 悬浮窗 blur-behind 生效）；
+    // blurBehindRadius=窗缘圆角模糊半径（磨砂板由雾化滑条控浓度，无独立模糊半径键）
     const val FAN_FROSTED_ENABLED = false
     const val FAN_FROSTED_BLUR_BEHIND_RADIUS_DP = 36f
-    const val FAN_FROSTED_QUICK_BAR_BLUR_DP = 20f
 
     /** 所有布局相关键。恢复默认时批量写回。 */
     val layoutKeys = listOf(

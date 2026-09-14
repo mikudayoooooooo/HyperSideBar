@@ -35,21 +35,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import com.lsp.hypersidebar.prefs.LayoutDefaults
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.blur.BlendColorEntry
-import top.yukonga.miuix.kmp.blur.BlurBlendMode
-import top.yukonga.miuix.kmp.blur.BlurColors
-import top.yukonga.miuix.kmp.blur.BlurDefaults
-import top.yukonga.miuix.kmp.blur.LayerBackdrop
-import top.yukonga.miuix.kmp.blur.textureBlur
 
 @Composable
 fun QuickAppsBar(
     geometry: FanGeometry,
     selectedIndex: Int,
     colors: FanThemeColors,
-    frostedBackdrop: LayerBackdrop?,
     onQuickAppSelected: (FanAppInfo) -> Unit
 ) {
     val context = LocalContext.current
@@ -103,36 +95,9 @@ fun QuickAppsBar(
                         geometry.quickBarY.toInt()
                     )
                 }
-                // 毛玻璃底板（0913 路线③）：对 layerBackdrop 录制的"弧+图标"子树做窗口内
-                // textureBlur（miuix-blur，AGSL RuntimeShader）；frostedBackdrop=null 时
-                // 此节点不参与（enabled=false 跳过特效，零采样成本）。
-                // HyperOS 风格=亮磨砂：blur 后叠主题 surface 高调白混（首测"暗色矩形只有
-                // 压暗感"——雾化=0 时窗口内背景透明，blur 无感，观感全靠染色；改白混提亮）
-                .then(
-                    frostedBackdrop?.let { bd ->
-                        Modifier.textureBlur(
-                            backdrop = bd,
-                            shape = RoundedCornerShape((iconSizeDp / 2f + 4f).dp),
-                            blurRadius = LayoutDefaults.FAN_FROSTED_QUICK_BAR_BLUR_DP * density,
-                            noiseCoefficient = BlurDefaults.NoiseCoefficient,
-                            colors = BlurColors(
-                                blendColors = listOf(
-                                    BlendColorEntry(
-                                        colors.surfaceContainerHigh.copy(alpha = 0.5f),
-                                        BlurBlendMode.SrcOver
-                                    )
-                                )
-                            ),
-                            enabled = true
-                        )
-                    } ?: Modifier
-                )
                 .clip(RoundedCornerShape((iconSizeDp / 2f + 4f).dp))
-                .background(
-                    // 亮混已承担染色：毛玻璃态不再叠暗色底（否则回退成压暗观感）
-                    if (frostedBackdrop != null) Color.Transparent
-                    else colors.surfaceContainer.copy(alpha = 0.9f)
-                )
+                // 连体玻璃板：磨砂板（FanBackground）已覆盖栏背后，此处恒定提亮一档
+                .background(colors.surfaceContainerHigh.copy(alpha = 0.3f))
                 .padding(
                     horizontal = (iconSizeDp * 0.25f).dp,
                     vertical = (iconSizeDp * 0.25f).dp

@@ -27,7 +27,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -46,9 +45,6 @@ import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.anim.AccelerateEasing
 import top.yukonga.miuix.kmp.anim.DecelerateEasing
 import top.yukonga.miuix.kmp.anim.SinOutEasing
-import top.yukonga.miuix.kmp.blur.LayerBackdrop
-import top.yukonga.miuix.kmp.blur.layerBackdrop
-import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -94,7 +90,6 @@ fun FanMenuCompose(
     colors: FanThemeColors,
     fogIntensity: Float,
     dimEnabled: Boolean,
-    frosted: Boolean,
     exitTick: Int,
     onExitFinished: () -> Unit,
     onAppSelected: (FanAppInfo) -> Unit,
@@ -154,11 +149,6 @@ fun FanMenuCompose(
         }
     }
 
-    // 毛玻璃（0913 路线③）：录制"弧+图标+标签"子树为 LayerBackdrop，快捷栏底板对其
-    // textureBlur——miuix-blur 只能采样本窗口录制层（窗口外游戏画面由路线② blur-behind
-    // 在合成器侧模糊）。录制仅 frosted 开启时挂载（每帧录制有成本，关闭零开销）
-    val contentBackdrop = rememberLayerBackdrop()
-
     Box(modifier = Modifier.fillMaxSize()) {
         // 压暗 scrim（用户开关）：全屏纯黑罩在窗口内容最底层，独立淡入/淡出（不参与
         // 内容层缩放——全屏罩缩放会露出未罩住的边）
@@ -186,31 +176,27 @@ fun FanMenuCompose(
                     )
                 }
         ) {
-            Box(
-                modifier = if (frosted) Modifier.layerBackdrop(contentBackdrop) else Modifier
-            ) {
-                FanBackground(geometry, colors, fogIntensity) { arcSweep.value }
+            FanBackground(geometry, colors, fogIntensity) { arcSweep.value }
 
-                geometry.items.forEachIndexed { index, item ->
-                    FanAppIcon(
-                        context = context,
-                        item = item,
-                        isSelected = index == selectedIndex,
-                        iconSize = geometry.iconSize,
-                        colors = colors,
-                        anchor = anchor,
-                        startAngle = geometry.startAngle,
-                        spanAngle = geometry.spanAngle
-                    )
-                }
+            geometry.items.forEachIndexed { index, item ->
+                FanAppIcon(
+                    context = context,
+                    item = item,
+                    isSelected = index == selectedIndex,
+                    iconSize = geometry.iconSize,
+                    colors = colors,
+                    anchor = anchor,
+                    startAngle = geometry.startAngle,
+                    spanAngle = geometry.spanAngle
+                )
+            }
 
-                if (selectedIndex in geometry.items.indices) {
-                    SelectedLabel(
-                        item = geometry.items[selectedIndex],
-                        iconSize = geometry.iconSize,
-                        colors = colors
-                    )
-                }
+            if (selectedIndex in geometry.items.indices) {
+                SelectedLabel(
+                    item = geometry.items[selectedIndex],
+                    iconSize = geometry.iconSize,
+                    colors = colors
+                )
             }
 
             Box(
@@ -225,7 +211,6 @@ fun FanMenuCompose(
                     geometry = geometry,
                     selectedIndex = selectedQuickIndex,
                     colors = colors,
-                    frostedBackdrop = if (frosted) contentBackdrop else null,
                     onQuickAppSelected = onQuickAppSelected
                 )
             }
@@ -241,11 +226,11 @@ private fun FanBackground(
     sweep: () -> Float
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
-        // 雾化层（路线 C）：径向渐变填充——弧缘最浓（=滑条值）向锚点渐弱到 35%（反向渐变，
-        // 2026-09-06 用户拍板：密度落在可见的弧线边界与图标环带上，而非屏边不可见区），
-        // 整层 6dp blur 羽化 + 粗弧光晕。RenderEffect 走 GPU，窗口 FLAG_HARDWARE_ACCELERATED
-        // + minSdk 33 恒可用；浓度 0 = 无填充无光晕（裸弧线），滑条可在线 A/B。
-        // 折扇展开：弧随 sweep 进度从 startAngle 起笔生长
+        val density = LocalDensity.current.density
+        // 磨砂板（0914 用户拍板"连体亮磨砂板"全模式统一，替代路线 C 渐变雾化——旧渐变
+        // surfaceContainer 在深色主题读作压暗）：扇形饼+快捷栏胶囊连体同材质，浓度=雾化
+        // 滑条（0=透明只剩弧线）。毛玻璃开=blur-behind 已模糊身后内容，板提供玻璃体感；
+        // 关=板即半透明亮面板直接覆在未模糊背景上。整层 6dp blur 羽化板缘
         androidx.compose.foundation.Canvas(
             modifier = Modifier
                 .fillMaxSize()
@@ -263,22 +248,31 @@ private fun FanBackground(
                 geometry.outerRadius * 2
             )
             if (fogIntensity > 0.01f) {
-                val fog = colors.surfaceContainer
+                val veil = colors.surfaceContainerHigh.copy(alpha = fogIntensity.coerceAtMost(0.85f))
                 drawArc(
-                    brush = Brush.radialGradient(
-                        colorStops = arrayOf(
-                            0f to fog.copy(alpha = fogIntensity * 0.35f),
-                            1f to fog.copy(alpha = fogIntensity)
-                        ),
-                        center = geometry.anchor,
-                        radius = geometry.outerRadius
-                    ),
+                    color = veil,
                     startAngle = geometry.startAngle,
                     sweepAngle = span,
                     useCenter = true,
                     topLeft = topLeft,
                     size = arcSize
                 )
+                // 连体玻璃板：快捷栏胶囊同材质延伸——栏底板只在其上提亮一档
+                val n = minOf(6, geometry.quickApps.size)
+                if (n > 0) {
+                    val q = geometry.quickIconSize * density
+                    val barW = n * q + (n - 1) * q * 0.35f + q
+                    val barH = q * 2f
+                    drawRoundRect(
+                        color = veil,
+                        topLeft = Offset(geometry.quickBarX, geometry.quickBarY),
+                        size = androidx.compose.ui.geometry.Size(barW, barH),
+                        cornerRadius = CornerRadius(
+                            (geometry.quickIconSize / 2f + 4f) * density,
+                            (geometry.quickIconSize / 2f + 4f) * density
+                        )
+                    )
+                }
                 drawArc(
                     color = colors.outline.copy(alpha = 0.18f),
                     startAngle = geometry.startAngle,

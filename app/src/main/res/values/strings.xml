@@ -63,8 +63,8 @@
     <string name="state_off">关</string>
     <string name="trigger_dwell_title">呼出停顿</string>
     <string name="trigger_dwell_summary">贴边停顿 %1$d ms 后展开扇形；改动即时生效</string>
-    <string name="fan_fog_title">扇形背景雾化</string>
-    <string name="fan_fog_summary">雾化浓度 %1$d%%（0 为关闭填充）；改动下次呼出生效</string>
+    <string name="fan_fog_title">扇形磨砂板</string>
+    <string name="fan_fog_summary">磨砂板浓度 %1$d%%（0 为透明，仅剩弧线与图标；毛玻璃开启时身后内容由系统额外模糊）；改动下次呼出生效</string>
     <string name="fan_dim_title">背景压暗</string>
     <string name="fan_dim_summary">呼出扇形时全屏压暗 24%，突出菜单；改动下次呼出生效</string>
     <string name="fan_frosted_title">毛玻璃</string>

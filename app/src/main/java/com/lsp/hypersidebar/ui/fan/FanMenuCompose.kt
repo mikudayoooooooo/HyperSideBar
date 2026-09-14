@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
@@ -27,9 +28,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageShader
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.MutableState
 import androidx.compose.ui.layout.onSizeChanged
@@ -50,6 +58,26 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 选中态图标放大倍数（PRD §7.3.2"图标放大1.25倍"）；SelectedLabel 避让计算同源。 */
 internal const val SELECTED_ICON_SCALE = 1.25f
+
+/**
+ * 亚克力噪点图（96px 平铺单元，进程内一次生成）：每像素白/黑 + 随机低 alpha，
+ * 平铺后给磨砂板加颗粒 tooth（真机验证前的 textureBlur 版观感主要来自 miuix-blur
+ * 的 noise dithering，此处同语义的自绘平铺实现）。dark=深色板用白噪、浅色板用黑噪。
+ */
+private fun acrylicGrainBitmap(dark: Boolean): android.graphics.Bitmap {
+    val side = 96
+    val bitmap = android.graphics.Bitmap.createBitmap(side, side, android.graphics.Bitmap.Config.ARGB_8888)
+    val base = if (dark) 0x00FFFFFF else 0x00000000 // RGB 部分：白 or 黑
+    val pixels = IntArray(side * side)
+    val rng = kotlin.random.Random(0xAC1C)
+    for (i in pixels.indices) {
+        // 82% 像素全透明、其余随机低 alpha——稀疏颗粒，叠印不脏
+        val a = if (rng.nextInt(100) < 18) rng.nextInt(40) else 0
+        pixels[i] = base or (a shl 24)
+    }
+    bitmap.setPixels(pixels, 0, side, 0, 0, side, side)
+    return bitmap
+}
 
 // ===== 入场=折扇展开（2026-09-13 用户拍板，替代"整体刚性绽放"）=====
 // 三通道分层进场：①弧线/雾化沿角度扫开 ②图标按角度次序逐枚从锚点沿半径飞出
@@ -224,13 +252,13 @@ private fun FanBackground(
     colors: FanThemeColors,
     fogIntensity: Float,
     sweep: () -> Float
-) {
-    Box(modifier = Modifier.fillMaxSize()) {
+) {    Box(modifier = Modifier.fillMaxSize()) {
         val density = LocalDensity.current.density
-        // 磨砂板（0914 用户拍板"连体亮磨砂板"全模式统一，替代路线 C 渐变雾化——旧渐变
-        // surfaceContainer 在深色主题读作压暗）：扇形饼+快捷栏胶囊连体同材质，浓度=雾化
-        // 滑条（0=透明只剩弧线）。毛玻璃开=blur-behind 已模糊身后内容，板提供玻璃体感；
-        // 关=板即半透明亮面板直接覆在未模糊背景上。整层 6dp blur 羽化板缘
+        // 亚克力磨砂板（0914 用户拍板"同步之前快捷栏的效果到扇形+在基础上做磨砂/亚克力"）：
+        // 旧快捷栏 textureBlur 实际贡献=白混染色+噪点抖动（采样输入是栏背后的透明区，
+        // blur 本身没糊到东西）——故材质=①主题高调面底色 ②白色提亮 sheen ③噪点颗粒。
+        // 毛玻璃开=板下叠系统 blur-behind（真亚克力）；关=板直接贴在未模糊背景上（仿亚克力）。
+        // ①② 画在 6dp blur 羽化层；③噪点独立不羽化层（羽化会吃掉颗粒），按板轮廓裁切
         androidx.compose.foundation.Canvas(
             modifier = Modifier
                 .fillMaxSize()
@@ -257,12 +285,13 @@ private fun FanBackground(
                     topLeft = topLeft,
                     size = arcSize
                 )
-                // 连体玻璃板：快捷栏胶囊同材质延伸——栏底板只在其上提亮一档
+                // 连体玻璃板：快捷栏胶囊同材质延伸。高度=真实 Row（icon+上下各 0.25q
+                // padding）=1.5q——曾按几何层旧估算 2q 画，底部多出 0.5q 裸板（"栏下一大块变白"）
                 val n = minOf(6, geometry.quickApps.size)
                 if (n > 0) {
                     val q = geometry.quickIconSize * density
                     val barW = n * q + (n - 1) * q * 0.35f + q
-                    val barH = q * 2f
+                    val barH = q * 1.5f
                     drawRoundRect(
                         color = veil,
                         topLeft = Offset(geometry.quickBarX, geometry.quickBarY),
@@ -273,6 +302,34 @@ private fun FanBackground(
                         )
                     )
                 }
+                // 白色提亮 sheen（=之前快捷栏白混的复刻，固定比例随浓度缩放）：
+                // Screen 混合（miuix blur guide 多层混合示例同款）——滤色提亮不压灰，
+                // 比普通 SrcOver 更接近玻璃质感；深色板下不至于读作纯压暗
+                val sheen = Color.White.copy(alpha = fogIntensity * 0.28f)
+                drawArc(
+                    color = sheen,
+                    startAngle = geometry.startAngle,
+                    sweepAngle = span,
+                    useCenter = true,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    blendMode = BlendMode.Screen
+                )
+                if (n > 0) {
+                    val q = geometry.quickIconSize * density
+                    val barW = n * q + (n - 1) * q * 0.35f + q
+                    val barH = q * 1.5f
+                    drawRoundRect(
+                        color = sheen,
+                        topLeft = Offset(geometry.quickBarX, geometry.quickBarY),
+                        size = androidx.compose.ui.geometry.Size(barW, barH),
+                        cornerRadius = CornerRadius(
+                            (geometry.quickIconSize / 2f + 4f) * density,
+                            (geometry.quickIconSize / 2f + 4f) * density
+                        ),
+                        blendMode = BlendMode.Screen
+                    )
+                }
                 drawArc(
                     color = colors.outline.copy(alpha = 0.18f),
                     startAngle = geometry.startAngle,
@@ -281,6 +338,47 @@ private fun FanBackground(
                     topLeft = topLeft,
                     size = arcSize,
                     style = Stroke(width = 8.dp.toPx())
+                )
+            }
+        }
+        // ③噪点颗粒层（亚克力 tooth）：预生成 96px 平铺噪点图，按板轮廓 clip；
+        // 颗粒色随主题（深板白噪/浅板黑噪），浓度随滑条。独立 Canvas 不参与 6dp 羽化
+        val grainBitmap = remember { acrylicGrainBitmap(dark = false) }
+        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+            val sweepP = sweep()
+            if (sweepP <= 0.01f || fogIntensity <= 0.01f) return@Canvas
+            val span = geometry.spanAngle * sweepP.coerceAtMost(1f)
+            val arcRect = androidx.compose.ui.geometry.Rect(
+                geometry.anchor.x - geometry.outerRadius,
+                geometry.anchor.y - geometry.outerRadius,
+                geometry.anchor.x + geometry.outerRadius,
+                geometry.anchor.y + geometry.outerRadius
+            )
+            val n = minOf(6, geometry.quickApps.size)
+            val q = geometry.quickIconSize * density
+            val path = androidx.compose.ui.graphics.Path().apply {
+                addArc(arcRect, geometry.startAngle, span)
+                if (n > 0) {
+                    addRoundRect(
+                        androidx.compose.ui.geometry.RoundRect(
+                            geometry.quickBarX, geometry.quickBarY,
+                            geometry.quickBarX + n * q + (n - 1) * q * 0.35f + q,
+                            geometry.quickBarY + q * 1.5f,
+                            CornerRadius(
+                                (geometry.quickIconSize / 2f + 4f) * density,
+                                (geometry.quickIconSize / 2f + 4f) * density
+                            )
+                        )
+                    )
+                }
+            }
+            clipPath(path) {
+                drawRect(
+                    brush = ShaderBrush(
+                        // Compose 1.10：TileMode.Repeat 已更名 Repeated
+                        ImageShader(grainBitmap.asImageBitmap(), TileMode.Repeated, TileMode.Repeated)
+                    ),
+                    alpha = (fogIntensity * 1.4f).coerceIn(0f, 0.55f)
                 )
             }
         }
@@ -415,6 +513,8 @@ private fun SelectedLabel(
             }
             .alpha(if (labelSize == IntSize.Zero) 0f else 1f)
             .onSizeChanged { labelSize = it }
+            // 描边防隐身：板材质与标签同色系，无边框时标签融进板里（0914 真机反馈）
+            .border(1.dp, colors.outline.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
             .clip(RoundedCornerShape(12.dp))
             .background(colors.surfaceContainerHigh.copy(alpha = 0.95f))
             .padding(horizontal = 10.dp, vertical = 4.dp),

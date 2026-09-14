@@ -6,6 +6,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -75,6 +76,9 @@ fun QuickAppsBar(
                     }
                     .alpha(if (labelSize == IntSize.Zero) 0f else 1f)
                     .onSizeChanged { labelSize = it }
+                    // 描边防隐身：板材质与标签同色系（surfaceContainerHigh），无边框时
+                    // 标签融进板里（真机 0914 "看不到框选效果"）
+                    .border(1.dp, colors.outline.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
                     .clip(RoundedCornerShape(12.dp))
                     .background(colors.surfaceContainerHigh.copy(alpha = 0.95f))
                     .padding(horizontal = 10.dp, vertical = 4.dp),
@@ -96,8 +100,8 @@ fun QuickAppsBar(
                     )
                 }
                 .clip(RoundedCornerShape((iconSizeDp / 2f + 4f).dp))
-                // 连体玻璃板：磨砂板（FanBackground）已覆盖栏背后，此处恒定提亮一档
-                .background(colors.surfaceContainerHigh.copy(alpha = 0.3f))
+                // 连体玻璃板（0914 定稿）：栏的底=FanBackground 磨砂板胶囊本身，此处不再
+                // 叠任何染色——深色主题下两层深色叠加曾让栏明显深于扇形（"连体感"破功）
                 .padding(
                     horizontal = (iconSizeDp * 0.25f).dp,
                     vertical = (iconSizeDp * 0.25f).dp

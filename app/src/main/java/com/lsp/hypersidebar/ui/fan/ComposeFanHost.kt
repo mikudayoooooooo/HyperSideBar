@@ -484,22 +484,22 @@ class ComposeFanHost(
             apps, quickApps, config, density, isLandscape
         )
         val bounds = frostedBounds(g, dm)
-        val dimEnabled = readBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)
+        // 压暗仅非毛玻璃路径生效（Compose scrim）：毛玻璃下 FLAG_DIM_BEHIND 压的是整个
+        // 包围盒矩形——扇形与快捷栏的空隙、元素到盒边的区域全被罩灰（真机 0914 实锤
+        // "栏周围压暗区域大"），且 blur-behind 已提供背景分离，再叠 dim 纯属脏晕
         return WindowManager.LayoutParams(
             bounds.width(), bounds.height(),
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-                WindowManager.LayoutParams.FLAG_BLUR_BEHIND or
-                (if (dimEnabled) WindowManager.LayoutParams.FLAG_DIM_BEHIND else 0),
+                WindowManager.LayoutParams.FLAG_BLUR_BEHIND,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = bounds.left
             y = bounds.top
             blurBehindRadius = (LayoutDefaults.FAN_FROSTED_BLUR_BEHIND_RADIUS_DP * density).toInt()
-            if (dimEnabled) dimAmount = LayoutDefaults.FAN_DIM_AMOUNT
         }.also {
             HLog.i(
                 TAG,

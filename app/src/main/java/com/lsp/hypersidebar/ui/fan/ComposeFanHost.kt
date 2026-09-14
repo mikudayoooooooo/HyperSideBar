@@ -302,6 +302,7 @@ class ComposeFanHost(
                             dimEnabled = readBoolean(
                                 PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED
                             ) && !frostedWindow, // 毛玻璃模式全屏压暗由 FLAG_DIM_BEHIND 承担
+                            frosted = frostedWindow,
                             exitTick = exitTickState.value,
                             onExitFinished = { finishExitFromCompose() },
                             onAppSelected = { app -> onAppSelected?.invoke(app) },

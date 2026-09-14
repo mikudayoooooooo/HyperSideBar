@@ -118,6 +118,7 @@ fun FanMenuCompose(
     colors: FanThemeColors,
     fogIntensity: Float,
     dimEnabled: Boolean,
+    frosted: Boolean,
     exitTick: Int,
     onExitFinished: () -> Unit,
     onAppSelected: (FanAppInfo) -> Unit,
@@ -204,7 +205,7 @@ fun FanMenuCompose(
                     )
                 }
         ) {
-            FanBackground(geometry, colors, fogIntensity) { arcSweep.value }
+            FanBackground(geometry, colors, fogIntensity, frosted) { arcSweep.value }
 
             geometry.items.forEachIndexed { index, item ->
                 FanAppIcon(
@@ -251,8 +252,18 @@ private fun FanBackground(
     geometry: FanGeometry,
     colors: FanThemeColors,
     fogIntensity: Float,
+    frosted: Boolean,
     sweep: () -> Float
-) {    Box(modifier = Modifier.fillMaxSize()) {
+) {
+    // 材质浓度映射（0914 用户点破"雾化层本身遮住了模糊效果"）：雾化滑条原是为
+    // "无真模糊"设计的替身——板要浓才有磨砂感。毛玻璃模式下系统真模糊在板下，
+    // 板只该做淡色层，否则模糊被 0.7 浓度板闷死；非毛玻璃维持原浓度（全靠板自己）
+    val veilAlpha = if (frosted) (fogIntensity * 0.55f).coerceAtMost(0.6f)
+                    else fogIntensity.coerceAtMost(0.85f)
+    val sheenAlpha = fogIntensity * (if (frosted) 0.15f else 0.28f)
+    val grainAlpha = (fogIntensity * (if (frosted) 0.9f else 1.4f))
+        .coerceIn(0f, if (frosted) 0.35f else 0.55f)
+    Box(modifier = Modifier.fillMaxSize()) {
         val density = LocalDensity.current.density
         // 亚克力磨砂板（0914 用户拍板"同步之前快捷栏的效果到扇形+在基础上做磨砂/亚克力"）：
         // 旧快捷栏 textureBlur 实际贡献=白混染色+噪点抖动（采样输入是栏背后的透明区，
@@ -276,7 +287,7 @@ private fun FanBackground(
                 geometry.outerRadius * 2
             )
             if (fogIntensity > 0.01f) {
-                val veil = colors.surfaceContainerHigh.copy(alpha = fogIntensity.coerceAtMost(0.85f))
+                val veil = colors.surfaceContainerHigh.copy(alpha = veilAlpha)
                 drawArc(
                     color = veil,
                     startAngle = geometry.startAngle,
@@ -305,7 +316,7 @@ private fun FanBackground(
                 // 白色提亮 sheen（=之前快捷栏白混的复刻，固定比例随浓度缩放）：
                 // Screen 混合（miuix blur guide 多层混合示例同款）——滤色提亮不压灰，
                 // 比普通 SrcOver 更接近玻璃质感；深色板下不至于读作纯压暗
-                val sheen = Color.White.copy(alpha = fogIntensity * 0.28f)
+                val sheen = Color.White.copy(alpha = sheenAlpha)
                 drawArc(
                     color = sheen,
                     startAngle = geometry.startAngle,
@@ -378,7 +389,7 @@ private fun FanBackground(
                         // Compose 1.10：TileMode.Repeat 已更名 Repeated
                         ImageShader(grainBitmap.asImageBitmap(), TileMode.Repeated, TileMode.Repeated)
                     ),
-                    alpha = (fogIntensity * 1.4f).coerceIn(0f, 0.55f)
+                    alpha = grainAlpha
                 )
             }
         }

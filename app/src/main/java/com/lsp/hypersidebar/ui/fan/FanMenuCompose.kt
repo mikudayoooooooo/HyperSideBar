@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageShader
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
@@ -396,6 +397,19 @@ private fun FanBackground(
                 )
             }
         }
+        // 毛玻璃板形描边（0914 用户要的"边缘框选效果"）：沿模糊区域同款轮廓
+        // （饼∪胶囊并集 Path，FanBackground 本地系与几何同源）画细描边，随 sweep 生长
+        if (frosted) {
+            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                val sweepP = sweep()
+                if (sweepP <= 0.01f) return@Canvas
+                drawPath(
+                    frostOutlinePath(geometry, density, sweepP),
+                    color = colors.outline.copy(alpha = 0.55f),
+                    style = Stroke(width = 1.5.dp.toPx())
+                )
+            }
+        }
         // 锐利外弧描边：不参与 blur，始终清晰——边界感的锚（随 sweep 同步生长）
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
             val sweepP = sweep()
@@ -417,6 +431,47 @@ private fun FanBackground(
             )
         }
     }
+}
+
+/**
+ * 板形轮廓 Path（窗口本地系，与 FanBackground/命中测试同源坐标）：扇形饼（随 sweep
+ * 生长）∪ 快捷栏胶囊——毛玻璃描边用，Compose Path 版（drawPath 直绘）。
+ */
+private fun frostOutlinePath(
+    geometry: FanGeometry,
+    density: Float,
+    sweepP: Float
+): Path {
+    val sector = Path().apply {
+        moveTo(geometry.anchor.x, geometry.anchor.y)
+        arcTo(
+            androidx.compose.ui.geometry.Rect(
+                geometry.anchor.x - geometry.outerRadius,
+                geometry.anchor.y - geometry.outerRadius,
+                geometry.anchor.x + geometry.outerRadius,
+                geometry.anchor.y + geometry.outerRadius
+            ),
+            geometry.startAngle, geometry.spanAngle * sweepP.coerceAtMost(1f), false
+        )
+        close()
+    }
+    val n = minOf(6, geometry.quickApps.size)
+    if (n <= 0) return sector
+    val q = geometry.quickIconSize * density
+    val capsule = Path().apply {
+        addRoundRect(
+            androidx.compose.ui.geometry.RoundRect(
+                geometry.quickBarX, geometry.quickBarY,
+                geometry.quickBarX + n * q + (n - 1) * q * 0.35f + q,
+                geometry.quickBarY + q * 1.5f,
+                CornerRadius(
+                    (geometry.quickIconSize / 2f + 4f) * density,
+                    (geometry.quickIconSize / 2f + 4f) * density
+                )
+            )
+        )
+    }
+    return Path().apply { op(sector, capsule, PathOperation.Union) }
 }
 
 @Composable

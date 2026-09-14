@@ -518,17 +518,23 @@ class ComposeFanHost(
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
             )
             clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-            // 背景模糊（AOSP 裁剪语义：区域=背景 Drawable 轮廓；80px=官方磨砂最佳值）
+            // 背景模糊（AOSP 裁剪语义：区域=背景 Drawable 轮廓；150px=AOSP 上限档）。
             setBackgroundBlurRadius(
                 (LayoutDefaults.FAN_FROSTED_BLUR_RADIUS_DP * density).toInt()
             )
-            val r = 24f * density
+            // 轮廓自定义=扇形饼+快捷栏胶囊并集 Path——模糊区域贴合板的实际形状，
+            // 消灭矩形框感（0914 用户反馈"框太扎眼"）；自身 draw 留空（画面由 Compose 画）
             setBackgroundDrawable(
-                android.graphics.drawable.ShapeDrawable(
-                    android.graphics.drawable.shapes.RoundRectShape(
-                        floatArrayOf(r, r, r, r, r, r, r, r), null, null
-                    )
-                ).apply { paint.color = 0x01FFFFFF } // 近全透明（轮廓仍在，不污染板配色）
+                object : android.graphics.drawable.Drawable() {
+                    override fun draw(canvas: android.graphics.Canvas) {}
+                    override fun getOutline(outline: android.graphics.Outline) {
+                        outline.setPath(frostRegionPath(g, bounds, quickCount = minOf(6, quickApps.size)))
+                    }
+                    override fun setAlpha(alpha: Int) {}
+                    override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) {}
+                    @Deprecated("Deprecated in Java")
+                    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+                }
             )
         }
         dialog.setCanceledOnTouchOutside(false)
@@ -541,6 +547,43 @@ class ComposeFanHost(
             "frosted dialog: box=[${"%d,%d %dx%d".format(bounds.left, bounds.top, bounds.width(), bounds.height())}] " +
                 "anchorRaw=(${anchorX.toInt()},${anchorY.toInt()})"
         )
+    }
+
+    /**
+     * 模糊区域轮廓 Path（窗口本地系）：扇形饼（锚点圆心+外弧扇区）∪ 快捷栏胶囊。
+     * 传给背景 Drawable 的 Outline——背景模糊区域即此形状（贴合板，消灭矩形框感）。
+     * g 为屏幕参考系几何，[bounds] 提供平移量。
+     */
+    private fun frostRegionPath(
+        g: FanGeometry,
+        bounds: android.graphics.Rect,
+        quickCount: Int
+    ): android.graphics.Path {
+        val ax = g.anchor.x - bounds.left
+        val ay = g.anchor.y - bounds.top
+        val r = g.outerRadius
+        val sector = android.graphics.Path().apply {
+            moveTo(ax, ay)
+            arcTo(
+                android.graphics.RectF(ax - r, ay - r, ax + r, ay + r),
+                g.startAngle, g.spanAngle, false
+            )
+            close()
+        }
+        if (quickCount <= 0) return sector
+        val q = g.quickIconSize * density
+        val bx = g.quickBarX - bounds.left
+        val by = g.quickBarY - bounds.top
+        val w = quickCount * q + (quickCount - 1) * q * 0.35f + q
+        val h = q * 1.5f
+        val cr = (g.quickIconSize / 2f + 4f) * density
+        val capsule = android.graphics.Path().apply {
+            addRoundRect(
+                android.graphics.RectF(bx, by, bx + w, by + h), cr, cr,
+                android.graphics.Path.Direction.CW
+            )
+        }
+        return android.graphics.Path().apply { op(sector, capsule, android.graphics.Path.Op.UNION) }
     }
 
     /**

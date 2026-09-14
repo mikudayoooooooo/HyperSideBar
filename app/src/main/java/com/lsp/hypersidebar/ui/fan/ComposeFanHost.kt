@@ -493,6 +493,10 @@ class ComposeFanHost(
         )
         val bounds = frostedBounds(g, dm)
         val dialog = Dialog(context)
+        // Dialog.dismiss 只摘 DecorView，不移除 content 里的子视图——复用 wrapper 前必须
+        // 手动脱离旧 parent，否则第二次呼出 setContentView 必炸 "already has a parent"
+        // （真机 0914 实锤，且该路径失败会计熔断）
+        (wrapper.parent as? android.view.ViewGroup)?.removeView(wrapper)
         // setContentView 必须先于 setBackgroundBlurRadius：后者内部委托 DecorView，
         // 而 DecorView 懒安装（真机 NPE 实锤 0914）——先塞内容触发 installDecor
         dialog.setContentView(wrapper)

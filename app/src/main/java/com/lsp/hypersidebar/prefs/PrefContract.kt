@@ -249,9 +249,10 @@ object LayoutDefaults {
     const val FAN_DIM_AMOUNT = 0.24f
 
     // 毛玻璃（0914 Route B 定稿）：默认关（保守 opt-in）。Dialog 窗口+setBackgroundBlurRadius
-    // 背景模糊（AOSP 裁剪语义=局部磨砂）；80px=AOSP 文档磨砂玻璃最佳值（>150 严重影响性能）
+    // 背景模糊（AOSP 裁剪语义=局部磨砂，MIUI 实测局部生效）；150px=AOSP 文档上限（磨砂感
+    // 最强档，80px 首测偏弱；文档警告超过 150 严重影响性能，勿再上调）
     const val FAN_FROSTED_ENABLED = false
-    const val FAN_FROSTED_BLUR_RADIUS_DP = 80f
+    const val FAN_FROSTED_BLUR_RADIUS_DP = 150f
 
     /** 所有布局相关键。恢复默认时批量写回。 */
     val layoutKeys = listOf(

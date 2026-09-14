@@ -493,6 +493,9 @@ class ComposeFanHost(
         )
         val bounds = frostedBounds(g, dm)
         val dialog = Dialog(context)
+        // setContentView 必须先于 setBackgroundBlurRadius：后者内部委托 DecorView，
+        // 而 DecorView 懒安装（真机 NPE 实锤 0914）——先塞内容触发 installDecor
+        dialog.setContentView(wrapper)
         dialog.window?.apply {
             setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
             setLayout(bounds.width(), bounds.height())
@@ -526,7 +529,6 @@ class ComposeFanHost(
         }
         dialog.setCanceledOnTouchOutside(false)
         dialog.setCancelable(false) // BACK/外部点击不得绕过收拢状态机
-        dialog.setContentView(wrapper)
         currentParams = null
         this.dialog = dialog
         dialog.show()

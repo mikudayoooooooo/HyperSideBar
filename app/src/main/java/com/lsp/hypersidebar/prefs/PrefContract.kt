@@ -248,10 +248,10 @@ object LayoutDefaults {
     const val FAN_DIM_ENABLED = false
     const val FAN_DIM_AMOUNT = 0.24f
 
-    // 毛玻璃（0913）：默认关（保守 opt-in，真机已验 HyperOS 悬浮窗 blur-behind 生效）；
-    // blurBehindRadius=窗缘圆角模糊半径（磨砂板由雾化滑条控浓度，无独立模糊半径键）
+    // 毛玻璃（0914 Route B 定稿）：默认关（保守 opt-in）。Dialog 窗口+setBackgroundBlurRadius
+    // 背景模糊（AOSP 裁剪语义=局部磨砂）；80px=AOSP 文档磨砂玻璃最佳值（>150 严重影响性能）
     const val FAN_FROSTED_ENABLED = false
-    const val FAN_FROSTED_BLUR_BEHIND_RADIUS_DP = 36f
+    const val FAN_FROSTED_BLUR_RADIUS_DP = 80f
 
     /** 所有布局相关键。恢复默认时批量写回。 */
     val layoutKeys = listOf(

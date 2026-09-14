@@ -1,5 +1,6 @@
 package com.lsp.hypersidebar.ui.fan
 
+import android.app.Dialog
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.PixelFormat
@@ -86,6 +87,9 @@ class ComposeFanHost(
 
     /** 本次呼出是否走毛玻璃包围盒窗口（show 时决定，preDraw/命中测试/渲染按此分派） */
     private var frostedWindow = false
+
+    /** 毛玻璃模式的 Dialog 窗口壳（非毛玻璃=null，走裸 addView 路径） */
+    private var dialog: android.app.Dialog? = null
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private companion object {
@@ -198,23 +202,24 @@ class ComposeFanHost(
         val wrapper = wrapperView ?: return
         try {
             // 防御：池化后理论上 dismiss 必摘窗口，但 compose 内部 onDismiss 等路径
-            // 若留下挂载态，重复 addView 会直接抛——先收敛到摘除态
+            // 若留下挂载态，重复 addView/setContentView 会直接抛——先收敛到摘除态
             if (wrapper.isAttachedToWindow) detachWindow()
             val tAddMs = SystemClock.elapsedRealtime()
             // 世代自增：在场的收拢回调/兜底定时器全部失效（收拢中再呼出=打断收拢直接重开）
             attachGen++
-            // 毛玻璃模式（0913 路线②）：窗口收缩到扇形+快捷栏包围盒，blur-behind 让系统
-            // 合成器真模糊身后内容（游戏帧率不受影响）；全屏压暗改由 FLAG_DIM_BEHIND 承担。
+            // 毛玻璃模式（0914 定稿 Route B）：Dialog 承载 overlay 窗口 + setBackgroundBlurRadius
+            // 背景模糊（AOSP 公开 API，按窗口背景 Drawable 轮廓裁剪=局部磨砂）。
+            // FLAG_BLUR_BEHIND 路线退役——MIUI 把它实现为全屏糊（真机实锤 0914）。
             // 系统模糊被关（isCrossWindowBlurEnabled=false）→ 自动降级全屏窗口+窗内 scrim
             frostedWindow = readBoolean(PrefKeys.FAN_FROSTED_ENABLED, LayoutDefaults.FAN_FROSTED_ENABLED) &&
                 (windowManager?.isCrossWindowBlurEnabled ?: false)
-            val params = if (frostedWindow) {
-                buildFrostedParams(anchorX, anchorY, apps, quickApps, isLandscape)
+            if (frostedWindow) {
+                attachDialog(wrapper, anchorX, anchorY, apps, quickApps, isLandscape)
             } else {
-                buildWindowParams()
+                val params = buildWindowParams()
+                currentParams = params
+                wm.addView(wrapper, params)
             }
-            currentParams = params
-            wm.addView(wrapper, params)
             HLog.i(TAG, "addView: ${SystemClock.elapsedRealtime() - tAddMs}ms frosted=$frostedWindow")
         } catch (e: Throwable) {
             HLog.e(TAG, "Failed to attach fan window", e)
@@ -465,18 +470,21 @@ class ComposeFanHost(
         }
 
     /**
-     * 毛玻璃包围盒窗口参数（0913 路线②）：窗口=扇形+快捷栏包围盒，FLAG_BLUR_BEHIND 让
-     * 系统合成器真模糊身后内容（SurfaceFlinger 侧，不占 app 帧预算、游戏帧率不受影响）；
-     * 全屏压暗改用 FLAG_DIM_BEHIND（系统 dim 覆盖全屏，与窗内 scrim 视觉等价）。
-     * 调用前提=isCrossWindowBlurEnabled 已确认（show 内已判）。
+     * 毛玻璃 Dialog 承载（2026-09-14 Route B 定稿）：android.app.Dialog 作 overlay 窗口壳
+     * （真 Window 对象→够得着 Window#setBackgroundBlurRadius），塞入现有 wrapper View 树
+     * （内含 ComposeView，Compose 层零改动——hook 手动转发的事件直接调 View 方法，
+     * 与窗口形态无关）。背景模糊=AOSP 公开 API，按窗口背景 Drawable 轮廓裁剪：
+     * 圆角 ShapeDrawable 即模糊区域 mask，仅扇形+快捷栏包围盒内磨砂，板外背景不动。
+     * FLAG_BLUR_BEHIND 路线退役（MIUI 实现成全屏糊，真机 0914 实锤）。
      */
-    private fun buildFrostedParams(
+    private fun attachDialog(
+        wrapper: View,
         anchorX: Float,
         anchorY: Float,
         apps: List<FanAppInfo>,
         quickApps: List<FanAppInfo>,
         isLandscape: Boolean
-    ): WindowManager.LayoutParams {
+    ) {
         val dm = context.resources.displayMetrics
         // 屏幕参考系几何（仅用于求包围盒；渲染几何在 preDraw 按实际窗口原点平移）
         val g = computeFanGeometry(
@@ -484,29 +492,49 @@ class ComposeFanHost(
             apps, quickApps, config, density, isLandscape
         )
         val bounds = frostedBounds(g, dm)
-        // 压暗仅非毛玻璃路径生效（Compose scrim）：毛玻璃下 FLAG_DIM_BEHIND 压的是整个
-        // 包围盒矩形——扇形与快捷栏的空隙、元素到盒边的区域全被罩灰（真机 0914 实锤
-        // "栏周围压暗区域大"），且 blur-behind 已提供背景分离，再叠 dim 纯属脏晕
-        return WindowManager.LayoutParams(
-            bounds.width(), bounds.height(),
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-                WindowManager.LayoutParams.FLAG_BLUR_BEHIND,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = bounds.left
-            y = bounds.top
-            blurBehindRadius = (LayoutDefaults.FAN_FROSTED_BLUR_BEHIND_RADIUS_DP * density).toInt()
-        }.also {
-            HLog.i(
-                TAG,
-                "frosted params: box=[${"%d,%d %dx%d".format(bounds.left, bounds.top, bounds.width(), bounds.height())}] " +
-                    "anchorRaw=(${anchorX.toInt()},${anchorY.toInt()})"
+        val dialog = Dialog(context)
+        dialog.window?.apply {
+            setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+            setLayout(bounds.width(), bounds.height())
+            setGravity(Gravity.TOP or Gravity.START)
+            attributes.x = bounds.left
+            attributes.y = bounds.top
+            setFormat(PixelFormat.TRANSLUCENT)
+            setFlags(
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+            )
+            clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            // 背景模糊（AOSP 裁剪语义：区域=背景 Drawable 轮廓；80px=官方磨砂最佳值）
+            setBackgroundBlurRadius(
+                (LayoutDefaults.FAN_FROSTED_BLUR_RADIUS_DP * density).toInt()
+            )
+            val r = 24f * density
+            setBackgroundDrawable(
+                android.graphics.drawable.ShapeDrawable(
+                    android.graphics.drawable.shapes.RoundRectShape(
+                        floatArrayOf(r, r, r, r, r, r, r, r), null, null
+                    )
+                ).apply { paint.color = 0x01FFFFFF } // 近全透明（轮廓仍在，不污染板配色）
             )
         }
+        dialog.setCanceledOnTouchOutside(false)
+        dialog.setCancelable(false) // BACK/外部点击不得绕过收拢状态机
+        dialog.setContentView(wrapper)
+        currentParams = null
+        this.dialog = dialog
+        dialog.show()
+        HLog.i(
+            TAG,
+            "frosted dialog: box=[${"%d,%d %dx%d".format(bounds.left, bounds.top, bounds.width(), bounds.height())}] " +
+                "anchorRaw=(${anchorX.toInt()},${anchorY.toInt()})"
+        )
     }
 
     /**
@@ -554,6 +582,12 @@ class ComposeFanHost(
 
     /** 摘窗口并复位交互态（不动 composition/lifecycle——池化复用的前提）。 */
     private fun detachWindow() {
+        // 毛玻璃路径：Dialog 壳（dismiss=摘窗；content wrapper 随之脱离，composition 保留）
+        dialog?.let { d ->
+            dialog = null
+            runCatching { d.dismiss() }
+                .onFailure { HLog.w(TAG, "dialog dismiss failed: ${it.message}") }
+        }
         val wv = wrapperView ?: return
         try {
             windowManager?.removeViewImmediate(wv)
@@ -599,6 +633,18 @@ class ComposeFanHost(
 
     /** 收拢启动即断触摸：窗口仍挂载但事件全穿透到下层（返回手势/点击零拦截）。 */
     private fun setWindowNotTouchable() {
+        // 毛玻璃路径：Dialog window 直接改 flags（收拢启动即断触摸）
+        this.dialog?.let { d ->
+            runCatching {
+                d.window?.let { w ->
+                    w.setFlags(
+                        w.attributes.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                        w.attributes.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    )
+                }
+            }.onFailure { HLog.w(TAG, "dialog setNotTouchable failed: ${it.message}") }
+            return
+        }
         val params = currentParams ?: return
         runCatching {
             params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE

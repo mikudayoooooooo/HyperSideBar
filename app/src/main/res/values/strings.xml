@@ -68,7 +68,7 @@
     <string name="fan_dim_title">背景压暗</string>
     <string name="fan_dim_summary">呼出扇形时全屏压暗 24%，突出菜单；改动下次呼出生效</string>
     <string name="fan_frosted_title">毛玻璃</string>
-    <string name="fan_frosted_summary">扇形底板真模糊身后内容（系统合成器实现，游戏帧率不受影响），快捷栏底板同步毛玻璃；系统关闭模糊效果时自动降级；改动下次呼出生效</string>
+    <string name="fan_frosted_summary">仅扇形与快捷栏区域做系统级背景磨砂（AOSP 背景模糊通道，按板轮廓裁剪）；系统关闭模糊效果或材质引擎不可用时自动降级为纯色板；改动下次呼出生效</string>
     <string name="defaults_section">重置</string>
     <string name="restore_defaults">恢复默认值</string>
     <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，下次呼出生效</string>

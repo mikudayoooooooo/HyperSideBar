@@ -276,7 +276,9 @@ class FanMenuController(
                 val context = activeContext
                 if (context != null) {
                     if (appInfo.actionHandle != null) {
-                        StatsRecorder.onShortcut()
+                        StatsRecorder.onShortcut(
+                            (android.os.SystemClock.elapsedRealtime() - showStartElapsed).toInt()
+                        )
                         exitAfterLaunch = true
                         appInfo.actionHandle.invoke(context)
                         dismiss()

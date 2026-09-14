@@ -25,8 +25,9 @@ import org.json.JSONObject
  *   :ui=root 代发回告 ACTION_RELAY_RESULT；DirectLaunchStrategy 本地直启无结果
  *   回调，不产 launchOk/Fail——成功率口径=有确定性结果的启动）
  *
- * 误触率下线（0913）：现行定义判不准（"看了不用"被计入、误弹→关→重试链被豁免）；
- * recent 事件流（show/cancel…）继续采集，待明细数据攒够后重新定义上线。
+ * 误触率（0914 重定义上线；PRD §9.3 原链式定义「3s 内不再呼出」废除——它把"看了
+ * 不用"计入、把"误弹→关→重试"豁免）：按 show 独立判定，取消时延 <1s（反射关掉）
+ * 或选择时长 ≤500ms（反射快抓）=误触，见 [misfireRateFrom]。
  * 全部应用占比=allApps/opens。
  */
 object StatsRecorder {
@@ -101,10 +102,10 @@ object StatsRecorder {
         scheduleSave()
     }
 
-    /** 选中快捷栏快捷方式（PRD §9.2 未单列，独立计数供观察） */
-    fun onShortcut() {
+    /** 选中快捷栏快捷方式（PRD §9.2 未单列，独立计数供观察）；selMs=展示→选中（误触快抓判据） */
+    fun onShortcut(selMs: Int) {
         bump(MetricKeys.SHORTCUTS)
-        addEvent("shortcut")
+        addEvent("shortcut", ms = selMs)
         scheduleSave()
     }
 
@@ -122,6 +123,41 @@ object StatsRecorder {
         bump(if (ok) MetricKeys.LAUNCH_OK else MetricKeys.LAUNCH_FAIL)
         addEvent(if (ok) "launchOk" else "launchFail")
         scheduleSave()
+    }
+
+    // ===== 误触率（0914 重定义：按 show 独立判定，无链式豁免） =====
+
+    // 0914 用户实测场景拍板：反射关掉 <1s、反射快抓 ≤500ms；停留 ≥1s 取消=有意浏览后放弃
+    private const val MISFIRE_CANCEL_MS = 1_000L
+    private const val MISFIRE_QUICK_SELECT_MS = 500
+
+    /**
+     * 误触率纯函数（StatsPage 对合并 dump 唯一消费）：events=(ts, type, ms) 需时间升序，
+     * ms=选择时长（open/allApps/shortcut 携带；旧数据或缺失时 null 不判快抓）。
+     * 每次 show 取其后第一个结果事件：cancel 且时延 <[MISFIRE_CANCEL_MS] → 反射关掉；
+     * 选中且 ms ≤[MISFIRE_QUICK_SELECT_MS] → 反射快抓（误触发后顺水推舟选中）——均计误触；
+     * 其余（停留 ≥1s 才取消、正常节奏选中、launch 回告、看门狗超时）→ 非误触。
+     * 返回 (误触数, 总呼出)，无呼出返回 null。
+     */
+    fun misfireRateFrom(events: List<Triple<Long, String, Int?>>): Pair<Int, Int>? {
+        if (events.isEmpty()) return null
+        var shows = 0
+        var misfires = 0
+        for (i in events.indices) {
+            if (events[i].second != "show") continue
+            shows++
+            // show 后第一个结果事件定生死（链式关系不参与判定）
+            val oi = (i + 1 until events.size).firstOrNull { events[it].second != "show" }
+                ?: continue // 无结果事件（仍在展示/窗口尾）只进分母
+            val (ots, otype, oms) = events[oi]
+            val misfired = when (otype) {
+                "cancel" -> ots - events[i].first < MISFIRE_CANCEL_MS
+                "open", "allApps", "shortcut" -> (oms ?: Int.MAX_VALUE) <= MISFIRE_QUICK_SELECT_MS
+                else -> false
+            }
+            if (misfired) misfires++
+        }
+        return if (shows == 0) null else misfires to shows
     }
 
     // ===== 展示侧读取 =====

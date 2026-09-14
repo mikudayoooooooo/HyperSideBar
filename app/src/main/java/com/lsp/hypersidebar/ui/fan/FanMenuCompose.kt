@@ -275,6 +275,9 @@ private fun FanBackground(
                 .fillMaxSize()
                 .blur(6.dp)
         ) {
+            // 毛玻璃=纯原生配方（0914 用户拍板"白提亮噪点都不加"）：系统模糊+内容，
+            // 板层（veil/sheen）全部不上——任何色板都会盖住真模糊
+            if (frosted) return@Canvas
             val sweepP = sweep()
             if (sweepP <= 0.01f) return@Canvas
             val span = geometry.spanAngle * sweepP.coerceAtMost(1f)
@@ -357,7 +360,7 @@ private fun FanBackground(
         val grainBitmap = remember { acrylicGrainBitmap(dark = false) }
         androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
             val sweepP = sweep()
-            if (sweepP <= 0.01f || fogIntensity <= 0.01f) return@Canvas
+            if (frosted || sweepP <= 0.01f || fogIntensity <= 0.01f) return@Canvas
             val span = geometry.spanAngle * sweepP.coerceAtMost(1f)
             val arcRect = androidx.compose.ui.geometry.Rect(
                 geometry.anchor.x - geometry.outerRadius,

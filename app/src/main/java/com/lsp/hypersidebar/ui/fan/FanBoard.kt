@@ -41,8 +41,10 @@ import top.yukonga.miuix.kmp.blur.textureBlur
  */
 internal enum class FanBackdropSource {
     /**
-     * 采样壁纸：竖屏桌面背后恒为壁纸，把壁纸位图只录进 backdrop 图层（不上屏）再采样模糊
-     * ——零系统模糊 API，且板材质（模糊/混色/噪点）全部生效。这是唯一能做出完整 miuix 板的路。
+     * 采样壁纸：把壁纸位图只录进 backdrop 图层（不上屏）再采样模糊——零系统模糊 API，
+     * 且板材质（模糊/混色/噪点）全部生效。这是唯一能做出完整 miuix 板的路。
+     * 横竖屏共用同一张图（0915 用户拍板）：竖屏桌面=真实背景；横屏 :ui 垫的也是壁纸
+     * （内容非游戏画面，用户接受）。
      */
     WALLPAPER,
 

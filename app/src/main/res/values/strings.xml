@@ -73,8 +73,8 @@
     <string name="fan_blur_source_behind">后方屏幕全屏</string>
     <string name="fan_blur_source_transparent">透明</string>
     <string name="fan_blur_source_off">关闭</string>
-    <string name="fan_blur_source_summary_auto">按宿主与能力自动选路：竖屏桌面且壁纸就绪时用采样壁纸，否则只出板材质（亚克力）</string>
-    <string name="fan_blur_source_summary_wallpaper">采样壁纸做板内磨砂，材质最完整；竖屏桌面像素对齐，横屏游戏内看到的会是模糊壁纸而非游戏画面</string>
+    <string name="fan_blur_source_summary_auto">按能力自动选路：壁纸就绪时用采样壁纸（横竖屏皆可），否则只出板材质（亚克力）</string>
+    <string name="fan_blur_source_summary_wallpaper">采样壁纸做板内磨砂，材质最完整，横竖屏共用同一张壁纸；桌面上与真实背景对齐，游戏内看到的会是模糊壁纸而非游戏画面</string>
     <string name="fan_blur_source_summary_behind">FLAG_BLUR_BEHIND 全屏景深：整屏一起模糊，只糊板内做不到；桌面观感佳、游戏慎用</string>
     <string name="fan_blur_source_summary_transparent">既不取背后内容、也不加板材质：只剩弧线与图标，完全透视到后面的画面</string>
     <string name="fan_blur_source_summary_off">不取背后内容：板完全由「板材质浓度」决定，浓度 0 时板为透明（只剩弧线与图标）</string>

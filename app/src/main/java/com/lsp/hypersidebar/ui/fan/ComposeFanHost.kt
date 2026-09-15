@@ -195,9 +195,10 @@ class ComposeFanHost(
         )
         pendingInput = GeometryInput(anchorX, anchorY, apps, quickApps, isLandscape)
         resetInteractionState()
-        // 壁纸磨砂（0914 用户拍板"优先 miuix 内部采样"）：仅竖屏 launcher 宿主——
-        // 背后恒为壁纸，采样内容=真实背景；:ui 横屏（游戏）垫壁纸=内容错误，不接。
-        // 位图由 WallpaperSampler 在 init 空闲期预载，peek 零 binder；冷缓存退亚克力
+        // 壁纸磨砂（0914 用户拍板"优先 miuix 内部采样"）：launcher 与 :ui 双宿主同接、
+        // 共用同一张壁纸图（0915 用户拍板）——竖屏桌面采样内容=真实背景；横屏 :ui 垫的
+        // 也是壁纸（内容非游戏画面，用户接受）。位图由 WallpaperSampler 在 init 空闲期
+        // 预载，peek 零 binder；冷缓存退亚克力
         if (context.packageName == "com.miui.home" ||
             context.packageName == "com.miui.securitycenter"
         ) {
@@ -221,7 +222,7 @@ class ComposeFanHost(
             // 世代自增：在场的收拢回调/兜底定时器全部失效（收拢中再呼出=打断收拢直接重开）
             attachGen++
             // 背景模糊来源解析（Route D 0915 定稿：单项下拉，取代旧三开关互斥）。两条通道：
-            //  · 采样壁纸——miuix 内部采样，板材质完整生效，形状任意（竖屏桌面专属）
+            //  · 采样壁纸——miuix 内部采样，板材质完整生效，形状任意（横竖屏共用同一张壁纸）
             //  · 后方屏幕全屏景深——FLAG_BLUR_BEHIND（MIUI 实现为全屏糊，非局部）
             // 另有「透明」（不取背后内容也不加材质）与「关闭」（板自身即材质）两档。
             // 失效则降级：所选来源不可用时退无来源，板永远有材质。
@@ -231,7 +232,7 @@ class ComposeFanHost(
             blurSource = resolveBlurSource(
                 pref = readString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT),
                 crossWindowBlurEnabled = crossBlur,
-                wallpaperReady = wallpaperBitmap != null && !isLandscape
+                wallpaperReady = wallpaperBitmap != null
             )
             wallpaperOffset = androidx.compose.ui.unit.IntOffset.Zero
             val params = buildWindowParams()
@@ -255,9 +256,10 @@ class ComposeFanHost(
     }
 
     /**
-     * 背景模糊来源解析（Route D 0915）。auto = 按宿主与能力自动选路，优先级体现「哪条路
-     * 能做出完整的 miuix 板」：竖屏桌面壁纸就绪 → 采样壁纸（唯一拿得到真像素、模糊/混色/
-     * 噪点全部生效、形状任意）→ 否则无来源（板自身即材质，最稳）。显式指定失效时同样降级。
+     * 背景模糊来源解析（Route D 0915）。auto = 按能力自动选路，优先级体现「哪条路
+     * 能做出完整的 miuix 板」：壁纸就绪 → 采样壁纸（唯一拿得到真像素、模糊/混色/
+     * 噪点全部生效、形状任意；横竖屏共用同一张图，0915 用户拍板）→ 否则无来源
+     * （板自身即材质，最稳）。显式指定失效时同样降级。
      */
     private fun resolveBlurSource(
         pref: String,

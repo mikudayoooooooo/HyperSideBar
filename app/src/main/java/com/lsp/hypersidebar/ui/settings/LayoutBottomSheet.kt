@@ -132,11 +132,20 @@ private fun LayoutSheetContent(
         }
     }
 
-    // 行为规则 1：显示弦长收缩后的实际生效尺寸；目标过大只提示不削减数量
-    val effectiveIcon = effectiveIconSizeDp(
+    // 行为规则 1：显示弦长收缩后的实际生效尺寸；目标过大只提示不削减数量。
+    // 取「纯弦长上限」的写法：请求值传 Float.MAX_VALUE，返回的就是未被请求值钳过的几何上限
+    val iconCapDp = effectiveIconSizeDp(
         outerCount, innerCount, if (isPortrait) 150f else 75f,
-        outerRadius, innerRadius, iconSize, density
+        outerRadius, innerRadius, Float.MAX_VALUE, density
     )
+    val effectiveIcon = iconCapDp.coerceAtMost(iconSize)
+
+    // 滑条量程跟着几何上限走（0915 用户报"图标大小滑条调大不生效"）：
+    // 量程曾写死 32..80，而弦长收缩后的生效尺寸可以低于任何 UI 下限——实测外圈 10 个图标
+    // （半径 110/160、满张角 150°）时上限仅 31.5dp，**整条滑条落进死区**。
+    // 现在：上限 = min(UI 上限, 弦长上限)，下限 = 几何硬下限（与 fitIconSize 同源，禁止内联）。
+    val iconMin = LayoutDefaults.ICON_SIZE_HARD_MIN
+    val iconMax = iconCapDp.coerceIn(iconMin, LayoutDefaults.ICON_SIZE_UI_MAX)
 
     val config = remember(repo.revision) { buildPreviewConfig(repo) }
 
@@ -171,8 +180,10 @@ private fun LayoutSheetContent(
             SettingsSliderItem(
                 title = stringResource(R.string.icon_size),
                 summary = iconSummary,
-                value = iconSize,
-                valueRange = 32f..80f,
+                // 存量值可能落在新量程之外（如旧值 48 而上限 31.5）→ 显示时钳进量程
+                value = iconSize.coerceIn(iconMin, iconMax),
+                valueRange = iconMin..iconMax,
+                enabled = iconMax > iconMin,
                 onValueChange = { putIcon(it) },
                 onValueChangeFinished = {},
                 sliderHorizontalPadding = 0.dp,

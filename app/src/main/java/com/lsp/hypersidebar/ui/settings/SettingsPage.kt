@@ -367,7 +367,9 @@ internal fun SettingsSliderItem(
     onValueChangeFinished: () -> Unit,
     steps: Int = 0,
     sliderHorizontalPadding: Dp = 16.dp,
-    compact: Boolean = false
+    compact: Boolean = false,
+    /** 量程退化（min==max，如弦长上限压到几何下限）时置 false：无可调空间就别给可拖的假象 */
+    enabled: Boolean = true
 ) {
     BasicComponent(
         title = title,
@@ -380,6 +382,7 @@ internal fun SettingsSliderItem(
                 onValueChangeFinished = onValueChangeFinished,
                 valueRange = valueRange,
                 steps = steps,
+                enabled = enabled,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = sliderHorizontalPadding)

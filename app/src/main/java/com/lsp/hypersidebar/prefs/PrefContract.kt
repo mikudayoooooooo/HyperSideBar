@@ -250,6 +250,19 @@ object LayoutDefaults {
     const val FAN_FOG_MAX = 0.70f
     const val FAN_FOG_STEP = 0.05f
 
+    /**
+     * 图标尺寸滑条量程上限：用户"请求"的最大值。**实际可达上限还要受环上弦长约束**
+     * （见 LayoutBottomSheet 的动态量程），所以这只是请求上限，不是生效上限。
+     */
+    const val ICON_SIZE_UI_MAX = 80f
+
+    /**
+     * 图标尺寸几何硬下限——与 `FanGeometry.fitIconSize()` 的钳制下限**同源**，禁止内联。
+     * 滑条量程下限必须取它而非另写一个更大的值：弦长收缩后的生效尺寸可以低于任何
+     * UI 下限（实测外圈 10 个图标时上限仅 31.5dp，曾因滑条下限写死 32dp 而使整条滑条落进死区）。
+     */
+    const val ICON_SIZE_HARD_MIN = 24f
+
     // 滑动距离（呼出确认线，dp）：原 GestureThresholds.SWIPE_CONFIRM_PX=40px 死值改可配置
     //（0913 用户拍板"40px 太极端"；15dp≈40px@440dpi 手感不变）。重置阈值=确认距离一半
     //（滞回，见 GestureThresholds.SWIPE_RESET_RATIO）。此键原为 PRD §9.5 预留死键，本次接管。

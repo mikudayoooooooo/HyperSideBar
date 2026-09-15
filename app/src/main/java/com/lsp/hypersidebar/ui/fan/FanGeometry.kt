@@ -2,6 +2,7 @@ package com.lsp.hypersidebar.ui.fan
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntSize
+import com.lsp.hypersidebar.prefs.LayoutDefaults
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -275,7 +276,8 @@ private fun fitIconSize(
 
     val required = maxSizeDp * density * (1f + gapFraction)
     return if (minChord < required) {
-        (minChord / density / (1f + gapFraction)).coerceIn(24f, maxSizeDp)
+        (minChord / density / (1f + gapFraction))
+            .coerceIn(LayoutDefaults.ICON_SIZE_HARD_MIN, maxSizeDp)
     } else {
         maxSizeDp
     }

@@ -386,6 +386,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             provider = { runCatching { EzXposed.appContext }.getOrNull() },
             onReady = { ctx ->
                 com.lsp.hypersidebar.util.FanPrewarmer.preloadConfiguredFanIcons(ctx, remotePrefs)
+                // 壁纸位图预载（与 EdgeGestureHook 同款——双宿主一致性 0915 用户定稿）
+                com.lsp.hypersidebar.util.WallpaperSampler.ensure(ctx)
                 mainHandler.postDelayed({
                     runCatching { fanController.warmupAssembly(ctx) }
                         .onFailure { HLog.w(TAG, "warmupAssembly failed: ${it.message}") }

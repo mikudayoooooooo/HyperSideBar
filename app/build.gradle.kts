@@ -45,8 +45,10 @@ android {
         minSdk = 33
         targetSdk = 36
         versionCode = computedVersionCode
-        // 三段式语义化版本；2.0.0 = 包名断代标记（旧包名无法覆盖安装，需卸载重装）
-        versionName = "2.0.0"
+        // 三段式语义化版本；2.0.0 = 包名断代标记（旧包名无法覆盖安装，需卸载重装）；
+        // 2.1.0 = 迭代六全量（扇形背景板材质重构 + 设置热更新根治 + 统计/日志/自检），
+        // 无再次包名断代，2.0.0 用户可直接覆盖安装
+        versionName = "2.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

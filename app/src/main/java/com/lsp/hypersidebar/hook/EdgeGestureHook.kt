@@ -160,6 +160,8 @@ class EdgeGestureHook(
                 // 宿主+推荐区前 24。此前 fan 渲染走 IconLoader 无任何预热点，进程冷启首呼出
                 // 必然字母占位闪变
                 com.lsp.hypersidebar.util.FanPrewarmer.preloadConfiguredFanIcons(ctx, remotePrefs)
+                // 壁纸位图预载（壁纸磨砂：竖屏 fan 垫底+miuix 内部采样，首帧即模糊）
+                com.lsp.hypersidebar.util.WallpaperSampler.ensure(ctx)
                 // 空闲预热装配：首次 composition+首帧绘制（含 blur 着色器首编译）是一次性
                 // 大成本，游戏场景 GPU/CPU 争用下"首呼出动画卡顿"实锤（0913）——1×1 离屏
                 // 窗口试装配挪到 init 空闲期，真呼出走池化快路径

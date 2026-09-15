@@ -90,6 +90,9 @@ class ComposeFanHost(
 
     /** 毛玻璃模式的 Dialog 窗口壳（非毛玻璃=null，走裸 addView 路径） */
     private var dialog: android.app.Dialog? = null
+
+    /** 本次呼出的壁纸位图（竖屏 launcher 且缓存就绪时非空→miuix 内部采样磨砂） */
+    private var wallpaperBitmap: android.graphics.Bitmap? = null
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private companion object {
@@ -191,6 +194,13 @@ class ComposeFanHost(
         )
         pendingInput = GeometryInput(anchorX, anchorY, apps, quickApps, isLandscape)
         resetInteractionState()
+        // 壁纸磨砂（0914 用户拍板"优先 miuix 内部采样"）：仅竖屏 launcher 宿主——
+        // 背后恒为壁纸，采样内容=真实背景；:ui 横屏（游戏）垫壁纸=内容错误，不接。
+        // 位图由 WallpaperSampler 在 init 空闲期预载，peek 零 binder；冷缓存退亚克力
+        if (context.packageName == "com.miui.home") {
+            com.lsp.hypersidebar.util.WallpaperSampler.refreshIfStale(context)
+            wallpaperBitmap = com.lsp.hypersidebar.util.WallpaperSampler.peek()
+        }
 
         // 耗时锚点（呼出卡顿归因）：firstBuild=首次装配（Compose 运行时类加载+首次组合，
         // 项目实测 ~250-300ms）；addView=窗口创建 binder+首帧前成本，每次呼出都发生
@@ -303,6 +313,7 @@ class ComposeFanHost(
                                 PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED
                             ) && !frostedWindow, // 毛玻璃模式全屏压暗由 FLAG_DIM_BEHIND 承担
                             frosted = frostedWindow,
+                            wallpaper = wallpaperBitmap,
                             exitTick = exitTickState.value,
                             onExitFinished = { finishExitFromCompose() },
                             onAppSelected = { app -> onAppSelected?.invoke(app) },

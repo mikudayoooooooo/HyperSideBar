@@ -5,6 +5,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -33,6 +34,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageShader
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.layout.ContentScale
+import top.yukonga.miuix.kmp.blur.BlendColorEntry
+import top.yukonga.miuix.kmp.blur.BlurBlendMode
+import top.yukonga.miuix.kmp.blur.BlurColors
+import top.yukonga.miuix.kmp.blur.BlurDefaults
+import top.yukonga.miuix.kmp.blur.textureBlur
+import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
@@ -120,6 +133,7 @@ fun FanMenuCompose(
     fogIntensity: Float,
     dimEnabled: Boolean,
     frosted: Boolean,
+    wallpaper: android.graphics.Bitmap?,
     exitTick: Int,
     onExitFinished: () -> Unit,
     onAppSelected: (FanAppInfo) -> Unit,
@@ -179,7 +193,40 @@ fun FanMenuCompose(
         }
     }
 
+    val contentOpaque = frosted || wallpaper != null
     Box(modifier = Modifier.fillMaxSize()) {
+        // 壁纸磨砂板（0914 用户拍板"优先 miuix 内部采样"）：壁纸垫底（竖屏 launcher
+        // 背后恒为壁纸，像素对齐）→ layerBackdrop 录制 → 板形 Shape 上 textureBlur 采样
+        // ——miuix 官方三步，AGSL 高斯+噪点+主题混色（暗色主题压亮防晃眼），零系统 API
+        if (wallpaper != null) {
+            val backdrop = rememberLayerBackdrop()
+            Box(modifier = Modifier.fillMaxSize().layerBackdrop(backdrop)) {
+                Image(
+                    bitmap = wallpaper.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.FillBounds,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .textureBlur(
+                        backdrop = backdrop,
+                        shape = boardShape(geometry, densityPx()),
+                        blurRadius = 120f,
+                        noiseCoefficient = BlurDefaults.NoiseCoefficient,
+                        colors = BlurColors(
+                            blendColors = listOf(
+                                BlendColorEntry(
+                                    colors.surfaceContainer.copy(alpha = 0.45f),
+                                    BlurBlendMode.SrcOver
+                                )
+                            )
+                        )
+                    )
+            )
+        }
         // 压暗 scrim（用户开关）：全屏纯黑罩在窗口内容最底层，独立淡入/淡出（不参与
         // 内容层缩放——全屏罩缩放会露出未罩住的边）
         if (dimEnabled) {
@@ -431,6 +478,18 @@ private fun FanBackground(
             )
         }
     }
+}
+
+@Composable
+private fun densityPx(): Float = LocalDensity.current.density
+
+/** 板形 Shape（饼∪胶囊并集，sweep=1 终态）——miuix textureBlur 的模糊区域 */
+private fun boardShape(geometry: FanGeometry, density: Float) = object : Shape {
+    override fun createOutline(
+        size: androidx.compose.ui.geometry.Size,
+        layoutDirection: LayoutDirection,
+        density: Density
+    ): Outline = Outline.Generic(frostOutlinePath(geometry, density.density, 1f))
 }
 
 /**

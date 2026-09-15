@@ -7,10 +7,13 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
+import com.lsp.hypersidebar.prefs.HostPackages
+import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.FanLaunchStrategy
 import com.lsp.hypersidebar.util.RelayToken
 import com.lsp.hypersidebar.util.Trace
 import com.lsp.hypersidebar.util.ShortcutAction
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "FanLaunch"
 
@@ -34,22 +37,22 @@ class BroadcastLaunchStrategy(
 ) : FanLaunchStrategy {
 
     override fun launchFreeform(context: Context, pkg: String) {
-        sendToRelay(context, "freeform pkg=$pkg") { putExtra("pkg", pkg) }
+        sendToRelay(context, "freeform pkg=$pkg") { putExtra(PrefKeys.FAN_EXTRA_PKG, pkg) }
     }
 
     override fun launchAllApps(context: Context) {
-        sendToRelay(context, "allApps") { putExtra("allApps", true) }
+        sendToRelay(context, "allApps") { putExtra(PrefKeys.FAN_EXTRA_ALL_APPS, true) }
     }
 
     override fun launchShortcut(context: Context, shortcut: ShortcutAction) {
         sendToRelay(context, "shortcut id=${shortcut.id}") {
-            putExtra("shortcut", shortcut.toJson().toString())
+            putExtra(PrefKeys.FAN_EXTRA_SHORTCUT, shortcut.toJson().toString())
         }
     }
 
     override fun openNativePanel(context: Context) {
         // 面板打开经 :ui 的 FreeformRelayHook 转发（其负责 PanelHideState 的设置与恢复）
-        sendToRelay(context, "openPanel") { putExtra("openPanel", true) }
+        sendToRelay(context, "openPanel") { putExtra(PrefKeys.FAN_EXTRA_OPEN_PANEL, true) }
     }
 
     private inline fun sendToRelay(
@@ -58,12 +61,12 @@ class BroadcastLaunchStrategy(
         crossinline configure: Intent.() -> Unit
     ) {
         if (shouldSimulateRelayDead()) {
-            Log.w(TAG, "relay blackholed (debug switch): $what")
+            HLog.w(TAG, "relay blackholed (debug switch): $what")
             handleRelayDead(context, what)
             return
         }
         val intent = Intent(launchAction).apply {
-            setPackage("com.miui.securitycenter")
+            setPackage(HostPackages.UI_HOST)
             configure()
             // 链路追踪（util/Trace）：单次呼出的 id 随 relay 过 :ui，日志按 id 串全链
             Trace.current?.let { putExtra(Trace.EXTRA, it) }
@@ -75,18 +78,18 @@ class BroadcastLaunchStrategy(
             object : BroadcastReceiver() {
                 override fun onReceive(c: Context, result: Intent?) {
                     if (resultCode != 0) {
-                        Log.i(TAG, "relay alive: $what delivered")
+                        HLog.i(TAG, "relay alive: $what delivered")
                         onRelayResult?.invoke(true, what)
                         return
                     }
-                    Log.e(TAG, "relay DEAD: $what not delivered (result code untouched)")
+                    HLog.e(TAG, "relay DEAD: $what not delivered (result code untouched)")
                     handleRelayDead(c, what)
                 }
             },
             Handler(Looper.getMainLooper()),
             0, null, null
         )
-        Log.i(TAG, "relay broadcast sent (ordered): $what")
+        HLog.i(TAG, "relay broadcast sent (ordered): $what")
     }
 
     private fun handleRelayDead(context: Context, what: String) {

@@ -10,6 +10,12 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -24,7 +30,9 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -46,6 +54,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -60,7 +69,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.prefs.PrefsFiles
 import com.lsp.hypersidebar.theme.HyperSidebarTheme
 import com.lsp.hypersidebar.theme.ThemeModes
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
@@ -76,12 +87,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.Locale
 
 private const val TAG = "AllAppsActivity"
-private const val PREFS_NAME = "hyperSidebar_prefs"
+private const val PREFS_NAME = PrefsFiles.APP_LOCAL
 private const val MAX_DATA_WAIT_MS = 1500L
 
 /** 磁贴圆角提为常量：避免每磁贴每次重组重复分配 Shape。A3：14→18dp（MIUI 抽屉近亲） */
@@ -141,8 +153,8 @@ class AllAppsActivity : ComponentActivity() {
                         // startActivityAsUser）；本进程直启必降级全屏（blocklist）
                         runCatching {
                             Intent(ACTION_FAN_LAUNCH).apply {
-                                setPackage("com.miui.securitycenter")
-                                putExtra("pkg", pkg)
+                                setPackage(HostPackages.UI_HOST)
+                                putExtra(PrefKeys.FAN_EXTRA_PKG, pkg)
                                 // 跨进程防伪令牌（:ui 侧 FreeformRelayHook 校验）
                                 RelayToken.attach(this, RelayToken.current())
                             }.let { applicationContext.sendBroadcast(it) }
@@ -209,12 +221,21 @@ private fun AllAppsScreen(
     var entries by remember { mutableStateOf<List<GridEntry>>(emptyList()) }
     var hasFixedApps by remember { mutableStateOf(false) }
 
+    // ===== 加载三态（迭代六 §11.4）：加载中（骨架屏）/ 空 / 失败可重试 =====
+    // Loading=数据未到（骨架占位，区别于黑屏）；Error=等待超时且无任何数据（缓存/
+    // extras/固定应用全空）→ 显式失败 + 重试；Empty=数据就绪但无更多应用（有固定区
+    // 时列表非空，不会落 Empty）。retryKey 变化重跑加载 effect。
+    var retryKey by remember { mutableStateOf(0) }
+    var loadFailed by remember { mutableStateOf(false) }
+    // entries 非空即视为加载完成（组装 effect 是数据的最终出口）
+    val loaded = entries.isNotEmpty() || hasFixedApps
+
     // 全部应用：优先用 ：ui 经 intent 传入的列表（首帧可显）。A4 冷启动 hydrate：
     // extras 缺失（:ui 冷进程缓存空，>5s 空窗来源）时先灌 remotePrefs 缓存
     // （CACHED_SUGGESTIONS，上次会话准入列表，与 AppSelectionPage 同键同格式）
     // 立即出列表，等待循环只负责新数据覆盖；extras 齐全时后台写回保鲜。
     // 模块进程被 hidden API blocklist 拒绝，DataLoader 只是最后兜底（大概率空）
-    LaunchedEffect(prefs, initialSuggestions) {
+    LaunchedEffect(prefs, initialSuggestions, retryKey) {
         if (!initialSuggestions.isNullOrEmpty()) {
             allPkgs = initialSuggestions
             // 后台写回保鲜：内容没变不写（AllApps 高频打开，实际写盘趋近于零）
@@ -253,6 +274,11 @@ private fun AllAppsScreen(
                 }
             }
             // 3) 全部落空且无缓存：allPkgs 保持空 → 空态文案兜底
+            else if (allPkgs.isEmpty()) {
+                // §11.4：等待超时且无任何数据（缓存/extras 全空）→ 显式失败态
+                //（固定应用也空才算失败——有固定区时列表仍可用）
+                loadFailed = true
+            }
         }
     }
 
@@ -406,13 +432,35 @@ private fun AllAppsScreen(
                 .padding(innerPadding)
         ) {
             if (entries.isEmpty()) {
-                // 空态显式占位：避免被误读为黑屏（remote prefs 异步绑定与数据等待期间的过渡态）
-                Text(
-                    if (!hasFixedApps) "加载中…" else "暂无更多可打开应用",
-                    style = MiuixTheme.textStyles.footnote1,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    modifier = Modifier.align(Alignment.Center)
-                )
+                // §11.4 加载三态：失败（重试）/ 加载中（骨架屏）/ 空（明确文案），
+                // 取代旧「加载中…/暂无」二值文案——加载期不再被误读为黑屏或空数据
+                when {
+                    loadFailed && !loaded -> Column(
+                        modifier = Modifier.align(Alignment.Center),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            stringResource(R.string.all_apps_load_failed),
+                            style = MiuixTheme.textStyles.footnote1,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        )
+                        Spacer(Modifier.padding(top = 12.dp))
+                        TextButton(
+                            text = stringResource(R.string.all_apps_retry),
+                            onClick = {
+                                loadFailed = false
+                                retryKey++
+                            }
+                        )
+                    }
+                    !loaded -> SkeletonGrid(modifier = Modifier.align(Alignment.Center).fillMaxSize())
+                    !hasFixedApps -> Text(
+                        stringResource(R.string.no_apps_found),
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
             }
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
@@ -512,9 +560,59 @@ private fun AllAppsScreen(
 }
 
 /** 抽屉磁贴：图标在上、应用名在下（PRD 参考图样式）。 */
+/**
+ * 骨架屏（§11.4 加载态）：与网格同构的 4 列占位磁贴，呼吸透明度脉动——
+ * 明确表达"数据在路上"，区别于空数据与黑屏。
+ */
 @Composable
-private fun AppTile(pkg: String, label: String, section: String, onClick: () -> Unit) {
-    val context = LocalContext.current
+private fun SkeletonGrid(modifier: Modifier = Modifier) {
+    val alpha = rememberInfiniteTransition(label = "skeleton").animateFloat(
+        initialValue = 0.25f,
+        targetValue = 0.6f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(700, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "skeletonAlpha"
+    )
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(4),
+        userScrollEnabled = false,
+        modifier = modifier
+    ) {
+        items(12) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)
+            ) {
+                Box(
+                    Modifier
+                        .size(52.dp)
+                        .alpha(alpha.value)
+                        .background(
+                            MiuixTheme.colorScheme.secondaryContainer,
+                            RoundedCornerShape(14.dp)
+                        )
+                )
+                Spacer(Modifier.padding(top = 8.dp))
+                Box(
+                    Modifier
+                        .width(40.dp)
+                        .padding(bottom = 4.dp)
+                        .height(10.dp)
+                        .alpha(alpha.value)
+                        .background(
+                            MiuixTheme.colorScheme.secondaryContainer,
+                            RoundedCornerShape(5.dp)
+                        )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppTile(pkg: String, label: String, section: String, onClick: () -> Unit) {    val context = LocalContext.current
     // 图标异步加载（1C P1，滑动卡顿主因修复）：此前 remember(pkg) 在主线程组合期
     // 同步做 PM binder + 128px 解码，LazyGrid 滑出即弃、回滑重拉。改为：缓存命中
     // 同帧即显；miss 先显字母占位，IO 线程加载后提交——主线程组合路径零 binder

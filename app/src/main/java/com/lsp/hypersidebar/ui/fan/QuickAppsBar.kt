@@ -1,11 +1,12 @@
 package com.lsp.hypersidebar.ui.fan
 
 import android.content.Context
-import android.graphics.drawable.Drawable
+import android.graphics.Bitmap
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -34,7 +36,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.core.graphics.drawable.toBitmap
 import top.yukonga.miuix.kmp.basic.Text
 
 @Composable
@@ -75,6 +76,9 @@ fun QuickAppsBar(
                     }
                     .alpha(if (labelSize == IntSize.Zero) 0f else 1f)
                     .onSizeChanged { labelSize = it }
+                    // 描边防隐身：板材质与标签同色系（surfaceContainerHigh），无边框时
+                    // 标签融进板里（真机 0914 "看不到框选效果"）
+                    .border(1.dp, colors.outline.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
                     .clip(RoundedCornerShape(12.dp))
                     .background(colors.surfaceContainerHigh.copy(alpha = 0.95f))
                     .padding(horizontal = 10.dp, vertical = 4.dp),
@@ -96,7 +100,8 @@ fun QuickAppsBar(
                     )
                 }
                 .clip(RoundedCornerShape((iconSizeDp / 2f + 4f).dp))
-                .background(colors.surfaceContainer.copy(alpha = 0.9f))
+                // 连体玻璃板（0914 定稿）：栏的底=FanBackground 磨砂板胶囊本身，此处不再
+                // 叠任何染色——深色主题下两层深色叠加曾让栏明显深于扇形（"连体感"破功）
                 .padding(
                     horizontal = (iconSizeDp * 0.25f).dp,
                     vertical = (iconSizeDp * 0.25f).dp
@@ -127,17 +132,15 @@ private fun QuickAppIcon(
     colors: FanThemeColors,
     onClick: () -> Unit
 ) {
-    val (drawable, fallbackColor) = rememberAppIcon(context, app)
+    val (bitmap, fallbackColor) = rememberAppIcon(context, app)
+    // 同 FanAppIcon：不靠降低透明度做未选中态（真机反馈可读性差），选中由放大+高亮板+描边表达
     val targetScale = if (isSelected) SELECTED_ICON_SCALE else 1f
-    val targetAlpha = if (isSelected) 1f else 0.75f
     val iconScale by animateFloatAsState(targetValue = targetScale, animationSpec = tween(100))
-    val iconAlpha by animateFloatAsState(targetValue = targetAlpha, animationSpec = tween(100))
 
     Box(
         modifier = Modifier
             .size(iconSize.dp)
             .scale(iconScale)
-            .alpha(iconAlpha)
             // B1 圆角 mask 统一：CircleShape → 圆角方（与扇形图标一致）
             .clip(RoundedCornerShape((iconSize * 0.25f).dp))
             .background(
@@ -148,7 +151,7 @@ private fun QuickAppIcon(
         contentAlignment = Alignment.Center
     ) {
         AppIconImage(
-            drawable = drawable,
+            bitmap = bitmap,
             fallbackColor = fallbackColor,
             appName = app.appName,
             size = iconSize,
@@ -163,8 +166,7 @@ private fun QuickAppIcon(
                     cornerRadius = androidx.compose.ui.geometry.CornerRadius(
                         size.minDimension * 0.25f, size.minDimension * 0.25f
                     ),
-                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
-                    alpha = iconAlpha
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx())
                 )
             }
         }
@@ -173,32 +175,21 @@ private fun QuickAppIcon(
 
 @Composable
 fun AppIconImage(
-    drawable: Drawable?,
+    bitmap: Bitmap?,
     fallbackColor: Int,
     appName: String,
     size: Float,
     colors: FanThemeColors
 ) {
-    if (drawable != null) {
-        val bitmap = rememberIconBitmap(drawable)
-        if (bitmap != null) {
-            Image(
-                painter = BitmapPainter(bitmap.asImageBitmap()),
-                contentDescription = appName,
-                modifier = Modifier.size(size.dp)
-            )
-        } else {
-            FallbackIcon(appName, size, fallbackColor, colors)
-        }
+    if (bitmap != null) {
+        val painter = remember(bitmap) { BitmapPainter(bitmap.asImageBitmap()) }
+        Image(
+            painter = painter,
+            contentDescription = appName,
+            modifier = Modifier.size(size.dp)
+        )
     } else {
         FallbackIcon(appName, size, fallbackColor, colors)
-    }
-}
-
-@Composable
-private fun rememberIconBitmap(drawable: Drawable): android.graphics.Bitmap? {
-    return remember(drawable) {
-        runCatching { drawable.toBitmap(width = 128, height = 128) }.getOrNull()
     }
 }
 

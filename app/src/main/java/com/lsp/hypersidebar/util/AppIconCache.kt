@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.util.Log
 import android.util.LruCache
 import androidx.core.graphics.drawable.toBitmap
+import com.lsp.hypersidebar.util.HLog
 
 /**
  * 应用图标缓存（pkg → 128px Bitmap，迭代二 P1）：
@@ -55,7 +56,7 @@ object AppIconCache {
             loader.execute {
                 runCatching { load(context, pkg) }
                 if (remaining.decrementAndGet() == 0) {
-                    Log.i(TAG, "preload: ${targets.size} icons in ${android.os.SystemClock.elapsedRealtime() - t0}ms")
+                    HLog.i(TAG, "preload: ${targets.size} icons in ${android.os.SystemClock.elapsedRealtime() - t0}ms")
                 }
             }
         }

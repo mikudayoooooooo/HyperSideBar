@@ -3,6 +3,8 @@ package com.lsp.hypersidebar.util
 import android.content.Context
 import android.util.Log
 import android.util.LruCache
+import com.lsp.hypersidebar.prefs.PrefsFiles
+import com.lsp.hypersidebar.util.HLog
 
 /**
  * 应用标签缓存（pkg → label）：消灭扇形呼出时逐应用的主线程 PackageManager binder 调用。
@@ -16,7 +18,7 @@ import android.util.LruCache
 object AppMetaCache {
 
     private const val TAG = "AppMetaCache"
-    private const val MIRROR_PREFS = "hyperSidebar_prefs"
+    private const val MIRROR_PREFS = PrefsFiles.APP_LOCAL
 
     private val labels = LruCache<String, String>(256)
 
@@ -47,8 +49,8 @@ object AppMetaCache {
             val map = mutableMapOf<String, String>()
             for (key in obj.keys()) map[key] = obj.optString(key)
             diskLabels = map
-            Log.i(TAG, "warmFromDisk: ${map.size} labels")
-        }.onFailure { Log.w(TAG, "warmFromDisk failed: ${it.message}") }
+            HLog.i(TAG, "warmFromDisk: ${map.size} labels")
+        }.onFailure { HLog.w(TAG, "warmFromDisk failed: ${it.message}") }
     }
 
     /** 全量快照写回（IO 线程）：没变化不写。 */
@@ -61,8 +63,8 @@ object AppMetaCache {
                 prefs.edit()
                     .putString(com.lsp.hypersidebar.prefs.PrefKeys.CACHED_LABELS, json)
                     .apply()
-                Log.i(TAG, "persistToDisk: ${snapshot.size} labels")
+                HLog.i(TAG, "persistToDisk: ${snapshot.size} labels")
             }
-        }.onFailure { Log.w(TAG, "persistToDisk failed: ${it.message}") }
+        }.onFailure { HLog.w(TAG, "persistToDisk failed: ${it.message}") }
     }
 }

@@ -3,6 +3,7 @@ package com.lsp.hypersidebar.hook
 import android.content.SharedPreferences
 import android.util.Log
 import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "CircuitBreaker"
 
@@ -30,6 +31,7 @@ class CircuitBreaker(
         private set
     private var consecutive = 0
     @Volatile private var trippedAtMs = 0L
+    @Volatile private var lastReason = ""
 
     /** 熔断动作由宿主 hook 注入（launcher=toast；:ui=enterDegradedMode） */
     var onTripped: ((reason: String) -> Unit)? = null
@@ -37,21 +39,22 @@ class CircuitBreaker(
     fun recordFailure(reason: String) {
         if (open) return
         consecutive++
-        Log.w(TAG, "mechanism failure #$consecutive/$THRESHOLD ($processKey): $reason")
+        lastReason = reason
+        HLog.w(TAG, "mechanism failure #$consecutive/$THRESHOLD ($processKey): $reason")
         if (consecutive < THRESHOLD) return
         open = true
         trippedAtMs = System.currentTimeMillis()
-        Log.e(TAG, "CIRCUIT OPEN ($processKey): $reason — 停止侵入，等待重启或手动重试")
+        HLog.e(TAG, "CIRCUIT OPEN ($processKey): $reason — 停止侵入，等待重启或手动重试")
         runCatching {
             remotePrefs.edit().putBoolean(processKey, true).commit()
-        }.onFailure { Log.w(TAG, "circuit status write failed: ${it.message}") }
+        }.onFailure { HLog.w(TAG, "circuit status write failed: ${it.message}") }
         onTripped?.invoke(reason)
     }
 
     fun recordSuccess() {
         if (open || consecutive == 0) return
         consecutive = 0
-        Log.i(TAG, "success resets consecutive failures ($processKey)")
+        HLog.i(TAG, "success resets consecutive failures ($processKey)")
     }
 
     /** 廉价路径：仅在熔断期间被调用（launcher=每次边缘 DOWN；:ui=2s 看门狗循环）。 */
@@ -60,7 +63,7 @@ class CircuitBreaker(
         val resetAt = runCatching { remotePrefs.getLong(PrefKeys.CIRCUIT_RESET_AT, 0L) }
             .getOrDefault(0L)
         if (resetAt > trippedAtMs) {
-            Log.i(TAG, "manual reset accepted ($processKey): resetAt=$resetAt > trippedAt=$trippedAtMs")
+            HLog.i(TAG, "manual reset accepted ($processKey): resetAt=$resetAt > trippedAt=$trippedAtMs")
             forceReset()
         }
     }
@@ -76,4 +79,18 @@ class CircuitBreaker(
     companion object {
         const val THRESHOLD = 5
     }
+
+    /**
+     * 状态快照（迭代六 §11.2 自检 v2/日志拉取回传用）：熔断态、连续失败计数与
+     * 最近一次失败原因——远程排障判据「失败原因必在 mechanism failure 日志行」
+     * 由此结构化直达，不再依赖翻日志。
+     */
+    fun snapshot(): String = org.json.JSONObject()
+        .put("process", processKey)
+        .put("open", open)
+        .put("consecutive", consecutive)
+        .put("threshold", THRESHOLD)
+        .put("trippedAt", trippedAtMs)
+        .put("lastReason", lastReason)
+        .toString()
 }

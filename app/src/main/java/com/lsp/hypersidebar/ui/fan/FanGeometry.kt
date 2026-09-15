@@ -2,6 +2,7 @@ package com.lsp.hypersidebar.ui.fan
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.IntSize
+import com.lsp.hypersidebar.prefs.LayoutDefaults
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -25,6 +26,8 @@ data class FanItemLayout(
 
 data class FanGeometry(
     val anchor: Offset,
+    /** 几何所用的窗口尺寸（锚点/各项坐标均为窗口本地系）——入场动画按此归一化缩放原点 */
+    val windowSize: IntSize,
     val direction: FanDirection,
     val startAngle: Float,
     val endAngle: Float,
@@ -86,9 +89,12 @@ fun computeFanGeometry(
     val outerCount = minOf(if (isLandscape) config.landscapeMaxAppsOuter else config.maxAppsOuter, appCount)
     val innerCount = (appCount - outerCount).coerceIn(0, if (isLandscape) config.landscapeMaxAppsInner else config.maxAppsInner)
 
-    // 快捷栏占位估算（供下侧房间预留；渲染用生效图标重算，估算偏大属保守）
+    // 快捷栏占位估算（供下侧房间预留）：跟随用户图标尺寸设置——快捷栏图标=扇形生效尺寸
+    // （PRD §9.5"与扇形应用图标大小一致，跟随"），拟合只会缩小 ⇒ 配置值=保守上界，
+    // 预留偏大不偏小。旧值固定 36dp 在大图标设置下预留不足，快捷栏顶到扇形下缘
     val quickList = quickApps.take(6)
-    val estBarBlockPx = config.quickIconSizeDp * density * 2.6f   // barGap(0.6) + 栏高(icon+上下各 0.5 padding)
+    val estBarBlockPx = (if (isLandscape) config.landscapeIconSizeDp else config.iconSizeDp) *
+        density * 2.6f   // barGap(0.6) + 栏高(icon+上下各 0.5 padding)
 
     // ===== 展开角自适应 =====
     // 半径先取配置值（不收窄）
@@ -183,6 +189,7 @@ fun computeFanGeometry(
 
     return FanGeometry(
         anchor = settledAnchor,
+        windowSize = IntSize(width.toInt(), height.toInt()),
         direction = direction,
         startAngle = startAngle,
         endAngle = endAngle,
@@ -203,8 +210,9 @@ fun computeFanGeometry(
 
 private fun degSin(deg: Float): Float = sin(Math.toRadians(deg.toDouble())).toFloat()
 
-/** [startAngle, endAngle] 扫描区间内 sin/cos 的极值（4° 步进采样，布局精度足够）。 */
-private fun sweepExtremes(startAngle: Float, endAngle: Float): FloatArray {
+/** [startAngle, endAngle] 扫描区间内 sin/cos 的极值（4° 步进采样，布局精度足够）。
+ *  internal=毛玻璃包围盒（ComposeFanHost）复用同一极值源，勿再各写一份角度采样。 */
+internal fun sweepExtremes(startAngle: Float, endAngle: Float): FloatArray {
     var minSin = 1f
     var maxSin = -1f
     var minCos = 1f
@@ -268,7 +276,8 @@ private fun fitIconSize(
 
     val required = maxSizeDp * density * (1f + gapFraction)
     return if (minChord < required) {
-        (minChord / density / (1f + gapFraction)).coerceIn(24f, maxSizeDp)
+        (minChord / density / (1f + gapFraction))
+            .coerceIn(LayoutDefaults.ICON_SIZE_HARD_MIN, maxSizeDp)
     } else {
         maxSizeDp
     }

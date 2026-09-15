@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import java.util.concurrent.CopyOnWriteArrayList
+import com.lsp.hypersidebar.util.HLog
 
 /**
  * 进程级 remotePrefs 绑定桥（迭代五 D7 修复）。
@@ -71,7 +72,10 @@ object RemotePrefsBridge : XposedServiceHelper.OnServiceListener {
      * 冷启动 relay 场景（进程被 bind/广播拉起后缓存为空）：漏等待=令牌校验静默拒绝
      * （0907 实锤）。超时=桥不可用，交由调用方按拒绝处理。
      */
-    fun awaitTokenProvision(timeoutSec: Long = 3): Boolean {
+    fun awaitTokenProvision(timeoutSec: Long = 3): Boolean = awaitPrefsBind(timeoutSec)
+
+    /** 等 remotePrefs 绑定完成（通用版；冷启动 ConfigPullService 拉配置同用）。 */
+    fun awaitPrefsBind(timeoutSec: Long = 3): Boolean {
         if (prefs != null) return true
         val latch = java.util.concurrent.CountDownLatch(1)
         addListener { _ -> latch.countDown() }
@@ -80,14 +84,14 @@ object RemotePrefsBridge : XposedServiceHelper.OnServiceListener {
 
     override fun onServiceBind(service: XposedService) {
         this.service = service
-        Log.i(TAG, "onServiceBind")
+        HLog.i(TAG, "onServiceBind")
         // getRemotePreferences 是一次性同步 binder 拉取全量快照，挪出回调线程
         Thread {
             runCatching { service.getRemotePreferences(PREFS_NAME) }.onSuccess { p ->
                 prefs = p
                 // 令牌同步（模块进程唯一可写端，幂等）：跨进程广播防伪依赖此值
                 RelayToken.sync(p)
-                Log.i(TAG, "remotePrefs bound, customApps=" +
+                HLog.i(TAG, "remotePrefs bound, customApps=" +
                     runCatching { p.getStringSet(com.lsp.hypersidebar.prefs.PrefKeys.CUSTOM_APPS, emptySet()) }
                         .getOrNull()?.size)
                 listeners.forEach { runCatching { it(p) } }
@@ -96,7 +100,7 @@ object RemotePrefsBridge : XposedServiceHelper.OnServiceListener {
     }
 
     override fun onServiceDied(service: XposedService) {
-        Log.w(TAG, "onServiceDied")
+        HLog.w(TAG, "onServiceDied")
         this.service = null
         prefs = null
     }

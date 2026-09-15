@@ -18,3 +18,4 @@ local.properties
 # release 签名（密钥与凭据均不入库）
 keystore/
 keystore.properties
+.mimosa/

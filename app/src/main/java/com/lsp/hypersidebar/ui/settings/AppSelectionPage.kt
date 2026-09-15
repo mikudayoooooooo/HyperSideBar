@@ -30,6 +30,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.AppIconImage
 import com.lsp.hypersidebar.ui.fan.FanAppInfo
@@ -328,7 +329,7 @@ private fun AppSelectionRow(
     val appInfo = remember(app.packageName, app.label) {
         FanAppInfo(packageName = app.packageName, appName = app.label)
     }
-    val (drawable, fallbackColor) = rememberAppIcon(context, appInfo)
+    val (bitmap, fallbackColor) = rememberAppIcon(context, appInfo)
     val colors = currentFanThemeColors()
 
     BasicComponent(
@@ -336,7 +337,7 @@ private fun AppSelectionRow(
         summary = app.packageName,
         startAction = {
             AppIconImage(
-                drawable = drawable,
+                bitmap = bitmap,
                 fallbackColor = fallbackColor,
                 appName = app.label,
                 size = 36f,
@@ -441,7 +442,7 @@ private fun withMissingPinned(
 /** 有序广播向 :ui 请求准入列表（探针同款信道）；null = 无应答（:ui 死/未激活）或空缓存 */
 private fun requestSuggestionsFromUi(context: Context, onResult: (List<String>?) -> Unit) {
     val intent = Intent(PrefKeys.ACTION_REQUEST_SUGGESTIONS).apply {
-        setPackage("com.miui.securitycenter")
+        setPackage(HostPackages.UI_HOST)
         // 跨进程防伪令牌（:ui 侧 FreeformRelayHook 校验）
         RelayToken.attach(this, RelayToken.current())
     }

@@ -4,6 +4,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "ShortcutModels"
 
@@ -104,6 +105,10 @@ object ShortcutStore {
     private const val TOOLBOX_PACKAGE = "com.miui.securitycenter"
     private const val TOOLBOX_ID = "__toolbox__"
 
+    /** 游戏箱/视频箱 boost 状态键（MIUI 私有 Settings.Secure；两函数四处读取，收口于此） */
+    private const val KEY_GB_BOOSTING = "gb_boosting"
+    private const val KEY_VTB_BOOSTING = "vtb_boosting"
+
     /**
      * 扇形快捷栏展示上限（PRD §7.1：6 个**含面板占位**——占位在场时运行时
      * 只取前 5 个用户项，占位隐藏时 6 个全上）。仅约束展示，不约束存储。
@@ -121,7 +126,7 @@ object ShortcutStore {
         val jsonStr = try {
             prefs.getString(KEY, null)
         } catch (e: Exception) {
-            Log.w(TAG, "loadUserShortcuts: read failed", e)
+            HLog.w(TAG, "loadUserShortcuts: read failed", e)
             null
         } ?: return emptyList()
 
@@ -136,7 +141,7 @@ object ShortcutStore {
             }
             list.sortedBy { it.order }
         } catch (e: Exception) {
-            Log.e(TAG, "loadUserShortcuts: parse failed", e)
+            HLog.e(TAG, "loadUserShortcuts: parse failed", e)
             emptyList()
         }
     }
@@ -155,11 +160,13 @@ object ShortcutStore {
 
         try {
             prefs.edit().putString(KEY, arr.toString()).apply()
+            // 快捷方式列表是 hook 侧直接读的键，写完显式推一次配置同步（见 ConfigSync.notifyConfigChanged）
+            com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged(KEY)
             // 诊断锚点：快捷栏缺失问题时区分"保存没落盘"（无此行/条目缺）vs"扇形没读到"
-            Log.i(TAG, "saved ${userItems.size} shortcuts: " +
+            HLog.i(TAG, "saved ${userItems.size} shortcuts: " +
                 userItems.joinToString { "${it.kind}:${it.label}(${if (it.enabled) "on" else "off"})" })
         } catch (e: Exception) {
-            Log.e(TAG, "saveUserShortcuts: write failed", e)
+            HLog.e(TAG, "saveUserShortcuts: write failed", e)
         }
     }
 
@@ -254,7 +261,7 @@ object ShortcutStore {
         val picked = userEnabled.take(maxUser)
         // 诊断锚点：与 saveUserShortcuts 的 "saved N" 配对——读端缓存陈旧时
         // enabled 数与最近一次 saved 数不一致
-        Log.i(TAG, "runtimeQuick: user=${userEnabled.size} out=${picked.size} " +
+        HLog.i(TAG, "runtimeQuick: user=${userEnabled.size} out=${picked.size} " +
             "kinds=${picked.joinToString { it.kind.name }}")
         picked.forEach { result.add(it) }
 
@@ -266,8 +273,8 @@ object ShortcutStore {
      */
     fun isToolboxAvailable(context: android.content.Context): Boolean {
         val cr = context.contentResolver
-        return android.provider.Settings.Secure.getInt(cr, "gb_boosting", 0) == 1 ||
-            android.provider.Settings.Secure.getInt(cr, "vtb_boosting", 0) == 1
+        return android.provider.Settings.Secure.getInt(cr, KEY_GB_BOOSTING, 0) == 1 ||
+            android.provider.Settings.Secure.getInt(cr, KEY_VTB_BOOSTING, 0) == 1
     }
 
     /**
@@ -276,8 +283,8 @@ object ShortcutStore {
     fun getToolboxLabel(context: android.content.Context): String {
         val cr = context.contentResolver
         return when {
-            android.provider.Settings.Secure.getInt(cr, "gb_boosting", 0) == 1 -> "游戏工具箱"
-            android.provider.Settings.Secure.getInt(cr, "vtb_boosting", 0) == 1 -> "视频工具箱"
+            android.provider.Settings.Secure.getInt(cr, KEY_GB_BOOSTING, 0) == 1 -> "游戏工具箱"
+            android.provider.Settings.Secure.getInt(cr, KEY_VTB_BOOSTING, 0) == 1 -> "视频工具箱"
             else -> "打开面板"
         }
     }

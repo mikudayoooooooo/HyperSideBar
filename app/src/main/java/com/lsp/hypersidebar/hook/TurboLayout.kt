@@ -21,8 +21,14 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.sqrt
+import com.lsp.hypersidebar.util.HLog
+import com.lsp.hypersidebar.util.StatsRecorder
+import com.lsp.hypersidebar.util.toastOnMain
 
 private const val TAG = "TurboLayout"
+
+/** 高频明细（s#N 系列）：默认关（HLog.verboseEnabled），关时零字符串构造（§11.2） */
+private fun vlog(msg: String) { if (HLog.verboseEnabled) HLog.i(TAG, msg) }
 
 /** B 路线横屏固定圆心 Y：条中心（条=[0,112dp]，112/2=56dp；securitycenter 私有资源取常量）。 */
 private const val LANDSCAPE_ANCHOR_Y_DP = 56f
@@ -80,6 +86,18 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
     /** 熔断器（1C 轮二）：本进程机制性失败连续 5 次 → 恢复原生侧边栏（走降级动作） */
     private val breaker = CircuitBreaker(PrefKeys.CIRCUIT_OPEN_UI, remotePrefs)
+
+    companion object {
+        /**
+         * 进程内 breaker 句柄（§11.2 日志拉取）：FreeformRelayHook 的回传接收器取
+         * :ui 熔断快照用——两者同进程但实例不同，hook 装配顺序不定，null=尚未装配。
+         */
+        @Volatile var breakerSnapshot: () -> String? = { null }
+    }
+
+    init {
+        breakerSnapshot = { breaker.snapshot() }
+    }
 
     fun hookOnTouch() {
         val hooked = MethodFinder.fromClass(sideBar)
@@ -139,9 +157,16 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private var sAnchorY = 0f
     private var sAnchorT = -1L
     private var sStallFired = false
+
+    /** 速度窗口基准时刻（与竖屏通道同源；基准位置复用 sAnchorX/Y） */
+    private var sSpeedWinT = 0L
     private var sGestureSeq = 0
     private var sFanSeen = false
     private var sPendingShow: Runnable? = null
+
+    // 滑动确认/重置阈值（px）：滑动距离设置项换算缓存，DOWN 时刷新（与竖屏通道同键同滞回）
+    private var sConfirmPx = GestureThresholds.SWIPE_CONFIRM_PX
+    private var sResetPx = GestureThresholds.SWIPE_CONFIRM_PX * GestureThresholds.SWIPE_RESET_RATIO
 
     private fun handleStripGesture(view: View, ev: MotionEvent) {
         // fan 展示中：转发驱动；手势中途落地先合成 DOWN 起始选择状态（边缘通道同款：
@@ -163,6 +188,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // 配置新鲜度检查（迭代六 §11.1）：过期才后台 bind 拉取，此处仅 volatile 读
+                com.lsp.hypersidebar.util.ConfigPullBridge.refreshIfStale(view.context)
                 sDownX = ev.rawX
                 sDownY = ev.rawY
                 sGestureSeq++
@@ -172,11 +199,20 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 sFanSeen = false
                 // 内滑轴：DOWN 点就近角落的对角线（指向屏幕内部）
                 val dm = view.context.resources.displayMetrics
+                // 滑动距离换算（dp→px，DOWN 一次缓存整条手势；设置项即时经 ConfigSync 生效）
+                val distanceDp = try {
+                    remotePrefs.getFloat(
+                        PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
+                    )
+                } catch (_: Exception) {
+                    LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
+                }
+                sConfirmPx = distanceDp * dm.density
+                sResetPx = sConfirmPx * GestureThresholds.SWIPE_RESET_RATIO
                 val inv = 1f / sqrt(2f)
                 sInwardUx = (if (sDownX < dm.widthPixels / 2f) 1f else -1f) * inv
                 sInwardUy = (if (sDownY < dm.heightPixels / 2f) 1f else -1f) * inv
-                Log.i(
-                    TAG,
+                vlog(
                     "s#$sGestureSeq DOWN raw=(${ev.rawX.toInt()},${ev.rawY.toInt()}) " +
                         "axis=(${"%.2f".format(sInwardUx)},${"%.2f".format(sInwardUy)})"
                 )
@@ -191,15 +227,16 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 val inward = dx * sInwardUx + dy * sInwardUy
                 val perp = abs(dx * sInwardUy - dy * sInwardUx)
 
-                // 滑回条：整体重置（PRD 状态机"滑回边缘→待触发"）
-                if (sSwipeConfirmed && inward < GestureThresholds.SWIPE_CONFIRM_PX) {
-                    Log.i(TAG, "s#$sGestureSeq RESET slide-back (inward=${inward.toInt()}px < ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()})")
+                // 滑回条：整体重置（PRD 状态机"滑回边缘→待触发"；滞回=确认距离一半，
+                // 与竖屏通道同款——修零滞回下近阈值悬停微漂整条清零）
+                if (sSwipeConfirmed && inward < sResetPx) {
+                    vlog("s#$sGestureSeq RESET slide-back (inward=${inward.toInt()}px < ${sResetPx.toInt()})")
                     resetStripGesture()
                     return
                 }
 
                 if (!sSwipeConfirmed) {
-                    // PRD §9.5：内滑距离 ≥40px 且与内滑轴夹角 ≤60°（atan2 点积/叉积形式）。
+                    // PRD §9.5：内滑距离达确认线（可配置，默认 15dp）且与内滑轴夹角 ≤60°（atan2 点积/叉积形式）。
                     // 距离项用锥内位移幅值而非对角线投影——投影对纯水平/竖直内滑只有
                     // 0.707 倍（实际要滑 57px 才确认），是实测"横屏响应不如竖屏"的主因
                     // （竖屏轴=水平方向，40px 即确认，无此衰减）
@@ -207,33 +244,45 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         Math.atan2(perp.toDouble(), inward.toDouble())
                     ).toFloat()
                     val travel = hypot(dx, dy)
-                    if (travel >= GestureThresholds.SWIPE_CONFIRM_PX && inward > 0f &&
+                    if (travel >= sConfirmPx && inward > 0f &&
                         angle <= GestureThresholds.MAX_SWIPE_ANGLE_DEG
                     ) {
                         sSwipeConfirmed = true
                         sAnchorX = ev.rawX
                         sAnchorY = ev.rawY
                         sAnchorT = ev.eventTime
-                        Log.i(TAG, "s#$sGestureSeq swipe confirmed: travel=${travel.toInt()}px (>= ${GestureThresholds.SWIPE_CONFIRM_PX.toInt()}) angle=${angle.toInt()}")
+                        sSpeedWinT = ev.eventTime
+                        vlog("s#$sGestureSeq swipe confirmed: travel=${travel.toInt()}px (>= ${sConfirmPx.toInt()}) angle=${angle.toInt()}")
                     }
                 }
 
                 if (sSwipeConfirmed && !sStallFired) {
-                    if (hypot(ev.rawX - sAnchorX, ev.rawY - sAnchorY) > GestureThresholds.STALL_RADIUS_PX) {
-                        // 显著位移：锚点随动重置计时
+                    // 速度判据（0915 三轮实测定案，与竖屏通道同款）：只有"窗内平均速度仍高于
+                    // 阈值"才重新计时。位移式判据会被缓慢持续漂移周期性触发，把 dwell 整轮重置
+                    // ——本通道实测「确认→STALL」均值 661ms，且数值是 250ms 的整数倍
+                    // （s#9=1270≈250×5、s#10=768≈250×3）。
+                    val dt = ev.eventTime - sSpeedWinT
+                    if (dt >= GestureThresholds.STALL_SPEED_WINDOW_MS) {
+                        val speed = hypot(ev.rawX - sAnchorX, ev.rawY - sAnchorY) * 1000f / dt
                         sAnchorX = ev.rawX
                         sAnchorY = ev.rawY
-                        sAnchorT = ev.eventTime
-                    } else if (ev.eventTime - sAnchorT >= stripDwellMs()) {
+                        sSpeedWinT = ev.eventTime
+                        if (speed > GestureThresholds.STALL_MAX_SPEED_PX_S) {
+                            sAnchorT = ev.eventTime
+                        }
+                    }
+                    // 达标判定独立于速度：本帧刚重新计时时 sAnchorT==eventTime，差值 0 天然不误触发
+                    if (ev.eventTime - sAnchorT >= stripDwellMs()) {
                         sStallFired = true
-                        Log.i(TAG, "s#$sGestureSeq STALL ${stripDwellMs()}ms anchor=(${sAnchorX.toInt()},${sAnchorY.toInt()})")
+                        StatsRecorder.onStall()
+                        vlog("s#$sGestureSeq STALL ${stripDwellMs()}ms anchor=(${sAnchorX.toInt()},${sAnchorY.toInt()})")
                         postShowStripFan(view)
                     }
                 }
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                Log.i(TAG, "s#$sGestureSeq UP stallFired=$sStallFired shown=${fanController.isShowing}")
+                vlog("s#$sGestureSeq UP stallFired=$sStallFired shown=${fanController.isShowing}")
                 if (sStallFired) {
                     cancelPendingStripShow()
                     // fan 已落地而手指未预选即松手 → 立即收起（PRD"未预选松手→立即收起"）
@@ -254,12 +303,12 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         val dm = ctx.resources.displayMetrics
         val anchorX = if (sDownX < dm.widthPixels / 2f) 0f else dm.widthPixels.toFloat()
         val anchorY = LANDSCAPE_ANCHOR_Y_DP * dm.density
-        Log.i(TAG, "s#$sGestureSeq showFan: anchor=($anchorX, $anchorY) downY=${sDownY.toInt()} dwell=${stripDwellMs()}ms")
+        vlog("s#$sGestureSeq showFan: anchor=($anchorX, $anchorY) downY=${sDownY.toInt()} dwell=${stripDwellMs()}ms")
         // 耗时锚点（呼出卡顿归因）：postLag=:ui 主线程繁忙度（同 EdgeGestureHook）
         val postAtMs = android.os.SystemClock.uptimeMillis()
         val r = Runnable {
             sPendingShow = null
-            Log.i(TAG, "s#$sGestureSeq showFan runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
+            vlog("s#$sGestureSeq showFan runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
             fanController.show(ctx, anchorX, anchorY)
         }
         sPendingShow = r
@@ -275,6 +324,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         sSwipeConfirmed = false
         sStallFired = false
         sAnchorT = -1L
+        sSpeedWinT = 0L
         sFanSeen = false
     }
 
@@ -301,7 +351,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     }
 
     override fun init() {
-        Log.i(TAG, "=== TurboLayout init ===")
+        HLog.i(TAG, "=== TurboLayout init ===")
         // 熔断器：发布本进程新鲜状态（清掉上进程生命周期遗留的熔断键）+ 熔断动作
         breaker.forceReset()
         breaker.onTripped = { reason ->
@@ -323,7 +373,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         // DataLoader 已 toast 过原因，降级 toast 置空防重复打扰。恢复=重启手机
         com.lsp.hypersidebar.util.DataLoader.onDataSourceDead = {
             if (DataDeadState.mark()) {
-                Log.e(TAG, "data source dead: native sidebar restored, fan disabled until reboot")
+                HLog.e(TAG, "data source dead: native sidebar restored, fan disabled until reboot")
                 if (fanController.isShowing) fanController.dismiss()
                 enterDegradedMode("推荐数据源死亡（连续失败≥5 且无缓存）", "")
             }
@@ -340,13 +390,24 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             { hookHandleBarPixelKill() },
             { hookDockLayoutVisibility() }
         ).forEach { step ->
-            runCatching { step() }.onFailure { Log.e(TAG, "init step failed: ${it.message}", it) }
+            runCatching { step() }.onFailure { HLog.e(TAG, "init step failed: ${it.message}", it) }
         }
-        Log.i(TAG, "init done: ${getStats()}")
+        HLog.i(TAG, "init done: ${getStats()}")
         // 预热推荐列表缓存（:ui 侧 B 路线横屏呼出共用 DataLoader；反射 ~1s 不进呼出关键路径）。
-        // :ui 的 appContext 一般立即可用；带重试防未就绪（与边缘通道同款）
+        // :ui 的 appContext 一般立即可用；带重试防未就绪（与边缘通道同款）。
+        // onReady 顺带图标预灌+空闲预热装配（与 EdgeGestureHook 同款；本进程=:ui 侧横屏
+        // fan 渲染源，横屏游戏首呼出卡顿 0913 实锤后接入试装配）
         com.lsp.hypersidebar.util.DataLoader.prewarmWithRetry(
-            provider = { runCatching { EzXposed.appContext }.getOrNull() }
+            provider = { runCatching { EzXposed.appContext }.getOrNull() },
+            onReady = { ctx ->
+                com.lsp.hypersidebar.util.FanPrewarmer.preloadConfiguredFanIcons(ctx, remotePrefs)
+                // 壁纸位图预载（与 EdgeGestureHook 同款——双宿主一致性 0915 用户定稿）
+                com.lsp.hypersidebar.util.WallpaperSampler.ensure(ctx)
+                mainHandler.postDelayed({
+                    runCatching { fanController.warmupAssembly(ctx) }
+                        .onFailure { HLog.w(TAG, "warmupAssembly failed: ${it.message}") }
+                }, com.lsp.hypersidebar.util.FanPrewarmer.WARMUP_ASSEMBLY_DELAY_MS)
+            }
         )
         // 扇形 UI 类族后台预载（同 EdgeGestureHook）：:ui 侧横屏首呼出同样受益
         com.lsp.hypersidebar.util.FanUiWarmup.warm()
@@ -369,9 +430,9 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 ?.createBeforeHook {
                     if (!passthroughDegraded && moduleEnabled()) it.result = null
                 }
-                ?.also { Log.i(TAG, "hookHideWhiteBar: c.draw hooked OK") }
-                ?: Log.w(TAG, "hookHideWhiteBar: c.draw NOT FOUND（条保持可见，安全降级）")
-        }.onFailure { Log.w(TAG, "hookHideWhiteBar failed: ${it.message}（条保持可见）") }
+                ?.also { HLog.i(TAG, "hookHideWhiteBar: c.draw hooked OK") }
+                ?: HLog.w(TAG, "hookHideWhiteBar: c.draw NOT FOUND（条保持可见，安全降级）")
+        }.onFailure { HLog.w(TAG, "hookHideWhiteBar failed: ${it.message}（条保持可见）") }
     }
 
     /**
@@ -386,8 +447,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                     .filterByParamTypes()
                     .firstOrNull()
                     ?.createBeforeHook { it.result = null }
-                    ?: Log.w(TAG, "hookHideHints: n.$method NOT FOUND（$desc 保留）")
-            }.onFailure { Log.w(TAG, "hookHideHints[$method] failed: ${it.message}") }
+                    ?: HLog.w(TAG, "hookHideHints: n.$method NOT FOUND（$desc 保留）")
+            }.onFailure { HLog.w(TAG, "hookHideHints[$method] failed: ${it.message}") }
         }
     }
 
@@ -404,13 +465,13 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             ConstructorFinder.fromClass(coverView).firstOrNull()
                 ?.createAfterHook {
                     val view = it.thisObject as? View ?: return@createAfterHook
-                    Log.i(TAG, "cover view captured (ctor): $coverView")
+                    HLog.i(TAG, "cover view captured (ctor): $coverView")
                     purgeCoverRefs()
                     coverRefs.add(WeakReference(view))
                     applyCoverFlag(view)
                 }
-                ?: Log.w(TAG, "hookCoverPassThrough: $coverView ctor NOT FOUND")
-        }.onFailure { Log.w(TAG, "hookCoverPassThrough failed: ${it.message}") }
+                ?: HLog.w(TAG, "hookCoverPassThrough: $coverView ctor NOT FOUND")
+        }.onFailure { HLog.w(TAG, "hookCoverPassThrough failed: ${it.message}") }
         startCoverWatchdog()
     }
 
@@ -440,15 +501,15 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                     applyCoverFlagAtBoundary(view, lp, "addView")
                     val rot = runCatching { view.display?.rotation ?: -1 }.getOrDefault(-1)
                     val orient = view.resources.configuration.orientation
-                    Log.i(
+                    HLog.i(
                         TAG,
                         "cover addView: pos=(${lp.x},${lp.y}) size=(${lp.width}x${lp.height}) " +
                             "gravity=${lp.gravity} rot=$rot orient=$orient " +
                             "touchable=${lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE == 0}"
                     )
                 }
-                ?: Log.w(TAG, "hookCoverLifecycleFlags: WindowManagerImpl.addView NOT FOUND")
-        }.onFailure { Log.w(TAG, "hookCoverLifecycleFlags[addView] failed: ${it.message}") }
+                ?: HLog.w(TAG, "hookCoverLifecycleFlags: WindowManagerImpl.addView NOT FOUND")
+        }.onFailure { HLog.w(TAG, "hookCoverLifecycleFlags[addView] failed: ${it.message}") }
         runCatching {
             MethodFinder.fromClass("android.view.WindowManagerImpl")
                 .filterByName("updateViewLayout")
@@ -460,8 +521,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         ?: return@createBeforeHook
                     applyCoverFlagAtBoundary(view, lp, "updateViewLayout")
                 }
-                ?: Log.w(TAG, "hookCoverLifecycleFlags: updateViewLayout NOT FOUND")
-        }.onFailure { Log.w(TAG, "hookCoverLifecycleFlags[updateViewLayout] failed: ${it.message}") }
+                ?: HLog.w(TAG, "hookCoverLifecycleFlags: updateViewLayout NOT FOUND")
+        }.onFailure { HLog.w(TAG, "hookCoverLifecycleFlags[updateViewLayout] failed: ${it.message}") }
     }
 
     /**
@@ -475,11 +536,11 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         when {
             wantFlag && !hasFlag -> {
                 lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                Log.i(TAG, "cover $via: FLAG_NOT_TOUCHABLE injected (host lp was clean)")
+                HLog.i(TAG, "cover $via: FLAG_NOT_TOUCHABLE injected (host lp was clean)")
             }
             !wantFlag && hasFlag -> {
                 lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-                Log.i(TAG, "cover $via: FLAG_NOT_TOUCHABLE cleared (B-route landscape needs touchable strip)")
+                HLog.i(TAG, "cover $via: FLAG_NOT_TOUCHABLE cleared (B-route landscape needs touchable strip)")
             }
         }
     }
@@ -502,7 +563,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             leakCountInWindow = 0
         }
         leakCountInWindow++
-        Log.w(TAG, "EDGE touch leak: DOWN reached f.onTouch (穿透失效) count=$leakCountInWindow/min")
+        HLog.w(TAG, "EDGE touch leak: DOWN reached f.onTouch (穿透失效) count=$leakCountInWindow/min")
         if (leakCountInWindow >= LEAK_DEGRADE_THRESHOLD) {
             enterDegradedMode("leak $leakCountInWindow/min >= $LEAK_DEGRADE_THRESHOLD")
         }
@@ -511,14 +572,14 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private fun enterDegradedMode(reason: String, toast: String = DEFAULT_DEGRADE_TOAST) {
         if (passthroughDegraded) return
         passthroughDegraded = true
-        Log.e(TAG, "PASSTHROUGH DEGRADED ($reason)：恢复原生侧边栏；恢复扇形=重启手机或重启模块")
+        HLog.e(TAG, "PASSTHROUGH DEGRADED ($reason)：恢复原生侧边栏；恢复扇形=重启手机或重启模块")
         // 三条恢复线：条可摸（applyCoverFlag 在 degraded 态反向清 flag，立即 updateViewLayout
         // 生效）、条可见（三层封口 hook 内放行）、事件不吞（hookOnTouch 分支放行原生流）
         coverRefs.forEach { ref -> ref.get()?.let { v -> applyCoverFlag(v) } }
         // 状态标注（设置页读）：remotePrefs 跨进程写，尽力而为
         runCatching {
             remotePrefs.edit().putBoolean(PrefKeys.PASSTHROUGH_DEGRADED, true).commit()
-        }.onFailure { Log.w(TAG, "degrade status write failed: ${it.message}") }
+        }.onFailure { HLog.w(TAG, "degrade status write failed: ${it.message}") }
         // toast 为空串=调用方已另行告知（数据源死亡时 DataLoader 先弹「推荐数据获取失败」）
         if (toast.isNotEmpty()) toastOnMain(safeAppContext(), toast)
     }
@@ -541,7 +602,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         }
         runCatching {
             val lp = view.layoutParams as? WindowManager.LayoutParams
-                ?: return@runCatching Log.w(TAG, "applyCoverFlag: lp=${view.layoutParams?.javaClass?.name} 非 WM.LayoutParams")
+                ?: return@runCatching HLog.w(TAG, "applyCoverFlag: lp=${view.layoutParams?.javaClass?.name} 非 WM.LayoutParams")
             // B 路线（1B）：横屏条要收事件——仅竖屏 EDGE 期望穿透 flag；旋转后本方法
             // （看门狗 2s 周期）负责收敛残留。已降级（1C）/总开关关闭：竖屏反向清 flag 恢复可摸
             val want = !isLandscape(view) && !passthroughDegraded && moduleEnabled()
@@ -554,9 +615,9 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 }
                 (view.context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
                     .updateViewLayout(view, lp)
-                Log.i(TAG, "cover window NOT_TOUCHABLE ${if (want) "applied" else "cleared"}")
+                HLog.i(TAG, "cover window NOT_TOUCHABLE ${if (want) "applied" else "cleared"}")
             }
-        }.onFailure { Log.w(TAG, "applyCoverFlag failed: ${it.message}") }
+        }.onFailure { HLog.w(TAG, "applyCoverFlag failed: ${it.message}") }
     }
 
     private fun startCoverWatchdog() {
@@ -594,9 +655,9 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         it.result = null
                     }
                 }
-                ?.also { Log.i(TAG, "hookHandleBarPixelKill: ImageView.onDraw hooked OK") }
-                ?: Log.w(TAG, "hookHandleBarPixelKill: ImageView.onDraw NOT FOUND（降级仅靠 c.draw）")
-        }.onFailure { Log.w(TAG, "hookHandleBarPixelKill failed: ${it.message}") }
+                ?.also { HLog.i(TAG, "hookHandleBarPixelKill: ImageView.onDraw hooked OK") }
+                ?: HLog.w(TAG, "hookHandleBarPixelKill: ImageView.onDraw NOT FOUND（降级仅靠 c.draw）")
+        }.onFailure { HLog.w(TAG, "hookHandleBarPixelKill failed: ${it.message}") }
 
         // 第三层封口（实测轮七）：View.draw 是渲染总入口——身份过滤后置空可覆盖
         // 前景/hardware layer 等一切绘制路径；:ui 进程视图少，类名比较开销可忽略
@@ -612,9 +673,9 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         it.result = null
                     }
                 }
-                ?.also { Log.i(TAG, "hookHandleBarPixelKill: View.draw (L3) hooked OK") }
-                ?: Log.w(TAG, "hookHandleBarPixelKill: View.draw NOT FOUND")
-        }.onFailure { Log.w(TAG, "hookHandleBarPixelKill L3 failed: ${it.message}") }
+                ?.also { HLog.i(TAG, "hookHandleBarPixelKill: View.draw (L3) hooked OK") }
+                ?: HLog.w(TAG, "hookHandleBarPixelKill: View.draw NOT FOUND")
+        }.onFailure { HLog.w(TAG, "hookHandleBarPixelKill L3 failed: ${it.message}") }
 
         runCatching {
             MethodFinder.fromClass("android.widget.ImageView")
@@ -627,11 +688,11 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                     val now = android.os.SystemClock.uptimeMillis()
                     if (now - lastDrawableLogTime > 2000L) {
                         lastDrawableLogTime = now
-                        Log.i(TAG, "handle bar drawable set: ${drawable.javaClass.name}")
+                        HLog.i(TAG, "handle bar drawable set: ${drawable.javaClass.name}")
                     }
                 }
-                ?.also { Log.i(TAG, "hookHandleBarPixelKill: setImageDrawable probe hooked OK") }
-        }.onFailure { Log.w(TAG, "drawable probe failed: ${it.message}") }
+                ?.also { HLog.i(TAG, "hookHandleBarPixelKill: setImageDrawable probe hooked OK") }
+        }.onFailure { HLog.w(TAG, "drawable probe failed: ${it.message}") }
     }
 
     private fun hookDockLayoutVisibility() {
@@ -660,12 +721,12 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                     }
             }.getOrNull()
             if (hooked != null) {
-                Log.i(TAG, "hookDockLayoutVisibility: hooked $className")
+                HLog.i(TAG, "hookDockLayoutVisibility: hooked $className")
                 return
             } else {
                 Log.d(TAG, "hookDockLayoutVisibility: class $className not found or no matching method")
             }
         }
-        Log.w(TAG, "hookDockLayoutVisibility: no class matched, skip")
+        HLog.w(TAG, "hookDockLayoutVisibility: no class matched, skip")
     }
 }

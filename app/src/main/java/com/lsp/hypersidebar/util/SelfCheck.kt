@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Log
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
@@ -22,8 +23,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.coroutines.resume
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "SelfCheck"
+
+/** 自检报告附带的每进程日志尾条数（§11.2） */
+private const val LOG_TAIL_PER_PROC = 40
 
 /**
  * 自检报告（2026-09-05 用户拍板：探针双路 + 调试开关实值 + 脱敏配置快照，导出为文本文件）。
@@ -78,11 +83,15 @@ object SelfCheck {
 
     suspend fun generate(context: Context, service: XposedService?, prefs: SharedPreferences): String =
         withContext(Dispatchers.IO) {
-            val home = probe(context, Intent(PrefKeys.PROBE_ACTION_HOME))
+            // 探针显式定向宿主包（接收器 RECEIVER_EXPORTED；executor 附带令牌，
+            // 隐式发送可被任意 App 截收——0912 审查，与 sendSync 同类修复）
+            val home = probe(context, Intent(PrefKeys.PROBE_ACTION_HOME).setPackage(HostPackages.HOME))
             val relayToken = RelayToken.read(prefs)
             val executor = probe(
                 context,
-                Intent(ACTION_FAN_LAUNCH).putExtra(PrefKeys.PROBE_EXTRA, true),
+                Intent(ACTION_FAN_LAUNCH)
+                    .setPackage(HostPackages.UI_HOST)
+                    .putExtra(PrefKeys.PROBE_EXTRA, true),
                 relayToken
             )
             // 与 hook 消费端同门控：release 构建该开关不生效（存量毒值压死）
@@ -99,6 +108,12 @@ object SelfCheck {
             val kindCounts = shortcuts.groupBy { it.kind.name }
                 .entries.joinToString { "${it.key}=${it.value.size}" }
                 .ifEmpty { "无" }
+
+            // §11.2 自检 v2：拉一轮三进程日志（广播请求 + 等待回传），报告附
+            // 熔断快照与各进程日志尾——远程排障不再依赖 LSPosed 日志页导出
+            LogCollector.requestAndAwait(context)
+            val procLogs = LogCollector.mergedForExport()
+            val statuses = LogCollector.statuses.toMap()
 
             val verdict = when {
                 home == PrefKeys.PROBE_CODE_DEAD ->
@@ -145,6 +160,7 @@ object SelfCheck {
                     " / 外圈 ${i(prefs, PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER)}" +
                     " / 内圈 ${i(prefs, PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)}")
                 appendLine("呼出停顿: ${i(prefs, PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)} ms" +
+                    " / 滑动距离: ${f(prefs, PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP).toInt()} dp" +
                     " / 死区: ${f(prefs, PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)} dp")
                 appendLine("扇形雾化: ${f(prefs, PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)}" +
                     " / 背景压暗: ${runCatching { prefs.getBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED) }.getOrDefault(LayoutDefaults.FAN_DIM_ENABLED)}")
@@ -155,6 +171,24 @@ object SelfCheck {
                 appendLine("上次 root 代发结果: " + runCatching {
                     prefs.getString(PrefKeys.LAST_RELAY_RESULT, "无记录")
                 }.getOrNull() ?: "无记录")
+                appendLine()
+                appendLine()
+                appendLine("== 进程状态快照 ==")
+                if (statuses.isEmpty()) {
+                    appendLine("无应答（hook 进程未回传状态——进程死或接收器未注册）")
+                } else {
+                    statuses.forEach { (proc, json) -> appendLine("$proc: $json") }
+                }
+                appendLine()
+                appendLine("== 最近日志（各进程尾部 ${LOG_TAIL_PER_PROC} 条，时间升序）==")
+                if (procLogs.isEmpty()) {
+                    appendLine("无（各进程缓冲未回传）")
+                } else {
+                    procLogs.forEach { (proc, list) ->
+                        appendLine("----- [$proc] -----")
+                        list.takeLast(LOG_TAIL_PER_PROC).forEach { appendLine(it.formatLine()) }
+                    }
+                }
                 appendLine()
                 appendLine("== 判读建议 ==")
                 appendLine(verdict)
@@ -176,7 +210,7 @@ object SelfCheck {
                 ?: error("openOutputStream returned null")
             "下载/$fileName"
         }.getOrElse { e ->
-            Log.w(TAG, "MediaStore export failed, fallback to app dir: ${e.message}")
+            HLog.w(TAG, "MediaStore export failed, fallback to app dir: ${e.message}")
             // 兜底：应用私有外部目录（文件管理器可达性差但至少能取到）
             val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
                 ?: context.filesDir

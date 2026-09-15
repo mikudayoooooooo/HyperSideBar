@@ -8,6 +8,7 @@ import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 
@@ -30,12 +31,17 @@ internal class ModuleProbe(private val context: Context) {
     fun probe() {
         state = ModuleProbeState(null, null)
         // 执行端：复用 :ui 的 ACTION_FAN_LAUNCH 接收器 + 探针标记 extra
-        //（接收器探针分支短路在动作分发之前，只应答不执行）
-        sendProbe(Intent(ACTION_FAN_LAUNCH).putExtra(PrefKeys.PROBE_EXTRA, true)) { code ->
+        //（接收器探针分支短路在动作分发之前，只应答不执行）。
+        // 显式定向宿主包：隐式有序广播的 resultCode 可被任意 App 抢答伪造（0912 审查）
+        sendProbe(
+            Intent(ACTION_FAN_LAUNCH)
+                .setPackage(HostPackages.UI_HOST)
+                .putExtra(PrefKeys.PROBE_EXTRA, true)
+        ) { code ->
             state = state.copy(executor = code)
         }
         // 触发端：home 进程的独立探针 action（EdgeGestureHook 经 Application.attach 注册）
-        sendProbe(Intent(PrefKeys.PROBE_ACTION_HOME)) { code ->
+        sendProbe(Intent(PrefKeys.PROBE_ACTION_HOME).setPackage(HostPackages.HOME)) { code ->
             state = state.copy(launcher = code)
         }
     }

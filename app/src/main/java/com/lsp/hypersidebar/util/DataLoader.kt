@@ -2,6 +2,8 @@ package com.lsp.hypersidebar.util
 
 import android.content.Context
 import android.util.Log
+import com.lsp.hypersidebar.prefs.PrefsFiles
+import com.lsp.hypersidebar.util.HLog
 
 /**
  * 扇形菜单数据源（2026-08-25 决策：provider 整条路径退役）。
@@ -31,7 +33,7 @@ object DataLoader {
     private const val TAG = "DataLoader"
     private const val CACHE_TTL_MS = 30_000L
     private const val BACKSTOP_INTERVAL_MS = 5 * 60_000L
-    private const val DISK_PREFS_NAME = "hyperSidebar_data"
+    private const val DISK_PREFS_NAME = PrefsFiles.DATA
     private const val DISK_KEY_SUGGESTIONS = "suggestions"
 
     /**
@@ -82,8 +84,14 @@ object DataLoader {
      * 带重试的预热（修"首次呼出只有固定应用"）：hook init 时宿主 appContext 可能未就绪
      * （launcher 实测直接抛 NPE，prewarm skipped），首轮呼出必然冷缓存。此方法每 intervalMs
      * 重试 provider 直到拿到上下文或耗尽次数，成功即 prewarm（刷新+兜底循环）。
+     * [onReady] = 上下文就绪后的追加动作（后台线程回调，如图标预灌），失败不影响预热本体。
      */
-    fun prewarmWithRetry(provider: () -> Context?, maxAttempts: Int = 12, intervalMs: Long = 5000L) {
+    fun prewarmWithRetry(
+        provider: () -> Context?,
+        maxAttempts: Int = 12,
+        intervalMs: Long = 5000L,
+        onReady: ((Context) -> Unit)? = null
+    ) {
         val task = object : Runnable {
             var attempt = 0
             override fun run() {
@@ -91,12 +99,18 @@ object DataLoader {
                 val ctx = runCatching { provider() }.getOrNull()?.applicationContext
                 if (ctx != null) {
                     prewarmed = true
-                    Log.i(TAG, "prewarm ok (attempt ${attempt + 1})")
+                    HLog.i(TAG, "prewarm ok (attempt ${attempt + 1})")
                     prewarm(ctx)
+                    if (onReady != null) {
+                        executor.execute {
+                            runCatching { onReady(ctx) }
+                                .onFailure { HLog.w(TAG, "prewarm onReady failed: ${it.message}") }
+                        }
+                    }
                 } else if (++attempt < maxAttempts) {
                     mainHandler.postDelayed(this, intervalMs)
                 } else {
-                    Log.w(TAG, "prewarm gave up after $maxAttempts attempts")
+                    HLog.w(TAG, "prewarm gave up after $maxAttempts attempts")
                 }
             }
         }
@@ -113,7 +127,7 @@ object DataLoader {
         mainHandler.postDelayed(object : Runnable {
             override fun run() {
                 runCatching { refreshAsync(appContext) }
-                    .onFailure { Log.w(TAG, "backstop dispatch failed: ${it.message}") }
+                    .onFailure { HLog.w(TAG, "backstop dispatch failed: ${it.message}") }
                 mainHandler.postDelayed(this, BACKSTOP_INTERVAL_MS)
             }
         }, BACKSTOP_INTERVAL_MS)
@@ -134,20 +148,14 @@ object DataLoader {
                 // label 预热（1C P3）：扇形呼出主线程逐 pkg 调 AppMetaCache.label，miss 即
                 // PM binder（首呼出最多 14 次）——后台刷新顺带灌缓存，呼出路径恒命中
                 suggestion.forEach { AppMetaCache.label(context, it) }
-                Log.i(TAG, "refreshed ${suggestion.size} suggestion apps in ${android.os.SystemClock.elapsedRealtime() - t0}ms (background)")
+                HLog.i(TAG, "refreshed ${suggestion.size} suggestion apps in ${android.os.SystemClock.elapsedRealtime() - t0}ms (background)")
             } catch (e: Throwable) {
-                Log.w(TAG, "refresh failed: ${e.message}")
+                HLog.w(TAG, "refresh failed: ${e.message}")
                 consecutiveFailures++
                 if (!failureToastShown && cachedResult == null && consecutiveFailures >= DEAD_THRESHOLD) {
                     failureToastShown = true
                     mainHandler.post {
-                        runCatching {
-                            android.widget.Toast.makeText(
-                                context,
-                                "推荐数据获取失败",
-                                android.widget.Toast.LENGTH_LONG
-                            ).show()
-                        }
+                        toastOnMain(context, "推荐数据获取失败")
                         onDataSourceDead?.invoke()
                     }
                 }
@@ -179,10 +187,10 @@ object DataLoader {
                 val list = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
                 if (list.isNotEmpty()) {
                     cachedResult = list
-                    Log.i(TAG, "hydrated ${list.size} suggestions from disk (stale, refresh pending)")
+                    HLog.i(TAG, "hydrated ${list.size} suggestions from disk (stale, refresh pending)")
                 }
             }
-        }.onFailure { Log.w(TAG, "hydrate failed: ${it.message}") }
+        }.onFailure { HLog.w(TAG, "hydrate failed: ${it.message}") }
     }
 
     /** 成功刷新落盘：列表没变不写（推荐列表日常稳定，实际写盘趋近于零）；空列表不覆盖。 */
@@ -195,12 +203,12 @@ object DataLoader {
             context.applicationContext
                 .getSharedPreferences(DISK_PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putString(DISK_KEY_SUGGESTIONS, json).apply()
-        }.onFailure { Log.w(TAG, "persist failed: ${it.message}") }
+        }.onFailure { HLog.w(TAG, "persist failed: ${it.message}") }
     }
 
     /** 反射失败直接抛（1C：失败计数/兜底 toast 需要区分"拉取失败"与"合法空列表"）。 */
     private fun loadSuggestionApps(context: Context): List<String> {
-        val cls = Class.forName("android.util.MiuiMultiWindowUtils")
+        val cls = Class.forName(FreeformLauncher.MIUI_MULTI_WINDOW_UTILS)
         val method = try {
             cls.getMethod("getFreeformSuggestionList", Context::class.java)
         } catch (_: NoSuchMethodException) {

@@ -9,7 +9,7 @@
 
     <string name="module_section">模块</string>
     <string name="module_enabled">启用 HyperSideBar</string>
-    <string name="module_enabled_summary">替换原生侧边栏为扇形菜单</string>
+    <string name="module_enabled_summary">替换原生侧边栏为扇形菜单；开关下次手势生效</string>
     <string name="status_running">模块运行中</string>
     <string name="status_normal_summary">手势与执行通道工作正常</string>
     <string name="status_abnormal">模块通道异常</string>
@@ -35,7 +35,7 @@
     <string name="apps_section">应用</string>
     <string name="select_apps">扇形应用</string>
     <string name="select_shortcut_apps">快捷应用</string>
-    <string name="selected_apps_summary">已选择 %1$d 个应用</string>
+    <string name="selected_apps_summary">已选择 %1$d 个应用；改动下次呼出生效</string>
     <string name="selected_apps_group">已选（%1$d）</string>
     <string name="selected_apps_count">已选择 %1$d 个</string>
     <string name="search_apps_hint">搜索应用…</string>
@@ -53,15 +53,35 @@
     <string name="system_colors">系统配色</string>
     <string name="system_colors_summary">使用 HyperOS 系统动态颜色</string>
     <string name="interaction_section">交互</string>
+    <string name="invoke_section">呼出设置</string>
+    <string name="invoke_settings_summary">滑动距离 %1$d dp · 呼出停顿 %2$d ms</string>
+    <string name="trigger_swipe_distance_title">滑动距离</string>
+    <string name="trigger_swipe_distance_summary">内滑 %1$d dp 达确认线，停顿后呼出；太浅易误触、太深难触发；改动下次手势生效</string>
+    <string name="fan_background_section">扇形背景</string>
+    <string name="fan_background_summary">材质 %1$d%% · 压暗%2$s</string>
+    <string name="state_on">开</string>
+    <string name="state_off">关</string>
     <string name="trigger_dwell_title">呼出停顿</string>
-    <string name="trigger_dwell_summary">贴边停顿 %1$d ms 后展开扇形</string>
-    <string name="fan_fog_title">扇形背景雾化</string>
-    <string name="fan_fog_summary">雾化浓度 %1$d%%（0 为关闭填充）</string>
+    <string name="trigger_dwell_summary">贴边停顿 %1$d ms 后展开扇形；改动即时生效</string>
+    <string name="fan_fog_title">板材质浓度</string>
+    <string name="fan_fog_summary">统一驱动板的混色、提亮与颗粒：%1$d%%（0 = 板材质全关，只剩弧线与图标；若背景模糊来源已开启，模糊本身仍在，板不会变透明）；改动下次呼出生效</string>
     <string name="fan_dim_title">背景压暗</string>
-    <string name="fan_dim_summary">呼出扇形时全屏压暗 24%，突出菜单</string>
+    <string name="fan_dim_summary">呼出扇形时全屏压暗 24%，突出菜单；改动下次呼出生效</string>
+    <string name="fan_blur_source_title">背景模糊来源</string>
+    <string name="fan_blur_source_auto">自动</string>
+    <string name="fan_blur_source_wallpaper">采样壁纸</string>
+    <string name="fan_blur_source_behind">后方屏幕全屏</string>
+    <string name="fan_blur_source_transparent">透明</string>
+    <string name="fan_blur_source_off">关闭</string>
+    <string name="fan_blur_source_summary_auto">按能力自动选路：壁纸就绪时用采样壁纸（横竖屏皆可），否则只出板材质（亚克力）</string>
+    <string name="fan_blur_source_summary_wallpaper">采样壁纸做板内磨砂，材质最完整，横竖屏共用同一张壁纸；桌面上与真实背景对齐，游戏内看到的会是模糊壁纸而非游戏画面</string>
+    <string name="fan_blur_source_summary_behind">FLAG_BLUR_BEHIND 全屏景深：整屏一起模糊，只糊板内做不到；桌面观感佳、游戏慎用</string>
+    <string name="fan_blur_source_summary_transparent">既不取背后内容、也不加板材质：只剩弧线与图标，完全透视到后面的画面</string>
+    <string name="fan_blur_source_summary_off">不取背后内容：板完全由「板材质浓度」决定，浓度 0 时板为透明（只剩弧线与图标）</string>
+    <string name="fan_frosted_summary">仅扇形与快捷栏区域做系统级背景磨砂（AOSP 背景模糊通道，按板轮廓裁剪）；系统关闭模糊效果或材质引擎不可用时自动降级为纯色板；改动下次呼出生效</string>
     <string name="defaults_section">重置</string>
     <string name="restore_defaults">恢复默认值</string>
-    <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，立即生效</string>
+    <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，下次呼出生效</string>
     <string name="restore_defaults_confirm">将全部布局与交互参数恢复为默认值，应用选择与快捷方式不受影响。</string>
     <string name="restore_defaults_done">已恢复默认布局与参数</string>
     <string name="reset_confirm">确认</string>
@@ -71,7 +91,7 @@
     <string name="layout_sheet_save">保存</string>
     <string name="layout_sheet_restore_default">恢复默认</string>
     <string name="layout_inner_clamped">已按“内圈 ≤ 外圈×80%”上限钳制</string>
-    <string name="layout_preview_hint">拖动滑条实时预览，保存后生效</string>
+    <string name="layout_preview_hint">拖动滑条实时预览，保存后下次呼出生效</string>
 
     <string name="icon_size">图标大小</string>
     <string name="inner_radius">内圈半径</string>
@@ -141,6 +161,11 @@
     <string name="debug_relay_confirm_ready">倒计时结束，可以确认了</string>
     <string name="debug_relay_confirm_action">确认开启</string>
     <string name="debug_relay_confirm_action_counting">确认开启（%d）</string>
+    <string name="debug_host_restart">重启 hook 宿主</string>
+    <string name="debug_host_restart_summary">root 强制结束勾选的宿主进程并由系统拉回，用于模块更新后重载 hook</string>
+    <string name="debug_host_restart_dialog_summary">模块更新后需三个宿主全部重启才会重新加载 hook（漏系统界面=磁贴成功率回退）。勾选后点「重启」：桌面回 HOME，系统界面会黑屏一闪后自动重启（黑屏即重启成功的标志），手机管家下次呼出侧边栏时拉起。</string>
+    <string name="debug_host_restart_action">重启</string>
+    <string name="debug_host_restart_busy">重启中…</string>
     <string name="selfcheck_export">导出自检报告</string>
     <string name="selfcheck_export_summary">生成探针双路应答、调试开关实值与配置快照的文本报告，保存到下载目录（不含令牌等敏感信息）</string>
     <string name="selfcheck_exporting">正在生成探针与报告…</string>
@@ -155,7 +180,7 @@
     <string name="shortcut_select_all">全选</string>
     <string name="shortcut_batch_delete_confirm">将删除已选的 %d 个快捷方式。</string>
     <string name="shortcuts_at_store_limit">最多可添加 %d 个快捷方式</string>
-    <string name="shortcut_entry_summary">已添加 %1$d · 启用 %2$d</string>
+    <string name="shortcut_entry_summary">已添加 %1$d · 启用 %2$d；改动下次呼出生效</string>
     <string name="shortcut_unnamed">未命名</string>
     <string name="shortcut_enabled">启用</string>
     <string name="shortcut_new">新建快捷方式</string>
@@ -221,4 +246,44 @@
     <string name="shortcut_qs_tile_target">磁贴组件</string>
     <string name="shortcut_qs_tile_note">通过 SystemUI 直接触发系统快捷开关（无须加入控制中心）；需 LSPosed 勾选系统界面作用域，否则自动回退 root 兜底</string>
     <string name="all_apps_title">全部应用</string>
+    <string name="all_apps_load_failed">应用列表加载失败（数据源不可达）</string>
+    <string name="all_apps_retry">重试</string>
+
+    <!-- 运行日志页（迭代六 §11.2） -->
+    <string name="logs_title">运行日志</string>
+    <string name="logs_entry">运行日志</string>
+    <string name="logs_entry_summary">三进程内存环形缓冲，按进程/级别/关键字过滤，可导出</string>
+    <string name="logs_refresh">刷新</string>
+    <string name="logs_refreshing">正在拉取三进程日志…</string>
+    <string name="logs_export">导出</string>
+    <string name="logs_exporting">导出中…</string>
+    <string name="logs_export_done">运行日志已保存：下载/%s</string>
+    <string name="logs_empty">暂无日志，点「刷新」拉取各进程缓冲</string>
+    <string name="logs_verbose">高频手势日志</string>
+    <!-- 诊断与统计汇聚页（0909 拍板：调试区父入口，点进去再选具体页面） -->
+    <string name="diagnostics_section">诊断项目</string>
+    <string name="diagnostics_entry">诊断与统计</string>
+    <string name="diagnostics_entry_summary">运行日志、使用统计、导出自检报告</string>
+
+    <!-- 使用统计页（迭代六 §11.3，PRD §9.2/§9.3；误触率为 0914 重定义版） -->
+    <string name="stats_entry">使用统计</string>
+    <string name="stats_entry_summary">呼出/打开/成功率/误触率等指标（§9.2），可导出 CSV</string>
+    <string name="stats_title">使用统计</string>
+    <string name="stats_refresh">刷新</string>
+    <string name="stats_export">导出 CSV</string>
+    <string name="stats_today">今日</string>
+    <string name="stats_total">累计</string>
+    <string name="stats_invocations">呼出次数</string>
+    <string name="stats_opens">打开应用次数</string>
+    <string name="stats_all_apps">打开全部应用次数</string>
+    <string name="stats_shortcuts">快捷方式次数</string>
+    <string name="stats_cancels">取消退出次数</string>
+    <string name="stats_success_rate">打开成功率</string>
+    <string name="stats_misfire_rate">误触率</string>
+    <string name="stats_avg_select">平均选择时长</string>
+    <string name="stats_avg_response">平均响应时间</string>
+    <string name="stats_avg_gap">平均两次呼出间隔</string>
+    <string name="stats_all_apps_share">全部应用占比</string>
+    <string name="stats_note">口径：成功率=有确定性结果的启动（不含 :ui 本地直启）；误触=呼出后 &lt;1s 取消（反射关掉）或呼出后 ≤500ms 内快速选中（反射快抓，应用/快捷方式）；停留 ≥1s 取消、正常节奏选中不算；基于最近 200 条事件；样本窗=各进程最近 200 条时长。</string>
+    <string name="logs_verbose_summary">逐手势明细（g#N/s#N），排查呼出灵敏度时开启；默认关（关闭时零开销），开启后下次手势生效</string>
 </resources>

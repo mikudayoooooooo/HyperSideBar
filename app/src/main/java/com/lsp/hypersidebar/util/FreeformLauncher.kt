@@ -5,6 +5,8 @@ import android.content.Intent
 import android.os.Process
 import android.os.UserHandle
 import android.util.Log
+import com.lsp.hypersidebar.BuildConfig
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "FreeformLauncher"
 
@@ -16,15 +18,20 @@ object FreeformLauncher {
      *  注册在模块包，跨进程拉起必须显式用模块包名。
      *
      *  迭代五批次 0：必须等于 app/build.gradle.kts 的 applicationId（APK 身份），
-     *  与源码 namespace（com.lsp.hypersidebar）解耦——改包名时此处同步改。 */
-    const val MODULE_PACKAGE = "io.github.mikudayoooooooo.hypersidebar"
+     *  与源码 namespace（com.lsp.hypersidebar）解耦——0912 起直接取 BuildConfig
+     *  （编译期常量内联），gradle 改包名此处自动跟随，不再依赖注释约定手工同步。 */
+    const val MODULE_PACKAGE = BuildConfig.APPLICATION_ID
     /** 源码命名空间（类路径前缀）：与 applicationId 解耦，跨进程寻址"包名 + 类路径"时拼接用。 */
     const val MODULE_CLASS_NAMESPACE = "com.lsp.hypersidebar"
+
+    /** 反射靶点（本类与 DataLoader 共用；ROM 漂移时按反编译同步这里） */
+    const val MIUI_MULTI_WINDOW_UTILS = "android.util.MiuiMultiWindowUtils"
+    const val START_ACTIVITY_AS_USER = "startActivityAsUser"
 
     fun launch(context: Context, packageName: String) {
         val clsName = getMainActivity(context, packageName)
         if (clsName == null) {
-            Log.w(TAG, "launch: cannot resolve main activity for $packageName")
+            HLog.w(TAG, "launch: cannot resolve main activity for $packageName")
             toastOnMain(context, "无法打开 $packageName：找不到入口 Activity")
             return
         }
@@ -49,24 +56,24 @@ object FreeformLauncher {
             configure?.invoke(this)
         }
         try {
-            val cls = Class.forName("android.util.MiuiMultiWindowUtils")
+            val cls = Class.forName(MIUI_MULTI_WINDOW_UTILS)
             val options = getActivityOptions(cls, context, context.packageName)
             if (options != null) {
                 val method = context.javaClass.getMethod(
-                    "startActivityAsUser",
+                    START_ACTIVITY_AS_USER,
                     Intent::class.java, android.os.Bundle::class.java, UserHandle::class.java
                 )
                 method.invoke(context, intent, options.toBundle(), Process.myUserHandle())
-                Log.i(TAG, "own activity freeform ok: ${activity.simpleName}")
+                HLog.i(TAG, "own activity freeform ok: ${activity.simpleName}")
                 return
             }
-            Log.w(TAG, "own pkg freeform options null (B4: no eligibility?) → plain launch")
+            HLog.w(TAG, "own pkg freeform options null (B4: no eligibility?) → plain launch")
         } catch (e: Throwable) {
-            Log.w(TAG, "own activity freeform failed: ${e.message} → plain launch")
+            HLog.w(TAG, "own activity freeform failed: ${e.message} → plain launch")
         }
         runCatching { context.startActivity(intent) }
             .onFailure {
-                Log.e(TAG, "own activity plain launch failed: ${it.message}")
+                HLog.e(TAG, "own activity plain launch failed: ${it.message}")
                 toastOnMain(context, "面板启动失败：${it.message}")
             }
     }
@@ -79,9 +86,9 @@ object FreeformLauncher {
      */
     private fun tryMiuiMultiWindow(context: Context, packageName: String, clsName: String) {
         try {
-            val cls = Class.forName("android.util.MiuiMultiWindowUtils")
+            val cls = Class.forName(MIUI_MULTI_WINDOW_UTILS)
             val options = getActivityOptions(cls, context, packageName) ?: run {
-                Log.w(TAG, "MiuiMultiWindow: getActivityOptions returned null")
+                HLog.w(TAG, "MiuiMultiWindow: getActivityOptions returned null")
                 // PRD §9.4 字面措辞（展示与启动之间资格变化的兜底）
                 toastOnMain(context, "该应用不支持小窗")
                 return
@@ -89,28 +96,23 @@ object FreeformLauncher {
             val intent = Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_LAUNCHER)
                 setClassName(packageName, clsName)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                // 只带 NEW_TASK 不带 MULTIPLE_TASK（0909 用户报告：对已全屏运行的应用
+                // 小窗化时"先弹小窗再关原应用"两段式观感）。MULTIPLE_TASK 强制开新任务
+                // 实例——MIUI 随后清理原全屏任务=两段式闪变；去掉后 NEW_TASK 命中既有
+                // 任务，AMS 携小窗 options 把任务整体移入 freeform（单次过渡，原生侧边栏
+                // 同语义）。未运行的应用照常全新拉起；已在本模块小窗的应用=把该窗带到
+                // 前台。AllApps 面板（launchSelfFreeform）本就只带 NEW_TASK，不受影响
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             val method = context.javaClass.getMethod(
-                "startActivityAsUser",
+                START_ACTIVITY_AS_USER,
                 Intent::class.java, android.os.Bundle::class.java, UserHandle::class.java
             )
             method.invoke(context, intent, options.toBundle(), Process.myUserHandle())
-            Log.i(TAG, "MiuiMultiWindow fallback success: $packageName/$clsName")
+            HLog.i(TAG, "MiuiMultiWindow fallback success: $packageName/$clsName")
         } catch (e: Exception) {
-            Log.e(TAG, "MiuiMultiWindow fallback failed: ${e.message}")
+            HLog.e(TAG, "MiuiMultiWindow fallback failed: ${e.message}")
             toastOnMain(context, "小窗启动失败：$packageName")
-        }
-    }
-
-    private fun toastOnMain(context: Context, msg: String) {
-        val show = Runnable {
-            runCatching {
-                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
-            }
-        }
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) show.run() else {
-            android.os.Handler(android.os.Looper.getMainLooper()).post(show)
         }
     }
 

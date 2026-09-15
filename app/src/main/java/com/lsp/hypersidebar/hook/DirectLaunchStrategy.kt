@@ -8,6 +8,7 @@ import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import com.lsp.hypersidebar.ShortcutRelayReceiver
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.FanLaunchStrategy
 import com.lsp.hypersidebar.util.FailureReason
@@ -22,8 +23,12 @@ import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutLauncher
 import com.lsp.hypersidebar.util.SystemLaunchStrategy
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "FanLaunch"
+
+/** 打开原生面板后恢复 dock 可见性的延时（openNativePanel → PanelHideState 复位） */
+private const val PANEL_HIDE_RESTORE_MS = 5_000L
 
 /**
  * securitycenter:ui 进程的直调策略。
@@ -56,13 +61,13 @@ class DirectLaunchStrategy(
     override fun openNativePanel(context: Context) {
         PanelHideState.hidden.set(true)
         val intent = Intent("com.miui.gamebooster.PANNEL_OPEN").apply {
-            setPackage("com.miui.securitycenter")
+            setPackage(HostPackages.UI_HOST)
         }
         context.sendBroadcast(intent, "com.miui.gamebooster.permission.PANNEL_OPEN")
-        Log.i(TAG, "openNativePanel: broadcast sent")
+        HLog.i(TAG, "openNativePanel: broadcast sent")
         Handler(Looper.getMainLooper()).postDelayed({
             PanelHideState.hidden.set(false)
-        }, 5000)
+        }, PANEL_HIDE_RESTORE_MS)
     }
 
     override fun launchShortcut(context: Context, shortcut: ShortcutAction) {
@@ -138,7 +143,7 @@ class DirectLaunchStrategy(
                     check.reason == FailureReason.NOT_EXPORTED)
             ) {
                 if (relayLaunchToModule(context, shortcut)) return
-                Log.w(TAG, "relay launch to module app failed, falling back to local launch")
+                HLog.w(TAG, "relay launch to module app failed, falling back to local launch")
             }
         }
 
@@ -175,7 +180,13 @@ class DirectLaunchStrategy(
                 pkg to "$pkg/$full"
             }
             .distinctBy { it.second }
-        FanPrewarmer.onFanShown(context, tileTargets, fanAppPkgs, RelayToken.read(remotePrefs))
+        FanPrewarmer.onFanShown(
+            context,
+            tileTargets,
+            // 图标预灌覆盖快捷栏宿主（此前只灌扇形包名，快捷栏图标冷呼出占位）
+            fanAppPkgs + quickActions.mapNotNull { it.packageName },
+            RelayToken.read(remotePrefs)
+        )
     }
 
     /** :ui → 模块 App root 代发：完整 ShortcutAction JSON 随广播携带（接收端无需读 prefs）。
@@ -198,10 +209,10 @@ class DirectLaunchStrategy(
                 RelayToken.attach(this, RelayToken.read(remotePrefs))
             }
             context.sendBroadcast(intent)
-            Log.i(TAG, "[${Trace.current ?: "-"}] relay launch to module app sent: id=${shortcut.id} kind=${shortcut.kind}")
+            HLog.i(TAG, "[${Trace.current ?: "-"}] relay launch to module app sent: id=${shortcut.id} kind=${shortcut.kind}")
             true
         }.getOrElse {
-            Log.e(TAG, "relay launch to module app failed", it)
+            HLog.e(TAG, "relay launch to module app failed", it)
             false
         }
     }

@@ -1,6 +1,7 @@
 package com.lsp.hypersidebar.util
 
 import android.util.Log
+import com.lsp.hypersidebar.util.HLog
 
 /**
  * 扇形 UI 类族预载（呼出首装配卡顿缓解，2026-09-05 日志实锤）：
@@ -37,9 +38,9 @@ object FanUiWarmup {
             val t0 = android.os.SystemClock.elapsedRealtime()
             CLASSES.forEach { name ->
                 runCatching { Class.forName(name, false, FanUiWarmup::class.java.classLoader) }
-                    .onFailure { Log.w(TAG, "preload miss: $name (${it.message})") }
+                    .onFailure { HLog.w(TAG, "preload miss: $name (${it.message})") }
             }
-            Log.i(TAG, "fan UI classes preloaded in ${android.os.SystemClock.elapsedRealtime() - t0}ms")
+            HLog.i(TAG, "fan UI classes preloaded in ${android.os.SystemClock.elapsedRealtime() - t0}ms")
         }.apply {
             isDaemon = true
             name = "FanUiWarmup"

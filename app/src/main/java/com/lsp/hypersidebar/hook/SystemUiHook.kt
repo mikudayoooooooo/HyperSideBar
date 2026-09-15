@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHook
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHooks
+import com.lsp.hypersidebar.util.HLog
 
 /**
  * SystemUI 进程 hook（批次 3，2026-09-05 定稿）：QS 磁贴数据层直点桥。
@@ -55,12 +56,12 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
         val adapterClass = runCatching {
             ClassLoaderProvider.safeClassLoader.loadClass(ADAPTER_CLASS)
         }.getOrNull() ?: run {
-            Log.w(TAG, "MiuiQSHostAdapter not found (ROM drift?)")
+            HLog.w(TAG, "MiuiQSHostAdapter not found (ROM drift?)")
             return
         }
         adapterClass.declaredConstructors.toList().createAfterHooks { param ->
             hostAdapter = param.thisObjectOrNull
-            Log.i(TAG, "MiuiQSHostAdapter stashed")
+            HLog.i(TAG, "MiuiQSHostAdapter stashed")
         }
     }
 
@@ -78,7 +79,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                             val expected = RelayToken.read(prefs)
                             val got = intent.getStringExtra(PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN)
                             if (expected.isNullOrEmpty() || got != expected) {
-                                Log.w(TAG, "qs tile click rejected: bad token")
+                                HLog.w(TAG, "qs tile click rejected: bad token")
                                 return
                             }
                             val cn = intent.getStringExtra(PrefKeys.QS_TILE_CLICK_EXTRA)
@@ -90,7 +91,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                     IntentFilter(PrefKeys.QS_TILE_CLICK_ACTION),
                     Context.RECEIVER_EXPORTED
                 )
-                Log.i(TAG, "qs tile click receiver registered (via Application.attach)")
+                HLog.i(TAG, "qs tile click receiver registered (via Application.attach)")
             }
     }
 
@@ -109,7 +110,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
      *  绑定那一半在下方「预热①」里已按方案 B 重写（见该处注释），不再无条件 unbind。 */
     private fun resolveAndClick(context: Context, cn: ComponentName, prebind: Boolean): Int {
         val adapter = hostAdapter ?: run {
-            Log.w(TAG, "clickTile: adapter not stashed yet")
+            HLog.w(TAG, "clickTile: adapter not stashed yet")
             return 0
         }
         return runCatching {
@@ -120,7 +121,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                 .first { it.name == "getCurrentQSTiles" && it.parameterCount == 0 }
                 .invoke(interactor) as? List<*>
                 ?: return@runCatching 0
-            Log.i(TAG, "clickTile: current tiles=${tiles.size}")
+            HLog.i(TAG, "clickTile: current tiles=${tiles.size}")
             val toSpec = cl.loadClass(CUSTOM_TILE_CLASS)
                 .methods.first { it.name == "toSpec" && it.parameterCount == 1 }
             val spec = toSpec.invoke(null, cn) as? String ?: return@runCatching 0
@@ -139,10 +140,10 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                     .firstOrNull { it.name == "createTile" && it.parameterCount == 1 }
                     ?.invoke(adapter, spec)
                     ?: run {
-                        Log.w(TAG, "clickTile: createTile returned null: $spec")
+                        HLog.w(TAG, "clickTile: createTile returned null: $spec")
                         return@runCatching 0
                     }
-                Log.i(TAG, "clickTile: tile created on demand: $spec")
+                HLog.i(TAG, "clickTile: tile created on demand: $spec")
                 createdTiles[spec] = created
                 created
             }
@@ -185,7 +186,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                     .first { it.name == "setBindRequested" && it.parameterCount == 1 }
                     .invoke(mgr, true)
             }.onFailure {
-                Log.w(TAG, "prime bind failed: ${it.javaClass.simpleName}: ${it.message}")
+                HLog.w(TAG, "prime bind failed: ${it.javaClass.simpleName}: ${it.message}")
             }
             // 预热②listening：TileLifecycleManager.onStartListening 置 mListening=true，
             // 未连接场景服务连上后冲刷按序投递 onStartListening→onClick（handlePendingMessages
@@ -195,7 +196,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                     .first { it.name == "onStartListening" && it.parameterCount == 0 }
                     .invoke(lifecycle)
             }.onFailure {
-                Log.w(TAG, "onStartListening failed: ${it.javaClass.simpleName}: ${it.message}")
+                HLog.w(TAG, "onStartListening failed: ${it.javaClass.simpleName}: ${it.message}")
             }
 
             // 预热③豁免：MIUI 安全服务 exemptTemporarily（与框架 handleClick 同款动作，
@@ -209,7 +210,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                         ?.invoke(ext)
                 }
             }.onFailure {
-                Log.w(TAG, "exemptTemporarily failed: ${it.javaClass.simpleName}: ${it.message}")
+                HLog.w(TAG, "exemptTemporarily failed: ${it.javaClass.simpleName}: ${it.message}")
             }
 
             // 字段诊断（21:45 对照实验：固定磁贴 handleClick 有日志且生效，created 磁贴
@@ -224,13 +225,13 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                 val listening = lifecycle?.let { runCatching { readField(it, "mListening") }.getOrNull() }
                 "pinned=$isPinned state=$state ext=$ext connected=$connected bound=$bound req=$req allow=$allow listening=$listening"
             }.getOrNull() ?: "diag failed"
-            Log.i(TAG, "clickTile: $diag")
+            HLog.i(TAG, "clickTile: $diag")
 
             if (prebind) {
                 // 预热模式（2026-09-07 fan 呼出预热制）：prime（绑定+listening+豁免）已完成，
                 // 不投递点击——未固定磁贴的实例已进 createdTiles 缓存，用户点击时直连命中。
                 // RESULT_CLICKED 语义="预热受理"（bindService 请求已发出，AMS 拉新进程）
-                Log.i(TAG, "clickTile: prebind only, click deferred to user: $spec")
+                HLog.i(TAG, "clickTile: prebind only, click deferred to user: $spec")
                 return SystemUiHookResult.RESULT_CLICKED
             }
 
@@ -241,10 +242,10 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                         tile.javaClass.methods
                             .firstOrNull { it.name == "click" && it.parameterCount == 1 }
                             ?.let { it.invoke(tile, null) }
-                        Log.i(TAG, "clickTile: clicked $spec")
-                    }.onFailure { Log.w(TAG, "click failed: ${it.message}") }
+                        HLog.i(TAG, "clickTile: clicked $spec")
+                    }.onFailure { HLog.w(TAG, "click failed: ${it.message}") }
                 }
-                Log.i(TAG, "clickTile: primed bind+listening, clicked $spec")
+                HLog.i(TAG, "clickTile: primed bind+listening, clicked $spec")
             } else {
                 // 未固定磁贴（created on demand）：handleClick 不可依赖（21:45 对照实验
                 // 实锤——clicked 后无 CustomTileExt 日志无动作；候选死因见上方 diag）。
@@ -257,21 +258,21 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                             readField(tile, "mWindowManager")?.let { wm ->
                                 wm.javaClass.methods
                                     .firstOrNull { it.name == "addWindowToken" && it.parameterCount == 4 }
-                                    ?.invoke(wm, token, 2035, 0, null)
+                                    ?.invoke(wm, token, TILE_WINDOW_TOKEN_TYPE, 0, null)
                             }
-                        }.onFailure { Log.w(TAG, "addWindowToken failed: ${it.message}") }
+                        }.onFailure { HLog.w(TAG, "addWindowToken failed: ${it.message}") }
                         val svc = readField(tile, "mService") ?: error("mService field is null")
                         svc.javaClass.methods
                             .first { it.name == "onClick" && it.parameterCount == 1 }
                             .invoke(svc, token)
-                        Log.i(TAG, "clickTile: direct onClick delivered $spec")
-                    }.onFailure { Log.w(TAG, "direct onClick failed: ${it.message}") }
+                        HLog.i(TAG, "clickTile: direct onClick delivered $spec")
+                    }.onFailure { HLog.w(TAG, "direct onClick failed: ${it.message}") }
                 }
-                Log.i(TAG, "clickTile: primed bind+listening, direct onClick scheduled $spec")
+                HLog.i(TAG, "clickTile: primed bind+listening, direct onClick scheduled $spec")
             }
             SystemUiHookResult.RESULT_CLICKED
         }.getOrElse {
-            Log.w(TAG, "clickTile failed: ${it.message}")
+            HLog.w(TAG, "clickTile failed: ${it.message}")
             0
         }
     }
@@ -291,7 +292,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                     ?.first { it.name == "hasPendingClick" && it.parameterCount == 0 }
                     ?.invoke(lifecycle) as? Boolean
             }.getOrNull()
-            Log.i(TAG, "clickTile: post-delivery pendingClick=$pending")
+            HLog.i(TAG, "clickTile: post-delivery pendingClick=$pending")
         }, DELIVERY_DIAG_DELAY_MS)
     }
 
@@ -317,6 +318,13 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
 
         /** 投递后诊断延迟：等 bindService→onServiceConnected 冲刷完成后再查 pendingClick */
         const val DELIVERY_DIAG_DELAY_MS = 800L
+
+        /**
+         * addWindowToken 的窗口类型（取值来自反编译 SystemUI handleClick 链路）：为磁贴
+         * 授予"磁贴内启动"窗口权限。ROM 内部类型未考证到公开常量名——语义勿改，ROM
+         * 升级若磁贴内启动失效优先怀疑此值漂移
+         */
+        const val TILE_WINDOW_TOKEN_TYPE = 2035
 
         /** createTile 现场创建的实例按 spec 缓存复用（上界=用户添加的磁贴快捷方式数） */
         val createdTiles = java.util.concurrent.ConcurrentHashMap<String, Any>()

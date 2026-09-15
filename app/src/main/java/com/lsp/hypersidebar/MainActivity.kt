@@ -2,6 +2,7 @@ package com.lsp.hypersidebar
 
 import com.lsp.hypersidebar.prefs.savePref
 import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.prefs.PrefsFiles
 import android.content.SharedPreferences
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -22,7 +23,7 @@ import com.lsp.hypersidebar.util.ConfigSync
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import io.github.libxposed.service.XposedService
 
-private const val PREFS_NAME = "hyperSidebar_prefs"
+private const val PREFS_NAME = PrefsFiles.APP_LOCAL
 
 class MainActivity : ComponentActivity() {
 
@@ -33,6 +34,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         fallbackPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+
+        // 日志采集器（迭代六 §11.2）：注册 REPLY 接收器（幂等），日志页/自检 v2 数据源
+        com.lsp.hypersidebar.util.LogCollector.register(applicationContext)
 
         // D7 修复：改走进程级绑定桥（原自注册 listener 在"设置页先完成绑定后，
         // 本 Activity 重建时二次注册收不到回调"路径下 remotePrefs 永远为 null

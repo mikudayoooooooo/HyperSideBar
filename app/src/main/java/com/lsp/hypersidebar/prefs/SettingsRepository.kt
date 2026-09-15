@@ -82,6 +82,11 @@ class SettingsRepository(val prefs: SharedPreferences) {
         prefs.getFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
     fun fanDimEnabled(): Boolean =
         prefs.getBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)
+    /** 背景模糊来源（auto / dialog / wallpaper / behind / off）；非法或缺失值一律回 auto */
+    fun fanBlurSource(): String =
+        prefs.getString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT)
+            ?.takeIf { it in LayoutDefaults.FAN_BLUR_SOURCE_VALUES }
+            ?: LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT
 
     fun customApps(): Set<String> = prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty()
 
@@ -123,6 +128,8 @@ class SettingsRepository(val prefs: SharedPreferences) {
             }
         }.apply()
         draft.clear()
+        // 草稿批量落盘不走 savePref，需同样显式推送（布局 BottomSheet 保存=10 键一次改）
+        com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged("(commitDraft)")
     }
 
     /** 丢弃草稿（取消）。 */
@@ -158,11 +165,18 @@ class SettingsRepository(val prefs: SharedPreferences) {
             putFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
             putFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
             putBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)
+            putString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT)
         }.apply()
+        // 同上：批量写不走 savePref，显式推一次
+        com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged("(restoreAllDefaults)")
     }
 }
 
-/** 类型分发写 prefs（App 侧通用写入口）。 */
+/** 类型分发写 prefs（App 侧通用写入口）。
+ *
+ *  写完显式推一次配置同步——不让「设置能否热更新」依赖 `RemotePreferences` 是否回调本地
+ *  变更监听（未写进契约的隐藏依赖；一旦不回调，模块侧只剩「绑定完成即推一次」，
+ *  症状就是"改完不生效、重开设置 App 才生效"）。 */
 fun SharedPreferences.savePref(key: String, value: Any) {
     edit().apply {
         when (value) {
@@ -176,4 +190,5 @@ fun SharedPreferences.savePref(key: String, value: Any) {
             }
         }
     }.apply()
+    com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged(key)
 }

@@ -33,6 +33,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.sqrt
+import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "ComposeFanHost"
 
@@ -72,6 +73,87 @@ class ComposeFanHost(
     private var density = 1f
     private var pendingInput: GeometryInput? = null
 
+    // ===== 收拢动画协议（2026-09-13，用户拍板"加收拢动画"）=====
+    // dismiss 不再同步摘窗：递增 exitTick → 组合内三通道回 0（缩向锚点+淡出+scrim 淡出）
+    // → onExitFinished 回调摘窗。三道防线保证"不影响正常使用"：
+    // ① 收拢启动即 FLAG_NOT_TOUCHABLE（updateViewLayout）——150ms 内触摸全穿透，零拦截；
+    // ② attachGen 世代守卫——收拢中 re-show bump 世代，旧摘窗回调/兜底全部失效；
+    // ③ 兜底定时器——组合死亡/协程丢失时 400ms 强制摘窗（守卫幂等）
+    private val exitTickState: MutableState<Int> = mutableStateOf(0)
+    private var attachGen = 0
+    private var pendingExitGen = -1
+    private var currentParams: WindowManager.LayoutParams? = null
+
+    /** 本次呼出的背景模糊来源（show() 求值；preDraw/命中测试/渲染按此分派） */
+    private var blurSource: FanBackdropSource = FanBackdropSource.NONE
+
+    /** 本次呼出的壁纸位图（仅「采样壁纸」来源非空：竖屏 launcher 且缓存就绪） */
+    private var wallpaperBitmap: android.graphics.Bitmap? = null
+
+    /** 壁纸在全屏壁纸位图中的窗口原点偏移（当前恒 0：窗口全屏，无盒窗口平移） */
+    private var wallpaperOffset: androidx.compose.ui.unit.IntOffset =
+        androidx.compose.ui.unit.IntOffset.Zero
+
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private companion object {
+        /** 收拢兜底摘窗（正常收拢 ~150ms；覆盖组合卡顿余量） */
+        const val EXIT_FALLBACK_MS = 400L
+
+        /** 预热装配窗口保持时长：覆盖首帧绘制+JIT 稳定，之后摘窗（池内 composition 保留） */
+        const val WARMUP_HOLD_MS = 600L
+    }
+
+    /**
+     * 空闲预热装配（2026-09-13 横屏游戏首呼出动画卡顿）：1×1 离屏窗口（屏外 1 像素、
+     * NOT_TOUCHABLE，不可见不可摸）完成 Compose 运行时初始化+主题+内容树组合+首帧绘制
+     * （含 blur RenderEffect 着色器首编译）后摘窗。池内 composition/lifecycle 保留，
+     * 真呼出走 built=true 快路径——首呼出不再吃一次性装配成本。世代守卫：保持期内
+     * 真 show() 到来则照常 detach+世代自增，本预热摘窗自动失效。
+     */
+    fun warmup(context: Context, apps: List<FanAppInfo>, quickApps: List<FanAppInfo>) {
+        if (built) return
+        density = context.resources.displayMetrics.density
+        config = buildFanConfig()
+        val dm = context.resources.displayMetrics
+        // 锚点取屏心（纯占位——预热只求组合/绘制管线跑通，几何正确性无关紧要）
+        pendingInput = GeometryInput(
+            dm.widthPixels * 0.5f, dm.heightPixels * 0.5f, apps, quickApps, false
+        )
+        resetInteractionState()
+        buildComposition()
+        built = true
+        val wrapper = wrapperView ?: return
+        if (wrapper.isAttachedToWindow) detachWindow()
+        attachGen++
+        val params = buildWindowParams().apply {
+            width = 1
+            height = 1
+            x = -4
+            y = -4
+            flags = flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        currentParams = params
+        val gen = attachGen
+        try {
+            windowManager?.addView(wrapper, params)
+        } catch (e: Throwable) {
+            HLog.w(TAG, "warmup attach failed: ${e.message}")
+            detachWindow()
+            return
+        }
+        OneShotPreDrawListener.add(wrapper) { computeAndPublishGeometry(); true }
+        wrapper.post {
+            mainHandler.postDelayed({
+                if (gen == attachGen) {
+                    HLog.i(TAG, "warmup: detach after assembly (gen=$gen)")
+                    detachWindow()
+                }
+            }, WARMUP_HOLD_MS)
+        }
+        HLog.i(TAG, "warmup: 1x1 offscreen assembly attached (gen=$gen), ${apps.size} apps, ${quickApps.size} quick")
+    }
+
     // 窗口在屏上的原点（每手势 DOWN 刷新）：命中测试必须与渲染同处窗口本地坐标系。
     // 若 overlay 窗口被系统 inset（让出状态栏等），raw 屏幕坐标与本地坐标会差出
     // 一个状态栏高度（实测≈110px），"指到的图标"与"命中的扇区"系统性错一位
@@ -104,7 +186,7 @@ class ComposeFanHost(
         config = buildFanConfig()
         // 诊断（迭代二 P5）：呼出时回显实际读到的配置值——对照滑条改动可判定
         // hook 侧 prefs 是否实时同步（stale=快照不更新）
-        Log.i(
+        HLog.i(
             TAG,
             "config: icon=${config.iconSizeDp} inner=${config.innerRadiusDp}d outer=${config.outerRadiusDp}d " +
                 "dead=${config.deadZoneDp}d outerN=${config.maxAppsOuter} innerN=${config.maxAppsInner} landscape=$isLandscape " +
@@ -113,6 +195,16 @@ class ComposeFanHost(
         )
         pendingInput = GeometryInput(anchorX, anchorY, apps, quickApps, isLandscape)
         resetInteractionState()
+        // 壁纸磨砂（0914 用户拍板"优先 miuix 内部采样"）：launcher 与 :ui 双宿主同接、
+        // 共用同一张壁纸图（0915 用户拍板）——竖屏桌面采样内容=真实背景；横屏 :ui 垫的
+        // 也是壁纸（内容非游戏画面，用户接受）。位图由 WallpaperSampler 在 init 空闲期
+        // 预载，peek 零 binder；冷缓存退亚克力
+        if (context.packageName == "com.miui.home" ||
+            context.packageName == "com.miui.securitycenter"
+        ) {
+            com.lsp.hypersidebar.util.WallpaperSampler.refreshIfStale(context)
+            wallpaperBitmap = com.lsp.hypersidebar.util.WallpaperSampler.peek()
+        }
 
         // 耗时锚点（呼出卡顿归因）：firstBuild=首次装配（Compose 运行时类加载+首次组合，
         // 项目实测 ~250-300ms）；addView=窗口创建 binder+首帧前成本，每次呼出都发生
@@ -124,20 +216,75 @@ class ComposeFanHost(
         val wrapper = wrapperView ?: return
         try {
             // 防御：池化后理论上 dismiss 必摘窗口，但 compose 内部 onDismiss 等路径
-            // 若留下挂载态，重复 addView 会直接抛——先收敛到摘除态
+            // 若留下挂载态，重复 addView/setContentView 会直接抛——先收敛到摘除态
             if (wrapper.isAttachedToWindow) detachWindow()
             val tAddMs = SystemClock.elapsedRealtime()
-            wm.addView(wrapper, buildWindowParams())
-            Log.i(TAG, "addView: ${SystemClock.elapsedRealtime() - tAddMs}ms")
+            // 世代自增：在场的收拢回调/兜底定时器全部失效（收拢中再呼出=打断收拢直接重开）
+            attachGen++
+            // 背景模糊来源解析（Route D 0915 定稿：单项下拉，取代旧三开关互斥）。两条通道：
+            //  · 采样壁纸——miuix 内部采样，板材质完整生效，形状任意（横竖屏共用同一张壁纸）
+            //  · 后方屏幕全屏景深——FLAG_BLUR_BEHIND（MIUI 实现为全屏糊，非局部）
+            // 另有「透明」（不取背后内容也不加材质）与「关闭」（板自身即材质）两档。
+            // 失效则降级：所选来源不可用时退无来源，板永远有材质。
+            // 注：原「系统裁剪模糊（Dialog 背景模糊）」已退役——AOSP 背景模糊区域恒等于窗口
+            // 矩形，与楔形板形必然打架，只能给出一个圆角大矩形，用户否决。
+            val crossBlur = windowManager?.isCrossWindowBlurEnabled ?: false
+            blurSource = resolveBlurSource(
+                pref = readString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT),
+                crossWindowBlurEnabled = crossBlur,
+                wallpaperReady = wallpaperBitmap != null
+            )
+            wallpaperOffset = androidx.compose.ui.unit.IntOffset.Zero
+            val params = buildWindowParams()
+            if (blurSource == FanBackdropSource.BEHIND_SCREEN) {
+                params.flags = params.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+                // 半径单位 px（AOSP 建议 20px 起、上限 150px），不乘 density
+                params.blurBehindRadius = LayoutDefaults.FAN_BEHIND_BLUR_RADIUS_PX.toInt()
+            }
+            currentParams = params
+            wm.addView(wrapper, params)
+            HLog.i(TAG, "addView: ${SystemClock.elapsedRealtime() - tAddMs}ms source=$blurSource")
         } catch (e: Throwable) {
-            Log.e(TAG, "Failed to attach fan window", e)
+            HLog.e(TAG, "Failed to attach fan window", e)
             detachWindow()
             throw e // 上抛给 controller：失败可观测（熔断计数）并弃池
         }
         // 首帧绘制前算几何（origin-before-geometry，1B）：悬浮窗被系统 inset 后
         // 真实原点/尺寸只有布局后才可知。池化后视图多次 attach，OneShot 逐 show 重挂
         OneShotPreDrawListener.add(wrapper) { computeAndPublishGeometry(); true }
-        Log.i(TAG, "fan window attached (pooled=$built, firstBuild=$firstBuild), ${apps.size} apps, ${quickApps.size} quick")
+        HLog.i(TAG, "fan window attached (pooled=$built, firstBuild=$firstBuild), ${apps.size} apps, ${quickApps.size} quick")
+    }
+
+    /**
+     * 背景模糊来源解析（Route D 0915）。auto = 按能力自动选路，优先级体现「哪条路
+     * 能做出完整的 miuix 板」：壁纸就绪 → 采样壁纸（唯一拿得到真像素、模糊/混色/
+     * 噪点全部生效、形状任意；横竖屏共用同一张图，0915 用户拍板）→ 否则无来源
+     * （板自身即材质，最稳）。显式指定失效时同样降级。
+     */
+    private fun resolveBlurSource(
+        pref: String,
+        crossWindowBlurEnabled: Boolean,
+        wallpaperReady: Boolean
+    ): FanBackdropSource = when (pref) {
+        // auto 与 wallpaper 现行为一致：壁纸就绪即采样（横竖屏皆可）
+        PrefKeys.FAN_BLUR_SOURCE_AUTO,
+        PrefKeys.FAN_BLUR_SOURCE_WALLPAPER ->
+            if (wallpaperReady) FanBackdropSource.WALLPAPER else FanBackdropSource.NONE
+
+        PrefKeys.FAN_BLUR_SOURCE_BEHIND ->
+            if (crossWindowBlurEnabled) FanBackdropSource.BEHIND_SCREEN
+            else FanBackdropSource.NONE
+
+        PrefKeys.FAN_BLUR_SOURCE_TRANSPARENT -> FanBackdropSource.TRANSPARENT
+
+        PrefKeys.FAN_BLUR_SOURCE_OFF -> FanBackdropSource.NONE
+
+        // 非法/未知取值：按默认档解析（单一来源，改默认无需改这里；递归必达已知取值）
+        else -> resolveBlurSource(
+            LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT,
+            crossWindowBlurEnabled,
+            wallpaperReady
+        )
     }
 
     /** 逐呼出重置交互态（几何清空 → 首帧前不渲染，touch/选中态归零）。 */
@@ -155,13 +302,14 @@ class ComposeFanHost(
         val wrapper = wrapperView ?: return
         val loc = IntArray(2)
         runCatching { wrapper.getLocationOnScreen(loc) }
+        // 窗口恒为全屏 overlay：边距自适应直接用窗口本地系（锚点减去窗口实际原点）
         val g = computeFanGeometry(
             Offset(input.anchorX - loc[0], input.anchorY - loc[1]),
             IntSize(wrapper.width, wrapper.height),
             input.apps, input.quickApps, config, density, input.isLandscape
         )
         geometryState.value = g
-        Log.i(
+        HLog.i(
             TAG,
             "geometry: origin=(${loc[0]},${loc[1]}) winSize=(${wrapper.width},${wrapper.height}) " +
                 "rawAnchor=(${input.anchorX.toInt()},${input.anchorY.toInt()}) anchor=(${g.anchor.x.toInt()},${g.anchor.y.toInt()}) " +
@@ -199,9 +347,14 @@ class ComposeFanHost(
                             dimEnabled = readBoolean(
                                 PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED
                             ),
+                            source = blurSource,
+                            wallpaper = if (blurSource == FanBackdropSource.WALLPAPER) wallpaperBitmap else null,
+                            wallpaperOffset = wallpaperOffset,
+                            exitTick = exitTickState.value,
+                            onExitFinished = { finishExitFromCompose() },
                             onAppSelected = { app -> onAppSelected?.invoke(app) },
                             onQuickAppSelected = { app -> onQuickAppSelected?.invoke(app) },
-                            // compose 内部请求收起 → 走同一 dismiss 语义（摘窗口+通知 controller）
+                            // compose 内部请求收起 → 走同一 dismiss 语义（收拢+摘窗+通知 controller）
                             onDismiss = { dismiss() }
                         )
                     }
@@ -219,7 +372,7 @@ class ComposeFanHost(
                 if (!originValid && isAttachedToWindow && width > 0) {
                     runCatching { getLocationOnScreen(viewOrigin) }
                     originValid = true
-                    Log.i(TAG, "fan origin=(${viewOrigin[0]},${viewOrigin[1]}) size=(${width},${height})")
+                    HLog.i(TAG, "fan origin=(${viewOrigin[0]},${viewOrigin[1]}) size=(${width},${height})")
                 }
                 // 几何未就绪（首帧布局前的 ~1 帧）：消费事件不解析——屏上无渲染，无图标
                 // 可命中；事件归属本手势，漏给下层应用会成幽灵触摸
@@ -297,7 +450,7 @@ class ComposeFanHost(
                         // 预选时长检查（违反 PRD"预选不足 150ms 松手不启动"）
                         val dwellMs = if (selectedSince == 0L) 0L else SystemClock.uptimeMillis() - selectedSince
                         val hitItem = geometry.items.getOrNull(fanSel)
-                        Log.i(
+                        HLog.i(
                             TAG,
                             "UP resolve: local=(${x.toInt()},${y.toInt()}) raw=(${rawX.toInt()},${rawY.toInt()}) " +
                                 "dist=${dist.toInt()} deg=${"%.1f".format(deg)} fan=$fanSel" +
@@ -322,11 +475,11 @@ class ComposeFanHost(
                                 Log.d(TAG, "dwell too short: ${dwellTime}ms, not launching")
                             }
                             anySelected -> {
-                                Log.i(TAG, "selected fan: ${geometry.items[fanSel].app.packageName}")
+                                HLog.i(TAG, "selected fan: ${geometry.items[fanSel].app.packageName}")
                                 onAppSelected?.invoke(geometry.items[fanSel].app)
                             }
                             anyQuick -> {
-                                Log.i(TAG, "selected quick: ${geometry.quickApps[quickSel].packageName}")
+                                HLog.i(TAG, "selected quick: ${geometry.quickApps[quickSel].packageName}")
                                 onQuickAppSelected?.invoke(geometry.quickApps[quickSel])
                             }
                         }
@@ -372,32 +525,67 @@ class ComposeFanHost(
         } catch (e: Throwable) {
             // "not attached"= 窗口已不在（等价摘除成功）；其余异常窗口同样已脱离
             // 本进程管理——都按"摘除已确认"处理
-            Log.w(TAG, "removeView failed (treated as detached): ${e.message}")
+            HLog.w(TAG, "removeView failed (treated as detached): ${e.message}")
         }
         resetInteractionState()
     }
 
     fun dismiss() {
-        // 池化（1C P2）：只摘窗口+清交互态，composition/lifecycle/视图树保留供下次呼出；
-        // 全量销毁走 destroy()（controller 在 show 失败弃池时调用）。isShowing 与
-        // "窗口真实挂载"仍强一致：detach 即 idle，controller 侧状态由 onDismiss 清位
+        val wv = wrapperView
+        // 无内容可收拢（未挂载/几何未出）或未构建：维持旧瞬时语义，直接摘
+        if (wv == null || !built || !wv.isAttachedToWindow || geometryState.value == null) {
+            detachWindow()
+            onDismiss?.invoke()
+            return
+        }
+        // 收拢三防线之一：触摸立即穿透（交互零延迟，画面再收 150ms）
+        setWindowNotTouchable()
+        val gen = attachGen
+        pendingExitGen = gen
+        exitTickState.value = exitTickState.value + 1
+        // 收拢三防线之三：兜底摘窗（组合死亡/协程丢失；世代守卫幂等，正常路径先到先摘）
+        mainHandler.postDelayed({ teardownIfCurrent(gen) }, EXIT_FALLBACK_MS)
+        HLog.i(TAG, "dismiss: exit animation requested (gen=$gen)")
+    }
+
+    /** 组合内收拢动画完成回调 → 摘窗（世代不符=收拢中已被 re-show 打断，忽略）。 */
+    private fun finishExitFromCompose() {
+        teardownIfCurrent(pendingExitGen)
+    }
+
+    /** 世代守卫摘窗：摘除+清交互态+通知 controller。幂等（世代自增后重复调用无效）。 */
+    private fun teardownIfCurrent(gen: Int) {
+        if (gen == -1 || gen != attachGen) return
+        attachGen++
+        pendingExitGen = -1
         detachWindow()
         onDismiss?.invoke()
     }
 
+    /** 收拢启动即断触摸：窗口仍挂载但事件全穿透到下层（返回手势/点击零拦截）。 */
+    private fun setWindowNotTouchable() {
+        val params = currentParams ?: return
+        runCatching {
+            params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            windowManager?.updateViewLayout(wrapperView, params)
+        }.onFailure { HLog.w(TAG, "setNotTouchable failed: ${it.message}") }
+    }
+
     /** 全量销毁（弃池时）：controller 在 show 失败后调用，host 不得再复用。 */
     fun destroy() {
+        attachGen++ // 在场收拢回调/兜底全部失效
         detachWindow()
         composeView?.let { cv ->
             composeView = null
             runCatching { cv.disposeComposition() }
-                .onFailure { Log.w(TAG, "disposeComposition failed: ${it.message}") }
+                .onFailure { HLog.w(TAG, "disposeComposition failed: ${it.message}") }
         }
         lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         lifecycleOwner?.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         lifecycleOwner = null
         wrapperView = null
         windowManager = null
+        currentParams = null
         built = false
         pendingInput = null
     }
@@ -571,7 +759,7 @@ class ComposeFanHost(
             val cy = geometry.quickBarY + barPadding + quickIconPx / 2f
             val d = sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy))
             if (d <= quickIconPx * 0.7f) {
-                Log.i(TAG, "quickSelected: ${quickAppsList[i].packageName} (dist=${d.toInt()}px)")
+                HLog.i(TAG, "quickSelected: ${quickAppsList[i].packageName} (dist=${d.toInt()}px)")
                 onQuickAppSelected?.invoke(quickAppsList[i])
                 return
             }
@@ -589,7 +777,6 @@ class ComposeFanHost(
     private fun buildFanConfig(): FanConfig {
         return FanConfig(
             iconSizeDp = readFloat(PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE),
-            quickIconSizeDp = LayoutDefaults.QUICK_ICON_SIZE,
             innerRadiusDp = readFloat(PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS),
             outerRadiusDp = readFloat(PrefKeys.OUTER_RADIUS_MAX, LayoutDefaults.OUTER_RADIUS_MAX),
             deadZoneDp = readFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE),
@@ -615,6 +802,10 @@ class ComposeFanHost(
 
     private fun readBoolean(key: String, default: Boolean): Boolean {
         return try { prefs.getBoolean(key, default) } catch (_: Exception) { default }
+    }
+
+    private fun readString(key: String, default: String): String {
+        return try { prefs.getString(key, default) ?: default } catch (_: Exception) { default }
     }
 
     @Composable

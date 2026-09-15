@@ -11,6 +11,8 @@ import com.lsp.hypersidebar.util.AppMetaCache
 import com.lsp.hypersidebar.util.DataLoader
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutStore
+import com.lsp.hypersidebar.util.HLog
+import com.lsp.hypersidebar.util.StatsRecorder
 
 private const val TAG = "FanMenuController"
 
@@ -42,6 +44,10 @@ class FanMenuController(
         private set
     private var host: ComposeFanHost? = null
 
+    // ===== 数据记录（§11.3） =====
+    private var showStartElapsed = 0L
+    @Volatile private var exitAfterLaunch = false
+
     // 池=1（1C P2）：dismiss 后 host 不销毁，idleHost 持有供下次呼出复用；
     // activeContext = 最近一次 showInternal 的 context（回调经它取，见 obtainHost）
     private var idleHost: ComposeFanHost? = null
@@ -59,7 +65,7 @@ class FanMenuController(
         // 触摸流断供：手势中止/事件链断裂，UP 收起与滑回重置都不再有人驱动——
         // 0.x"fan 常驻"症状的最后防线（唯一不依赖事件流的收起路径）
         watchdogFires++
-        Log.w(TAG, "idle watchdog: no touch for ${idleMs}ms, self-dismiss (fire #$watchdogFires)")
+        HLog.w(TAG, "idle watchdog: no touch for ${idleMs}ms, self-dismiss (fire #$watchdogFires)")
         dismiss()
     }
 
@@ -77,7 +83,7 @@ class FanMenuController(
         // hook 的触摸回调可能不在主线程（launcher 的 GestureStubView.onTouchEvent 经
         // MiuiMirror 输入线程分发，实测 tid≠主线程）；Compose 生命周期装配必须主线程
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
-            Log.i(TAG, "show: hopping to main thread (from ${Thread.currentThread().name})")
+            HLog.i(TAG, "show: hopping to main thread (from ${Thread.currentThread().name})")
             mainHandler.post { showInternal(context, anchorX, anchorY) }
         } else {
             showInternal(context, anchorX, anchorY)
@@ -87,7 +93,7 @@ class FanMenuController(
     private fun showInternal(context: Context, anchorX: Float, anchorY: Float) {
         // 实测轮七：入口状态遥测——定位 isShowing 被无日志翻转的路径（双开根因）
         Trace.current = Trace.new()
-        Log.i(TAG, tl() + "showInternal enter: isShowing=$isShowing host=${host != null} anchor=($anchorX,$anchorY)")
+        HLog.i(TAG, tl() + "showInternal enter: isShowing=$isShowing host=${host != null} anchor=($anchorX,$anchorY)")
         if (isShowing && host != null) return
         // 耗时锚点（呼出卡顿归因）：cost=本次呼出主线程装配全程；firstAssembly=true
         // =本进程池为空（进程冷启/被杀后首呼出），这是"有时候呼出会卡"的头号嫌疑段
@@ -97,95 +103,139 @@ class FanMenuController(
         // 防御性单窗口不变量：任何状态下不允许两个 fan 窗口并存——
         // 若 isShowing 已被异常翻回 false 而旧 host 仍存活，先拆除再建新
         host?.let { stale ->
-            Log.w(TAG, "showInternal: orphan host detected, tearing down")
+            HLog.w(TAG, "showInternal: orphan host detected, tearing down")
             runCatching { stale.dismiss() }
         }
         host = null
-        Log.i(TAG, "show: anchor=($anchorX, $anchorY)")
+        HLog.i(TAG, "show: anchor=($anchorX, $anchorY)")
 
         try {
             val isLandscape = context.resources.configuration.orientation ==
                 android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
-            val (maxOuter, maxInner) = if (isLandscape) {
-                readPref(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER) to
-                    readPref(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
-            } else {
-                readPref(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER) to
-                    readPref(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER)
-            }
-
-            val customApps = readStringSetPref(PrefKeys.CUSTOM_APPS, emptySet())
-            // 已选固定应用的用户排序（§2.4 拖动排序）：CUSTOM_APPS_ORDER 为权威，
-            // 缺失项（旧数据/未排序）排在有序项之后
-            val customOrder = readCustomAppsOrder()
-            val orderedCustom = if (customOrder.isEmpty()) {
-                customApps
-            } else {
-                customApps.sortedBy { pkg ->
-                    customOrder.indexOf(pkg).let { if (it >= 0) it else Int.MAX_VALUE }
-                }
-            }
-
-            val allSystemApps = DataLoader.loadApps(context)
-            val merged = LinkedHashSet<String>()
-            merged.addAll(orderedCustom)
-            merged.addAll(allSystemApps)
-            // 圈内末位常驻"全部应用"入口（PRD §7.3.2）：合并列表截到（总数-1）留出末位，
-            // 哨兵项计入 7+4 参与正常环布局；合并列表为空时扇形单独承载哨兵（不再中止呼出）
-            val apps = merged.take((maxOuter + maxInner - 1).coerceAtLeast(0))
-                .map { pkg -> FanAppInfo(pkg, AppMetaCache.label(context, pkg)) } +
-                FanAppInfo(ALL_APPS_PKG, "全部应用")
-
-            // 快捷栏单一来源：面板占位（第一位，可用时）+ 用户启用的 shortcut_actions（PRD §7.1）
-            val runtimeQuick = ShortcutStore.buildRuntimeQuickList(
-                prefs,
-                ShortcutStore.isToolboxAvailable(context),
-                ShortcutStore.getToolboxLabel(context)
-            )
-            val allQuick = runtimeQuick.map { sa ->
-                FanAppInfo(
-                    // 真实宿主包名（批次 2 修复）：此前用 "shortcut:${id}" 伪包名，
-                    // IconLoader.getApplicationIcon 必然 NameNotFound → drawable=null
-                    // → 快捷栏退化字首头像（圆形）而非宿主真图标。启动逻辑不依赖
-                    // packageName（走 actionHandle 闭包捕获的 sa），改真包名无副作用
-                    packageName = sa.packageName ?: "",
-                    appName = sa.label,
-                    actionHandle = { ctx ->
-                        if (sa.kind == ShortcutKind.TOOLBOX) {
-                            launchStrategy.openNativePanel(ctx)
-                        } else {
-                            launchStrategy.launchShortcut(ctx, sa)
-                        }
-                    }
-                )
-            }
+            val data = assembleFanData(context)
 
             // 池=1 复用（1C P2）：host 不逐呼出重建，context 经 activeContext 提供
             activeContext = context
             val firstAssembly = idleHost == null
             val fanHost = obtainHost()
             host = fanHost
-            fanHost.show(anchorX, anchorY, apps, allQuick, isLandscape)
+            fanHost.show(anchorX, anchorY, data.apps, data.allQuick, isLandscape)
             touchHeartbeat()
+            // 数据记录（§11.3）：呼出次数/响应时间/两次呼出间隔
+            exitAfterLaunch = false
+            showStartElapsed = android.os.SystemClock.elapsedRealtime()
+            StatsRecorder.onFanShown()
             // 呼出即预热（2026-09-07 预热制）：QS_TILE 目标包 kill+预 bind、图标缓存预灌。
             // 策略差异：仅 :ui 的 DirectLaunchStrategy 覆写有动作，launcher 空实现
             launchStrategy.onFanShown(
                 context,
-                runtimeQuick,
-                apps.map { it.packageName }.filter { it != ALL_APPS_PKG }
+                data.runtimeQuick,
+                data.apps.map { it.packageName }.filter { it != ALL_APPS_PKG }
             )
             onMechanismResult?.invoke(true, "show ok")
-            Log.i(TAG, tl() + "show: fan overlay added (pooled), ${allQuick.size} quick actions, landscape=$isLandscape, " +
+            HLog.i(TAG, tl() + "show: fan overlay added (pooled), ${data.allQuick.size} quick actions, landscape=$isLandscape, " +
                 "cost=${android.os.SystemClock.elapsedRealtime() - t0}ms, firstAssembly=$firstAssembly")
 
         } catch (e: Throwable) {
-            Log.e(TAG, tl() + "show FAILED: ${e.message}", e)
+            HLog.e(TAG, tl() + "show FAILED: ${e.message}", e)
             isShowing = false
             host = null
             evictIdleHost()
             onMechanismResult?.invoke(false, "show failed: ${e.message}")
         }
+    }
+
+    /** [assembleFanData] 产物：扇形列表+快捷栏渲染列表+快捷栏原始动作（onFanShown 预热用）。 */
+    private data class FanData(
+        val apps: List<FanAppInfo>,
+        val allQuick: List<FanAppInfo>,
+        val runtimeQuick: List<com.lsp.hypersidebar.util.ShortcutAction>,
+        val isLandscape: Boolean
+    )
+
+    /**
+     * 数据组装（呼出与空闲预热共用，主线程调用）：配置读取+固定应用/推荐合并+哨兵+快捷栏。
+     * label 经 AppMetaCache（init 时 preloadConfiguredFanIcons 已盘灌+预热固定项）。
+     */
+    private fun assembleFanData(context: Context): FanData {
+        val isLandscape = context.resources.configuration.orientation ==
+            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+        val (maxOuter, maxInner) = if (isLandscape) {
+            readPref(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER) to
+                readPref(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
+        } else {
+            readPref(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER) to
+                readPref(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER)
+        }
+
+        val customApps = readStringSetPref(PrefKeys.CUSTOM_APPS, emptySet())
+        // 已选固定应用的用户排序（§2.4 拖动排序）：CUSTOM_APPS_ORDER 为权威，
+        // 缺失项（旧数据/未排序）排在有序项之后
+        val customOrder = readCustomAppsOrder()
+        val orderedCustom = if (customOrder.isEmpty()) {
+            customApps
+        } else {
+            customApps.sortedBy { pkg ->
+                customOrder.indexOf(pkg).let { if (it >= 0) it else Int.MAX_VALUE }
+            }
+        }
+
+        val allSystemApps = DataLoader.loadApps(context)
+        val merged = LinkedHashSet<String>()
+        merged.addAll(orderedCustom)
+        merged.addAll(allSystemApps)
+        // 圈内末位常驻"全部应用"入口（PRD §7.3.2）：合并列表截到（总数-1）留出末位，
+        // 哨兵项计入 7+4 参与正常环布局；合并列表为空时扇形单独承载哨兵（不再中止呼出）
+        val apps = merged.take((maxOuter + maxInner - 1).coerceAtLeast(0))
+            .map { pkg -> FanAppInfo(pkg, AppMetaCache.label(context, pkg)) } +
+            FanAppInfo(ALL_APPS_PKG, "全部应用")
+
+        // 快捷栏单一来源：面板占位（第一位，可用时）+ 用户启用的 shortcut_actions（PRD §7.1）
+        val runtimeQuick = ShortcutStore.buildRuntimeQuickList(
+            prefs,
+            ShortcutStore.isToolboxAvailable(context),
+            ShortcutStore.getToolboxLabel(context)
+        )
+        val allQuick = runtimeQuick.map { sa ->
+            FanAppInfo(
+                // 真实宿主包名（批次 2 修复）：此前用 "shortcut:${id}" 伪包名，
+                // AppIconCache.load 的 getApplicationIcon 必然 NameNotFound → bitmap=null
+                // → 快捷栏退化字首头像（圆形）而非宿主真图标。启动逻辑不依赖
+                // packageName（走 actionHandle 闭包捕获的 sa），改真包名无副作用
+                packageName = sa.packageName ?: "",
+                appName = sa.label,
+                actionHandle = { ctx ->
+                    if (sa.kind == ShortcutKind.TOOLBOX) {
+                        launchStrategy.openNativePanel(ctx)
+                    } else {
+                        launchStrategy.launchShortcut(ctx, sa)
+                    }
+                }
+            )
+        }
+        return FanData(apps, allQuick, runtimeQuick, isLandscape)
+    }
+
+    /**
+     * 空闲预热装配（2026-09-13 横屏游戏首呼出动画卡顿定案）：首呼出的"首次 composition+
+     * 主题解析+内容树组合+首帧绘制"是一次性大成本（项目实测首装配 ~250-300ms 主线程块，
+     * 游戏场景 GPU/CPU 争用下更糟）——挪到进程 init 空闲期执行。1×1 离屏窗口（不可见、
+     * NOT_TOUCHABLE）完成试装配后即摘窗，池内 composition 保留；真呼出走 built=true
+     * 快路径。数据用真实配置列表（顺带热 label/图标路径），任意线程可调（自跳主线程）。
+     */
+    fun warmupAssembly(context: Context) {
+        if (isShowing || idleHost != null) return
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            mainHandler.post { warmupAssembly(context) }
+            return
+        }
+        runCatching {
+            val data = assembleFanData(context)
+            activeContext = context
+            obtainHost().warmup(context, data.apps, data.allQuick)
+        }.onFailure { HLog.w(TAG, tl() + "warmupAssembly failed: ${it.message}") }
     }
 
     fun hideAll() {
@@ -202,10 +252,17 @@ class FanMenuController(
         val ctx = activeContext ?: throw IllegalStateException("activeContext missing")
         return ComposeFanHost(ctx, prefs).apply {
             onAppSelected = { appInfo ->
-                Log.i(TAG, tl() + "onAppSelected: ${appInfo.packageName}")
+                HLog.i(TAG, tl() + "onAppSelected: ${appInfo.packageName}")
                 val context = activeContext
                 if (context != null) {
-                    if (appInfo.packageName == ALL_APPS_PKG) {
+                    val isAllApps = appInfo.packageName == ALL_APPS_PKG
+                    // 数据记录（§11.3）：打开次数/全部应用次数/选择时长
+                    StatsRecorder.onOpen(
+                        appInfo.packageName, isAllApps,
+                        (android.os.SystemClock.elapsedRealtime() - showStartElapsed).toInt()
+                    )
+                    exitAfterLaunch = true
+                    if (isAllApps) {
                         launchStrategy.launchAllApps(context)
                     } else {
                         launchStrategy.launchFreeform(context, appInfo.packageName)
@@ -215,10 +272,14 @@ class FanMenuController(
             }
 
             onQuickAppSelected = { appInfo ->
-                Log.i(TAG, tl() + "onQuickAppSelected: ${appInfo.packageName}")
+                HLog.i(TAG, tl() + "onQuickAppSelected: ${appInfo.packageName}")
                 val context = activeContext
                 if (context != null) {
                     if (appInfo.actionHandle != null) {
+                        StatsRecorder.onShortcut(
+                            (android.os.SystemClock.elapsedRealtime() - showStartElapsed).toInt()
+                        )
+                        exitAfterLaunch = true
                         appInfo.actionHandle.invoke(context)
                         dismiss()
                     } else {
@@ -242,7 +303,7 @@ class FanMenuController(
         idleHost?.let { h ->
             idleHost = null
             runCatching { h.destroy() }
-                .onFailure { Log.w(TAG, "idle host destroy failed: ${it.message}") }
+                .onFailure { HLog.w(TAG, "idle host destroy failed: ${it.message}") }
         }
     }
 
@@ -277,7 +338,7 @@ class FanMenuController(
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
             doDismiss("main")
         } else {
-            Log.i(TAG, tl() + "dismiss: posted from ${Thread.currentThread().name}")
+            HLog.i(TAG, tl() + "dismiss: posted from ${Thread.currentThread().name}")
             mainHandler.post { doDismiss("posted") }
         }
     }
@@ -289,13 +350,18 @@ class FanMenuController(
             isShowing = false
             return
         }
-        Log.i(TAG, tl() + "doDismiss($via): tearing down host")
-        // 强一致（1C §3）：先完成视图真实摘除，再清状态位——顺序颠倒会把
-        // "视图还活着"伪装成"已收起"，下次呼出在旧窗口之上再叠一个（双开根因）
+        HLog.i(TAG, tl() + "doDismiss($via): requesting host exit")
+        // 数据记录（§11.3）：未选中即退出=取消（启动后的自动退出不计）
+        StatsRecorder.onFanClosed(exitAfterLaunch)
+        exitAfterLaunch = false
+        // 摘除时序（2026-09-13 收拢动画改造）：host.dismiss() 请求收拢动画（内部即置
+        // FLAG_NOT_TOUCHABLE=触摸零拦截）后立即返回，物理摘窗由收拢完成回调执行
+        // （世代守卫防"收拢中再呼出"双窗；兜底定时器防回调丢失）。本侧状态位立即清
+        // =交互即死：isShowing=false 后事件不再转发，池化 host 由 idleHost 继续持有
         try {
             h.dismiss()
         } catch (e: Throwable) {
-            Log.w(TAG, "host.dismiss threw: ${e.message}")
+            HLog.w(TAG, "host.dismiss threw: ${e.message}")
         }
         isShowing = false
         host = null

@@ -6,11 +6,17 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** GitHub Release 检测更新；仓库地址与 AboutPage 的 PROJECT_URL 同源，改仓库时两处同步 */
+/**
+ * GitHub Release 检测更新。
+ * 仓库归属（[REPO_PATH]）是 AboutPage 项目地址/作者链接与本期 API 的同一来源（0912 收口）——
+ * 改仓库只改 REPO_PATH，不再两处手工同步。
+ */
 object UpdateChecker {
 
-    private const val RELEASES_API =
-        "https://api.github.com/repos/mikudayoooooooo/HyperSideBar/releases/latest"
+    /** 仓库归属（owner/name）：单源定义，RELEASES_API 与 AboutPage.PROJECT_URL 皆由此派生 */
+    const val REPO_PATH = "mikudayoooooooo/HyperSideBar"
+    const val REPO_URL = "https://github.com/" + REPO_PATH
+    private const val RELEASES_API = "https://api.github.com/repos/" + REPO_PATH + "/releases/latest"
     private const val TIMEOUT_MS = 8000
 
     data class ReleaseInfo(

@@ -64,6 +64,13 @@
             android:name=".UnfreezeRelayService"
             android:exported="true" />
 
+        <!-- hook 宿主 → 模块 App 配置拉取（迭代六 §11.1）：ConfigSync 广播对冻结宿主
+             静默丢弃，hook 侧 stale 时 bind 本服务拉全量配置兜底（bind 唤醒冻结/死进程）。
+             只读无 su，ACL=uid system 或两个 hook 宿主包 -->
+        <service
+            android:name=".ConfigPullService"
+            android:exported="true" />
+
     </application>
 
 </manifest>

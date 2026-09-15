@@ -9,6 +9,7 @@ import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -37,6 +38,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.BuildConfig
@@ -54,6 +56,7 @@ import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -68,6 +71,7 @@ internal fun AboutPage(
     service: XposedService?,
     prefs: SharedPreferences,
     prefsRevision: Int,
+    onNavigateToDiagnostics: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -153,6 +157,12 @@ internal fun AboutPage(
             countdown--
         }
     }
+
+    // 重启 hook 宿主（0912）：两段式确认——勾选只改选择，点「重启」才真正执行；
+    // 执行中禁用取消/再触发（WindowDialog 的 onDismissRequest 同步上锁）
+    var showHostRestart by remember { mutableStateOf(false) }
+    var selectedRestarts by remember { mutableStateOf(emptySet<String>()) }
+    var hostRestartBusy by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = modifier
@@ -291,32 +301,12 @@ internal fun AboutPage(
         item { SmallTitle(text = stringResource(R.string.debug_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                var selfCheckBusy by remember { mutableStateOf(false) }
-                BasicComponent(
-                    title = stringResource(R.string.selfcheck_export),
-                    summary = if (selfCheckBusy) {
-                        stringResource(R.string.selfcheck_exporting)
-                    } else {
-                        stringResource(R.string.selfcheck_export_summary)
-                    },
-                    onClick = {
-                        if (selfCheckBusy) return@BasicComponent
-                        selfCheckBusy = true
-                        updateScope.launch {
-                            val path = runCatching {
-                                val content = SelfCheck.generate(context, service, effectivePrefs)
-                                SelfCheck.export(context, content)
-                            }.getOrElse { context.getString(R.string.unknown) + " (${it.message})" }
-                            selfCheckBusy = false
-                            runCatching {
-                                Toast.makeText(
-                                    context,
-                                    context.getString(R.string.selfcheck_export_done, path),
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        }
-                    }
+                // 诊断与统计（0909 拍板）：调试区只留一个父入口，点进去再选
+                // 运行日志/使用统计/导出自检报告——本页不再平铺诊断功能行
+                ArrowPreference(
+                    title = stringResource(R.string.diagnostics_entry),
+                    summary = stringResource(R.string.diagnostics_entry_summary),
+                    onClick = onNavigateToDiagnostics
                 )
                 if (com.lsp.hypersidebar.BuildConfig.DEBUG) SwitchPreference(
                     title = stringResource(R.string.debug_relay_blackhole),
@@ -334,6 +324,13 @@ internal fun AboutPage(
                             effectivePrefs.savePref(PrefKeys.DEBUG_RELAY_BLACKHOLE, false)
                         }
                     }
+                )
+                // 重启 hook 宿主不限 debug（0912 拍板：调试区仅失联开关 debug 专属）——
+                // 远程排障/模块更新后重启三宿主是运维规程，release 用户同样需要
+                ArrowPreference(
+                    title = stringResource(R.string.debug_host_restart),
+                    summary = stringResource(R.string.debug_host_restart_summary),
+                    onClick = { showHostRestart = true }
                 )
             }
         }
@@ -387,12 +384,100 @@ internal fun AboutPage(
             }
         }
     )
+
+    // 重启 hook 宿主弹窗：样式对齐黑hole 确认弹窗（WindowDialog + 双等宽 TextButton）。
+    // 勾选行=Row 整体 clickable + Checkbox 仅作状态显示（触摸行内任意处均可切换）；
+    // 确认按钮无选中时禁用（变暗），执行中两键同锁防重复 force-stop
+    WindowDialog(
+        show = showHostRestart,
+        title = stringResource(R.string.debug_host_restart),
+        onDismissRequest = { if (!hostRestartBusy) showHostRestart = false },
+        content = {
+            Text(
+                text = stringResource(R.string.debug_host_restart_dialog_summary),
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                style = MiuixTheme.textStyles.footnote1
+            )
+            Spacer(Modifier.height(10.dp))
+            HostRestarter.HOSTS.forEach { host ->
+                val checked = host.pkg in selectedRestarts
+                val toggle = {
+                    if (!hostRestartBusy) {
+                        selectedRestarts = if (checked) selectedRestarts - host.pkg
+                        else selectedRestarts + host.pkg
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !hostRestartBusy, onClick = toggle)
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(host.label, style = MiuixTheme.textStyles.body2)
+                        Text(
+                            host.summary,
+                            style = MiuixTheme.textStyles.footnote1,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        )
+                    }
+                    // 行与勾选框共用同一 toggle：点行/点框都切换（checkbox 消费自身触摸，
+                    // 不会与 Row 的 clickable 叠加二次触发）
+                    Checkbox(ToggleableState(checked), toggle)
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(
+                    text = stringResource(R.string.layout_sheet_cancel),
+                    onClick = {
+                        selectedRestarts = emptySet()
+                        showHostRestart = false
+                    },
+                    enabled = !hostRestartBusy,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(20.dp))
+                TextButton(
+                    text = stringResource(
+                        if (hostRestartBusy) R.string.debug_host_restart_busy
+                        else R.string.debug_host_restart_action
+                    ),
+                    onClick = {
+                        val targets = HostRestarter.HOSTS.filter { it.pkg in selectedRestarts }
+                        if (targets.isEmpty() || hostRestartBusy) return@TextButton
+                        hostRestartBusy = true
+                        updateScope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                HostRestarter.restart(targets)
+                            }
+                            hostRestartBusy = false
+                            selectedRestarts = emptySet()
+                            showHostRestart = false
+                            val msg = buildString {
+                                if (result.ok.isNotEmpty()) append("已重启：").append(result.ok.joinToString("、"))
+                                if (result.failed.isNotEmpty()) {
+                                    if (isNotEmpty()) append("；")
+                                    append("失败：").append(result.failed.joinToString("、")).append("（检查 root 授权）")
+                                }
+                            }
+                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                        }
+                    },
+                    enabled = !hostRestartBusy && selectedRestarts.isNotEmpty(),
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColors(color = MiuixTheme.colorScheme.error)
+                )
+            }
+        }
+    )
 }
 
-// 项目地址取自仓库 origin（github.com/mikudayoooooooo/HyperSideBar）——改仓库时同步改这里
+// 项目地址与作者链接（0912 收口）：仓库名单源 UpdateChecker.REPO_PATH——改仓库只改那里
 private const val AUTHOR_HANDLE = "mikudayoooooooo"
-private const val AUTHOR_URL = "https://github.com/mikudayoooooooo"
-private const val PROJECT_URL = "https://github.com/mikudayoooooooo/HyperSideBar"
+private const val AUTHOR_URL = "https://github.com/" + AUTHOR_HANDLE
+private const val PROJECT_URL = UpdateChecker.REPO_URL
 
 /** 检查更新 UI 态；Failed 可重试，Available 点击跳 Release 页 */
 private sealed interface UpdateCheckState {

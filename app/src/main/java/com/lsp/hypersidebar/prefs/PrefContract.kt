@@ -312,8 +312,9 @@ object LayoutDefaults {
     /** 采样饱和度增益（玻璃质感） */
     const val FAN_BOARD_SATURATION = 1.15f
 
-    /** 背景模糊来源默认值（auto=按宿主与能力自动选路，见 ComposeFanHost.resolveBlurSource） */
-    const val FAN_BLUR_SOURCE_DEFAULT = PrefKeys.FAN_BLUR_SOURCE_AUTO
+    /** 背景模糊来源默认值：关闭=不取背后内容，板完全由板材质浓度决定（0915 用户拍板）；
+     *  非法取值的回落与「恢复默认」都引用本常量，改默认只改这里 */
+    const val FAN_BLUR_SOURCE_DEFAULT = PrefKeys.FAN_BLUR_SOURCE_OFF
 
     /** 背景模糊来源下拉的取值顺序——设置页下标 ↔ 契约字符串的唯一映射（UI 禁止内联） */
     val FAN_BLUR_SOURCE_VALUES = listOf(

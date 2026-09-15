@@ -266,6 +266,8 @@ class ComposeFanHost(
         crossWindowBlurEnabled: Boolean,
         wallpaperReady: Boolean
     ): FanBackdropSource = when (pref) {
+        // auto 与 wallpaper 现行为一致：壁纸就绪即采样（横竖屏皆可）
+        PrefKeys.FAN_BLUR_SOURCE_AUTO,
         PrefKeys.FAN_BLUR_SOURCE_WALLPAPER ->
             if (wallpaperReady) FanBackdropSource.WALLPAPER else FanBackdropSource.NONE
 
@@ -277,7 +279,12 @@ class ComposeFanHost(
 
         PrefKeys.FAN_BLUR_SOURCE_OFF -> FanBackdropSource.NONE
 
-        else -> if (wallpaperReady) FanBackdropSource.WALLPAPER else FanBackdropSource.NONE
+        // 非法/未知取值：按默认档解析（单一来源，改默认无需改这里；递归必达已知取值）
+        else -> resolveBlurSource(
+            LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT,
+            crossWindowBlurEnabled,
+            wallpaperReady
+        )
     }
 
     /** 逐呼出重置交互态（几何清空 → 首帧前不渲染，touch/选中态归零）。 */

@@ -83,17 +83,49 @@ internal fun FanBackgroundPage(prefs: SharedPreferences, modifier: Modifier = Mo
                             repo.save(PrefKeys.FAN_DIM_ENABLED, it)
                         }
                     )
-                    // 毛玻璃（0913 拍板路线②③）：blur-behind 包围盒窗口 + 快捷栏底板窗口内模糊
-                    var frostedOn by remember(effectivePrefs, repo.revision) {
-                        mutableStateOf(repo.fanFrostedEnabled())
+                    // 磨砂来源三开关（0915 定稿，互斥：开一个自动关其余；全关=亚克力板）
+                    fun saveBlurMode(save: (Boolean) -> Unit, self: Boolean) {
+                        if (self) {
+                            repo.save(PrefKeys.FAN_WALLPAPER_BLUR_ENABLED, false)
+                            repo.save(PrefKeys.FAN_BLUR_BEHIND_ENABLED, false)
+                            repo.save(PrefKeys.FAN_DIALOG_BLUR_ENABLED, false)
+                        }
+                        save(self)
+                    }
+                    var dialogBlurOn by remember(effectivePrefs, repo.revision) {
+                        mutableStateOf(repo.fanDialogBlurEnabled())
                     }
                     SwitchPreference(
-                        title = stringResource(R.string.fan_frosted_title),
-                        summary = stringResource(R.string.fan_frosted_summary),
-                        checked = frostedOn,
+                        title = stringResource(R.string.fan_dialog_blur_title),
+                        summary = stringResource(R.string.fan_dialog_blur_summary),
+                        checked = dialogBlurOn,
                         onCheckedChange = {
-                            frostedOn = it
-                            repo.save(PrefKeys.FAN_FROSTED_ENABLED, it)
+                            dialogBlurOn = it
+                            saveBlurMode({ v -> repo.save(PrefKeys.FAN_DIALOG_BLUR_ENABLED, v); dialogBlurOn = v }, it)
+                        }
+                    )
+                    var wallpaperBlurOn by remember(effectivePrefs, repo.revision) {
+                        mutableStateOf(repo.fanWallpaperBlurEnabled())
+                    }
+                    SwitchPreference(
+                        title = stringResource(R.string.fan_wallpaper_blur_title),
+                        summary = stringResource(R.string.fan_wallpaper_blur_summary),
+                        checked = wallpaperBlurOn,
+                        onCheckedChange = {
+                            wallpaperBlurOn = it
+                            saveBlurMode({ v -> repo.save(PrefKeys.FAN_WALLPAPER_BLUR_ENABLED, v); wallpaperBlurOn = v }, it)
+                        }
+                    )
+                    var behindOn by remember(effectivePrefs, repo.revision) {
+                        mutableStateOf(repo.fanBlurBehindEnabled())
+                    }
+                    SwitchPreference(
+                        title = stringResource(R.string.fan_blur_behind_title),
+                        summary = stringResource(R.string.fan_blur_behind_summary),
+                        checked = behindOn,
+                        onCheckedChange = {
+                            behindOn = it
+                            saveBlurMode({ v -> repo.save(PrefKeys.FAN_BLUR_BEHIND_ENABLED, v); behindOn = v }, it)
                         }
                     )
                 }

@@ -93,6 +93,15 @@ class ComposeFanHost(
 
     /** 本次呼出的壁纸位图（竖屏 launcher 且缓存就绪时非空→miuix 内部采样磨砂） */
     private var wallpaperBitmap: android.graphics.Bitmap? = null
+
+    /** 壁纸在全屏壁纸位图中的窗口原点偏移（Dialog=盒原点；全屏=0,0，误差被模糊吞掉） */
+    private var wallpaperOffset: androidx.compose.ui.unit.IntOffset =
+        androidx.compose.ui.unit.IntOffset.Zero
+
+    // 三模式标记（show() 求值；buildComposition 的组合 lambda 读用）
+    private var dialogMode = false
+    private var wallpaperMode = false
+    private var behindMode = false
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private companion object {
@@ -197,7 +206,9 @@ class ComposeFanHost(
         // 壁纸磨砂（0914 用户拍板"优先 miuix 内部采样"）：仅竖屏 launcher 宿主——
         // 背后恒为壁纸，采样内容=真实背景；:ui 横屏（游戏）垫壁纸=内容错误，不接。
         // 位图由 WallpaperSampler 在 init 空闲期预载，peek 零 binder；冷缓存退亚克力
-        if (context.packageName == "com.miui.home") {
+        if (context.packageName == "com.miui.home" ||
+            context.packageName == "com.miui.securitycenter"
+        ) {
             com.lsp.hypersidebar.util.WallpaperSampler.refreshIfStale(context)
             wallpaperBitmap = com.lsp.hypersidebar.util.WallpaperSampler.peek()
         }
@@ -221,12 +232,27 @@ class ComposeFanHost(
             // 背景模糊（AOSP 公开 API，按窗口背景 Drawable 轮廓裁剪=局部磨砂）。
             // FLAG_BLUR_BEHIND 路线退役——MIUI 把它实现为全屏糊（真机实锤 0914）。
             // 系统模糊被关（isCrossWindowBlurEnabled=false）→ 自动降级全屏窗口+窗内 scrim
-            frostedWindow = readBoolean(PrefKeys.FAN_FROSTED_ENABLED, LayoutDefaults.FAN_FROSTED_ENABLED) &&
-                (windowManager?.isCrossWindowBlurEnabled ?: false)
-            if (frostedWindow) {
+            // 磨砂来源三选一（0915 定稿互斥）：①Dialog 背景磨砂（AOSP 裁剪通道）
+            // ②采样壁纸（miuix 内部采样，窗口内）③后方屏幕全屏（FLAG_BLUR_BEHIND，
+            // MIUI=全屏糊）。全关=亚克力板（无系统 API）。优先级=开关顺序如下
+            val crossBlur = windowManager?.isCrossWindowBlurEnabled ?: false
+            dialogMode = readBoolean(PrefKeys.FAN_DIALOG_BLUR_ENABLED, LayoutDefaults.FAN_DIALOG_BLUR_ENABLED) && crossBlur
+            wallpaperMode = !dialogMode &&
+                readBoolean(PrefKeys.FAN_WALLPAPER_BLUR_ENABLED, LayoutDefaults.FAN_WALLPAPER_BLUR_ENABLED) &&
+                wallpaperBitmap != null
+            behindMode = !dialogMode && !wallpaperMode &&
+                readBoolean(PrefKeys.FAN_BLUR_BEHIND_ENABLED, LayoutDefaults.FAN_BLUR_BEHIND_ENABLED) && crossBlur
+            frostedWindow = dialogMode || wallpaperMode || behindMode
+            if (dialogMode) {
                 attachDialog(wrapper, anchorX, anchorY, apps, quickApps, isLandscape)
             } else {
+                wallpaperOffset = androidx.compose.ui.unit.IntOffset.Zero
                 val params = buildWindowParams()
+                if (behindMode) {
+                    params.flags = params.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+                    params.blurBehindRadius =
+                        (LayoutDefaults.FAN_BEHIND_BLUR_RADIUS_DP * density).toInt()
+                }
                 currentParams = params
                 wm.addView(wrapper, params)
             }
@@ -313,7 +339,8 @@ class ComposeFanHost(
                                 PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED
                             ) && !frostedWindow, // 毛玻璃模式全屏压暗由 FLAG_DIM_BEHIND 承担
                             frosted = frostedWindow,
-                            wallpaper = wallpaperBitmap,
+                            wallpaper = if (wallpaperMode) wallpaperBitmap else null,
+                            wallpaperOffset = wallpaperOffset,
                             exitTick = exitTickState.value,
                             onExitFinished = { finishExitFromCompose() },
                             onAppSelected = { app -> onAppSelected?.invoke(app) },
@@ -532,7 +559,7 @@ class ComposeFanHost(
             clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             // 背景模糊（AOSP 裁剪语义：区域=背景 Drawable 轮廓；150px=AOSP 上限档）。
             setBackgroundBlurRadius(
-                (LayoutDefaults.FAN_FROSTED_BLUR_RADIUS_DP * density).toInt()
+                (LayoutDefaults.FAN_DIALOG_BLUR_RADIUS_DP * density).toInt()
             )
             // 轮廓自定义=扇形饼+快捷栏胶囊并集 Path——模糊区域贴合板的实际形状，
             // 消灭矩形框感（0914 用户反馈"框太扎眼"）；自身 draw 留空（画面由 Compose 画）
@@ -552,6 +579,7 @@ class ComposeFanHost(
         dialog.setCanceledOnTouchOutside(false)
         dialog.setCancelable(false) // BACK/外部点击不得绕过收拢状态机
         currentParams = null
+        wallpaperOffset = androidx.compose.ui.unit.IntOffset(bounds.left, bounds.top)
         this.dialog = dialog
         dialog.show()
         HLog.i(

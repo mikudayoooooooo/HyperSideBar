@@ -35,6 +35,10 @@ object PrefKeys {
      *  +磨砂板（雾化滑条控浓度，延伸覆盖快捷栏=连体玻璃板）；系统模糊被关
      *  （isCrossWindowBlurEnabled=false）时自动降级全屏窗口 */
     const val FAN_FROSTED_ENABLED = "fanFrostedEnabled"
+    /** 磨砂来源三开关（互斥，0915 定稿） */
+    const val FAN_DIALOG_BLUR_ENABLED = "fanDialogBlurEnabled"
+    const val FAN_WALLPAPER_BLUR_ENABLED = "fanWallpaperBlurEnabled"
+    const val FAN_BLUR_BEHIND_ENABLED = "fanBlurBehindEnabled"
 
     const val CUSTOM_APPS = "customApps"
     // 已选固定应用的拖动排序（JSON 数组字符串，仅含已选包名；StringSet 不保序，
@@ -251,8 +255,12 @@ object LayoutDefaults {
     // 毛玻璃（0914 Route B 定稿）：默认关（保守 opt-in）。Dialog 窗口+setBackgroundBlurRadius
     // 背景模糊（AOSP 裁剪语义=局部磨砂，MIUI 实测局部生效）；150px=AOSP 文档上限（磨砂感
     // 最强档，80px 首测偏弱；文档警告超过 150 严重影响性能，勿再上调）
-    const val FAN_FROSTED_ENABLED = false
-    const val FAN_FROSTED_BLUR_RADIUS_DP = 150f
+    // 磨砂来源三开关（0915 用户定稿，互斥：设置页开一个关其余；全关=亚克力板默认态）
+    const val FAN_DIALOG_BLUR_ENABLED = false
+    const val FAN_WALLPAPER_BLUR_ENABLED = false
+    const val FAN_BLUR_BEHIND_ENABLED = false
+    const val FAN_DIALOG_BLUR_RADIUS_DP = 150f
+    const val FAN_BEHIND_BLUR_RADIUS_DP = 80f
 
     /** 所有布局相关键。恢复默认时批量写回。 */
     val layoutKeys = listOf(

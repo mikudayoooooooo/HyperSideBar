@@ -134,6 +134,7 @@ fun FanMenuCompose(
     dimEnabled: Boolean,
     frosted: Boolean,
     wallpaper: android.graphics.Bitmap?,
+    wallpaperOffset: IntOffset,
     exitTick: Int,
     onExitFinished: () -> Unit,
     onAppSelected: (FanAppInfo) -> Unit,
@@ -200,13 +201,18 @@ fun FanMenuCompose(
         // ——miuix 官方三步，AGSL 高斯+噪点+主题混色（暗色主题压亮防晃眼），零系统 API
         if (wallpaper != null) {
             val backdrop = rememberLayerBackdrop()
+            // 壁纸按窗口原点对齐铺（Dialog 盒=平移盒原点；窗口外部分被窗口裁掉）
             Box(modifier = Modifier.fillMaxSize().layerBackdrop(backdrop)) {
-                Image(
-                    bitmap = wallpaper.asImageBitmap(),
-                    contentDescription = null,
-                    contentScale = ContentScale.FillBounds,
-                    modifier = Modifier.fillMaxSize()
-                )
+                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                    drawImage(
+                        image = wallpaper.asImageBitmap(),
+                        srcOffset = IntOffset.Zero,
+                        srcSize = IntSize(wallpaper.width, wallpaper.height),
+                        dstOffset = IntOffset(-wallpaperOffset.x, -wallpaperOffset.y),
+                        dstSize = IntSize(geometry.windowSize.width, geometry.windowSize.height),
+                        filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium
+                    )
+                }
             }
             Box(
                 modifier = Modifier

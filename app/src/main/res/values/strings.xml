@@ -67,7 +67,12 @@
     <string name="fan_fog_summary">磨砂板浓度 %1$d%%（0 为透明，仅剩弧线与图标；毛玻璃开启时身后内容由系统额外模糊）；改动下次呼出生效</string>
     <string name="fan_dim_title">背景压暗</string>
     <string name="fan_dim_summary">呼出扇形时全屏压暗 24%，突出菜单；改动下次呼出生效</string>
-    <string name="fan_frosted_title">毛玻璃</string>
+    <string name="fan_dialog_blur_title">背景磨砂（Dialog）</string>
+    <string name="fan_dialog_blur_summary">AOSP 背景模糊通道，按板轮廓裁剪；模糊画面由壁纸垫底提供；改动下次呼出生效</string>
+    <string name="fan_wallpaper_blur_title">采样壁纸磨砂（miuix）</string>
+    <string name="fan_wallpaper_blur_summary">壁纸垫底+miuix 纹理模糊内部采样（竖屏桌面像素对齐；横屏游戏内显示的是模糊壁纸而非游戏画面）；改动下次呼出生效</string>
+    <string name="fan_blur_behind_title">后方屏幕模糊（全屏）</string>
+    <string name="fan_blur_behind_summary">FLAG_BLUR_BEHIND 全屏景深（MIUI 实测全屏糊）；桌面观感佳、游戏慎用；改动下次呼出生效</string>
     <string name="fan_frosted_summary">仅扇形与快捷栏区域做系统级背景磨砂（AOSP 背景模糊通道，按板轮廓裁剪）；系统关闭模糊效果或材质引擎不可用时自动降级为纯色板；改动下次呼出生效</string>
     <string name="defaults_section">重置</string>
     <string name="restore_defaults">恢复默认值</string>

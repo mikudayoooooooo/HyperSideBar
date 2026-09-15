@@ -148,6 +148,8 @@ internal fun LogPage(
                 verbose = on
                 HLog.verboseEnabled = on
                 runCatching { prefs.edit().putBoolean(PrefKeys.DEBUG_VERBOSE_LOGS, on).apply() }
+                // 高频日志开关要热更新到三个进程（hook 侧 ConfigSync.applySync 也会就地刷新）
+                com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged(PrefKeys.DEBUG_VERBOSE_LOGS)
             })
         }
         // ===== 进程过滤 chips =====

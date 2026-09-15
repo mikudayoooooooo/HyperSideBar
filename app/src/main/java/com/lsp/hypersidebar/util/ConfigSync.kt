@@ -44,6 +44,16 @@ object ConfigSync {
     const val ACTION_SYNC = BuildConfig.APPLICATION_ID + ".CONFIG_SYNC"
     const val ACTION_REQUEST = BuildConfig.APPLICATION_ID + ".CONFIG_REQUEST"
 
+    /**
+     * 收讫回执（hook 进程 → 模块 App，仅诊断用，载荷=进程短名 + 键数，无敏感值）。
+     *
+     * 存在的理由：`ConfigSync` 这条链有四个可能断点——模块侧没推 / 推了投递失败（宿主被
+     * SmartPower 冻结时系统静默丢弃，见 ConfigPullService 注释）/ hook 侧收到没应用 /
+     * 应用了但读取方没走 SyncedPrefs。原先只能靠 logcat 两头对日志，极易误判；有回执后
+     * 「日志页 → 本应用 里有没有 `ack from launcher`」一句话就能把断点二分。
+     */
+    const val ACTION_SYNC_ACK = BuildConfig.APPLICATION_ID + ".CONFIG_SYNC_ACK"
+
     /** SYNC 定向投递目标（唯一消费方=两个 hook 宿主；隐式广播任意 App 可收，禁止回退隐式） */
     private val HOOK_HOST_PKGS = listOf(HostPackages.HOME, HostPackages.UI_HOST)
 
@@ -53,6 +63,9 @@ object ConfigSync {
 
     /** 最近一次收到 SYNC 的时刻（elapsedRealtime）；0=从未收到（init 快照兜底态） */
     @Volatile private var lastSyncAt = 0L
+
+    /** hook 侧 context（回执广播用）；由 [registerHookSide] 记下 */
+    @Volatile private var hookCtx: Context? = null
 
     /** 收到 SYNC 全量覆盖（键值均为 Bundle 可序列化基础类型/StringSet）。 */
     fun applySync(map: Map<String, Any>) {
@@ -64,6 +77,20 @@ object ConfigSync {
             HLog.verboseEnabled = it
         }
         HLog.i(TAG, "config synced: ${cache.size} keys")
+        sendAck(cache.size)
+    }
+
+    /** 回执：让模块 App 侧日志页能直接判定「推了到底有没有被收到」。 */
+    private fun sendAck(keyCount: Int) {
+        val c = hookCtx ?: return
+        runCatching {
+            c.sendBroadcast(
+                Intent(ACTION_SYNC_ACK)
+                    .setPackage(BuildConfig.APPLICATION_ID)
+                    .putExtra("proc", HLog.proc())
+                    .putExtra("n", keyCount)
+            )
+        }
     }
 
     fun overrideValue(key: String?): Any? = key?.let { cache[it] }
@@ -89,6 +116,24 @@ object ConfigSync {
     @Volatile private var moduleRegistered = false
 
     /**
+     * ⚠️ 写入监听**必须用字段强引用持有**（根因修复，0915 读 libxposed-service 源码定案）。
+     *
+     * `RemotePreferences` 内部是
+     * `Map<OnSharedPreferenceChangeListener, Object> mListeners = new WeakHashMap<>()`，
+     * 且它**没有**任何服务端推送入口——`registerOnSharedPreferenceChangeListener` 只是把
+     * listener 放进这张弱表，唯一的回调时机是本地 `Editor.doUpdate()`（即本进程自己写）。
+     * 所以裸 lambda 注册后一旦没有强引用，下一次 GC 就被回收，推送**静默停摆**，
+     * 模块侧只剩「绑定完成即推一次」——症状正是「改完设置不生效、重开设置 App 才生效」。
+     */
+    @Volatile
+    private var moduleWriteListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+
+    // 模块侧写入路径需要「写完就推」，但写入点（savePref 扩展、commitDraft、手写 edit()）
+    // 拿不到 Context——绑定完成时把二者存下来，由 [notifyConfigChanged] 复用。
+    @Volatile private var moduleCtx: Context? = null
+    @Volatile private var modulePrefs: SharedPreferences? = null
+
+    /**
      * 模块进程侧注册（幂等）：
      * - prefs 任何键写入即全量广播
      * - 绑定完成后立即推一次（设置页打开=配置刷新）
@@ -96,12 +141,16 @@ object ConfigSync {
      *   模块进程死了收不到，等用户开设置页自然补推）
      */
     fun ensureModuleSide(context: Context, prefs: SharedPreferences) {
+        moduleCtx = context.applicationContext
+        modulePrefs = prefs
         if (moduleRegistered) return
         moduleRegistered = true
         runCatching {
-            prefs.registerOnSharedPreferenceChangeListener { _, _ ->
-                sendSync(context, prefs)
+            val writeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                sendSync(context, prefs, key)
             }
+            moduleWriteListener = writeListener // 强引用存活，见字段注释
+            prefs.registerOnSharedPreferenceChangeListener(writeListener)
             context.registerReceiver(
                 object : BroadcastReceiver() {
                     override fun onReceive(c: Context, intent: Intent) {
@@ -111,9 +160,39 @@ object ConfigSync {
                 IntentFilter(ACTION_REQUEST),
                 Context.RECEIVER_EXPORTED
             )
+            // 回执接收（仅诊断）：模块进程活着时才收得到——而"改设置"必然发生在本进程活着时，
+            // 所以「日志页 → 本应用 → ack」是判定投递是否成功的有效信号
+            context.registerReceiver(
+                object : BroadcastReceiver() {
+                    override fun onReceive(c: Context, intent: Intent) {
+                        HLog.i(
+                            TAG,
+                            "ack: proc=${intent.getStringExtra("proc")} keys=${intent.getIntExtra("n", -1)}"
+                        )
+                    }
+                },
+                IntentFilter(ACTION_SYNC_ACK),
+                Context.RECEIVER_EXPORTED
+            )
             // 绑定完成即推一次：hook 进程启动早于模块进程时靠这条补齐
             sendSync(context, prefs)
         }
+    }
+
+    /**
+     * 模块进程侧：任何写入路径都可显式调用一次推送（[changedKey] 仅供日志定位）。
+     *
+     * 与上面那条写入监听是**双保险**，两者都要留：
+     * - 监听是主通道（覆盖所有走 `Editor` 的写入），但它的存活依赖上面的强引用；
+     * - 显式推送不依赖任何监听存活，且让「哪个写入点触发了一次同步」在代码上一眼可见
+     *   （排查时不必再回头确认监听活着没）。
+     * 代价是常规写入会推两次（每次两次定向广播，异步 oneway，成本可忽略）。
+     * 未注册（如 hook 进程误调）时静默 no-op。
+     */
+    fun notifyConfigChanged(changedKey: String? = null) {
+        val c = moduleCtx ?: return
+        val p = modulePrefs ?: return
+        sendSync(c, p, changedKey)
     }
 
     /**
@@ -121,7 +200,7 @@ object ConfigSync {
      * relayToken 必须剔除：hook 宿主经 LSPosed remotePrefs 自行读令牌，广播通道纯属冗余；
      * 带令牌的广播一旦离开定向范围即等于把 root 代发防伪令牌送人。
      */
-    fun sendSync(context: Context, prefs: SharedPreferences) {
+    fun sendSync(context: Context, prefs: SharedPreferences, changedKey: String? = null) {
         runCatching {
             val map = HashMap<String, Any>()
             for ((k, v) in prefs.all) {
@@ -136,7 +215,7 @@ object ConfigSync {
             }
             // 诊断锚点：与 hook 侧 "config synced" 配对——推了没收到=投递问题，
             // 没推=写入监听/绑定问题
-            HLog.i(TAG, "sendSync: ${map.size} keys, iconSize=${map[com.lsp.hypersidebar.prefs.PrefKeys.ICON_SIZE]}")
+            HLog.i(TAG, "sendSync: ${map.size} keys, changed=$changedKey")
         }.onFailure { HLog.w(TAG, "sendSync failed: ${it.message}") }
     }
 
@@ -152,6 +231,7 @@ object ConfigSync {
     fun registerHookSide(context: Context) {
         if (hookRegistered) return
         hookRegistered = true
+        hookCtx = context.applicationContext
         runCatching {
             context.registerReceiver(
                 object : BroadcastReceiver() {

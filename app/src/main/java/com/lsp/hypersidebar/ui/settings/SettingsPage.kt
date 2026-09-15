@@ -125,6 +125,8 @@ internal fun SettingsPage(
         effectivePrefs.edit()
             .putLong(PrefKeys.CIRCUIT_RESET_AT, System.currentTimeMillis())
             .commit()
+        // 熔断重试必须热更新：不推的话 hook 侧读不到新的 resetAt，按了没反应
+        com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged(PrefKeys.CIRCUIT_RESET_AT)
         probeScope.launch {
             delay(3000)
             probe.probe()

@@ -160,6 +160,8 @@ object ShortcutStore {
 
         try {
             prefs.edit().putString(KEY, arr.toString()).apply()
+            // 快捷方式列表是 hook 侧直接读的键，写完显式推一次配置同步（见 ConfigSync.notifyConfigChanged）
+            com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged(KEY)
             // 诊断锚点：快捷栏缺失问题时区分"保存没落盘"（无此行/条目缺）vs"扇形没读到"
             HLog.i(TAG, "saved ${userItems.size} shortcuts: " +
                 userItems.joinToString { "${it.kind}:${it.label}(${if (it.enabled) "on" else "off"})" })

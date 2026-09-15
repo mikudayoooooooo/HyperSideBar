@@ -82,12 +82,11 @@ class SettingsRepository(val prefs: SharedPreferences) {
         prefs.getFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
     fun fanDimEnabled(): Boolean =
         prefs.getBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)
-    fun fanDialogBlurEnabled(): Boolean =
-        prefs.getBoolean(PrefKeys.FAN_DIALOG_BLUR_ENABLED, LayoutDefaults.FAN_DIALOG_BLUR_ENABLED)
-    fun fanWallpaperBlurEnabled(): Boolean =
-        prefs.getBoolean(PrefKeys.FAN_WALLPAPER_BLUR_ENABLED, LayoutDefaults.FAN_WALLPAPER_BLUR_ENABLED)
-    fun fanBlurBehindEnabled(): Boolean =
-        prefs.getBoolean(PrefKeys.FAN_BLUR_BEHIND_ENABLED, LayoutDefaults.FAN_BLUR_BEHIND_ENABLED)
+    /** 背景模糊来源（auto / dialog / wallpaper / behind / off）；非法或缺失值一律回 auto */
+    fun fanBlurSource(): String =
+        prefs.getString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT)
+            ?.takeIf { it in LayoutDefaults.FAN_BLUR_SOURCE_VALUES }
+            ?: LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT
 
     fun customApps(): Set<String> = prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty()
 
@@ -164,6 +163,7 @@ class SettingsRepository(val prefs: SharedPreferences) {
             putFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
             putFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
             putBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)
+            putString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT)
         }.apply()
     }
 }

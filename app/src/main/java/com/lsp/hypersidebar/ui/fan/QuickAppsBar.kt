@@ -133,16 +133,14 @@ private fun QuickAppIcon(
     onClick: () -> Unit
 ) {
     val (bitmap, fallbackColor) = rememberAppIcon(context, app)
+    // 同 FanAppIcon：不靠降低透明度做未选中态（真机反馈可读性差），选中由放大+高亮板+描边表达
     val targetScale = if (isSelected) SELECTED_ICON_SCALE else 1f
-    val targetAlpha = if (isSelected) 1f else 0.75f
     val iconScale by animateFloatAsState(targetValue = targetScale, animationSpec = tween(100))
-    val iconAlpha by animateFloatAsState(targetValue = targetAlpha, animationSpec = tween(100))
 
     Box(
         modifier = Modifier
             .size(iconSize.dp)
             .scale(iconScale)
-            .alpha(iconAlpha)
             // B1 圆角 mask 统一：CircleShape → 圆角方（与扇形图标一致）
             .clip(RoundedCornerShape((iconSize * 0.25f).dp))
             .background(
@@ -168,8 +166,7 @@ private fun QuickAppIcon(
                     cornerRadius = androidx.compose.ui.geometry.CornerRadius(
                         size.minDimension * 0.25f, size.minDimension * 0.25f
                     ),
-                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()),
-                    alpha = iconAlpha
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx())
                 )
             }
         }

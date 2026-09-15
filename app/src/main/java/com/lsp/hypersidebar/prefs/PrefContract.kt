@@ -27,7 +27,8 @@ object PrefKeys {
     const val TRIGGER_DWELL_MS = "triggerDwellMs"
     const val TRIGGER_MIN_DISTANCE = "triggerMinDistance"
 
-    /** 磨砂板浓度（0~0.70，0=透明；0914 起全模式统一连体亮磨砂板，键名沿用旧雾化键保用户数值） */
+    /** 板材质浓度（0~0.70）：统一驱动 miuix 板材质的「主题混色 + Screen 提亮 + 噪点抖动」，
+     *  0=只剩弧线与图标。键名沿用旧雾化键，保用户已调数值 */
     const val FAN_FOG_INTENSITY = "fanFogIntensity"
     /** 呼出扇形时全屏压暗开关（Compose scrim 24% 黑，与菜单同步淡入） */
     const val FAN_DIM_ENABLED = "fanDimEnabled"
@@ -35,10 +36,19 @@ object PrefKeys {
      *  +磨砂板（雾化滑条控浓度，延伸覆盖快捷栏=连体玻璃板）；系统模糊被关
      *  （isCrossWindowBlurEnabled=false）时自动降级全屏窗口 */
     const val FAN_FROSTED_ENABLED = "fanFrostedEnabled"
-    /** 磨砂来源三开关（互斥，0915 定稿） */
-    const val FAN_DIALOG_BLUR_ENABLED = "fanDialogBlurEnabled"
-    const val FAN_WALLPAPER_BLUR_ENABLED = "fanWallpaperBlurEnabled"
-    const val FAN_BLUR_BEHIND_ENABLED = "fanBlurBehindEnabled"
+    /** 背景模糊来源（0915 Route D 定稿：单项下拉，取代旧三开关）。
+     *  取值见下方 FAN_BLUR_SOURCE_*；auto=按宿主与能力自动选路 */
+    const val FAN_BLUR_SOURCE = "fanBlurSource"
+    const val FAN_BLUR_SOURCE_AUTO = "auto"
+    /**
+     * 透明：不取背后内容、也不加板材质，只剩弧线与图标（原有的「系统裁剪模糊」已退役——
+     * AOSP 背景模糊区域恒等于窗口矩形，与楔形板形必然打架，一个圆角大矩形不可接受；
+     * 旧 key `dialog` 因此落到 auto）
+     */
+    const val FAN_BLUR_SOURCE_TRANSPARENT = "transparent"
+    const val FAN_BLUR_SOURCE_WALLPAPER = "wallpaper"
+    const val FAN_BLUR_SOURCE_BEHIND = "behind"
+    const val FAN_BLUR_SOURCE_OFF = "off"
 
     const val CUSTOM_APPS = "customApps"
     // 已选固定应用的拖动排序（JSON 数组字符串，仅含已选包名；StringSet 不保序，
@@ -252,15 +262,60 @@ object LayoutDefaults {
     const val FAN_DIM_ENABLED = false
     const val FAN_DIM_AMOUNT = 0.24f
 
-    // 毛玻璃（0914 Route B 定稿）：默认关（保守 opt-in）。Dialog 窗口+setBackgroundBlurRadius
-    // 背景模糊（AOSP 裁剪语义=局部磨砂，MIUI 实测局部生效）；150px=AOSP 文档上限（磨砂感
-    // 最强档，80px 首测偏弱；文档警告超过 150 严重影响性能，勿再上调）
-    // 磨砂来源三开关（0915 用户定稿，互斥：设置页开一个关其余；全关=亚克力板默认态）
-    const val FAN_DIALOG_BLUR_ENABLED = false
-    const val FAN_WALLPAPER_BLUR_ENABLED = false
-    const val FAN_BLUR_BEHIND_ENABLED = false
-    const val FAN_DIALOG_BLUR_RADIUS_DP = 150f
-    const val FAN_BEHIND_BLUR_RADIUS_DP = 80f
+    // ===== 板材质（Route D，0915 重构：板材质与「背后像素来源」解耦）=====
+    // 板 = miuix textureBlur 单条管线：采样 backdrop（壁纸 / 空）→ 高斯模糊 → 主题混色
+    // → Screen 白提亮 → 噪点抖动，按板形（扇形饼∪快捷栏胶囊）裁剪。
+    // 浓度滑条（FAN_FOG_INTENSITY）统一驱动「混色+提亮+噪点」，各来源按比例缩放：
+    //   · 采样壁纸——有真像素可糊，板要淡，否则闷死模糊
+    //   · 系统跨窗模糊 / 后方屏幕模糊——像素在窗口层，板再浓就盖死系统模糊，只出一层淡色保底可见
+    //   · 无来源——板自身承担全部材质，浓度直通
+    /** 内层模糊半径（dp）：AOSP/miuix 文档上限 150，120 为磨砂感与性能折中 */
+    const val FAN_BOARD_BLUR_RADIUS_DP = 120f
+    /** 噪点抗条带系数基数（= miuix BlurDefaults.NoiseCoefficient 同值） */
+    const val FAN_BOARD_NOISE_BASE = 0.0045f
+    /** 噪点系数随浓度的增量（亚克力颗粒感来源） */
+    const val FAN_BOARD_NOISE_SCALE = 0.030f
+    /** 板底混色浓度缩放：采样壁纸。壁纸常是亮色而主题可能是暗色，不压一层主题色就会得到
+     *  一块亮晃晃的板（真机 0915 反馈）——混色即「把背后真像素拉回主题色域」的主要手段 */
+    const val FAN_BOARD_VEIL_SCALE_WALLPAPER = 0.80f
+    /** 板底混色浓度缩放：系统模糊来源。这层是叠在真模糊**之上**的（零和），
+     *  浓一点就把系统模糊遮没了，必须极淡 */
+    const val FAN_BOARD_VEIL_SCALE_SYSTEM = 0.12f
+    /** 板底混色浓度缩放：无来源——混色即板的底色本身，故远大于前者 */
+    const val FAN_BOARD_VEIL_SCALE_PLAIN = 1.30f
+    /** 板底混色浓度下限：保证 backdrop 图层恒非空，miuix 混色/噪点管线有像素可依 */
+    const val FAN_BOARD_VEIL_MIN = 0.02f
+    /** 板底混色浓度上限 */
+    const val FAN_BOARD_VEIL_MAX = 0.92f
+    /** Screen 白提亮随浓度的缩放：有背后内容（同混色，宁淡勿浓） */
+    const val FAN_BOARD_SHEEN_SCALE_BLURRED = 0.06f
+    /** Screen 白提亮随浓度的缩放：无来源（板自身即材质） */
+    const val FAN_BOARD_SHEEN_SCALE_PLAIN = 0.15f
+    /** 亮度补偿（[−1,1]）：只给无来源的板用——自绘底色需要按主题微调；
+     *  有背后真像素时不额外提亮/压暗，否则亮壁纸会被推得更亮 */
+    const val FAN_BOARD_BRIGHTNESS_DARK = 0.04f
+    /** 亮色主题下的亮度补偿（白板易过曝，轻微下压） */
+    const val FAN_BOARD_BRIGHTNESS_LIGHT = -0.02f
+    /** 采样饱和度增益（玻璃质感） */
+    const val FAN_BOARD_SATURATION = 1.15f
+
+    /** 背景模糊来源默认值（auto=按宿主与能力自动选路，见 ComposeFanHost.resolveBlurSource） */
+    const val FAN_BLUR_SOURCE_DEFAULT = PrefKeys.FAN_BLUR_SOURCE_AUTO
+
+    /** 背景模糊来源下拉的取值顺序——设置页下标 ↔ 契约字符串的唯一映射（UI 禁止内联） */
+    val FAN_BLUR_SOURCE_VALUES = listOf(
+        PrefKeys.FAN_BLUR_SOURCE_AUTO,
+        PrefKeys.FAN_BLUR_SOURCE_WALLPAPER,
+        PrefKeys.FAN_BLUR_SOURCE_BEHIND,
+        PrefKeys.FAN_BLUR_SOURCE_TRANSPARENT,
+        PrefKeys.FAN_BLUR_SOURCE_OFF
+    )
+
+    /**
+     * FLAG_BLUR_BEHIND 全屏景深半径，单位 **px**。AOSP 文档：模糊后方屏幕 20px 即够，
+     * 同样不得超 150px。此处取 40px（比文档建议略强一点，全屏不刺眼）。
+     */
+    const val FAN_BEHIND_BLUR_RADIUS_PX = 40f
 
     /** 所有布局相关键。恢复默认时批量写回。 */
     val layoutKeys = listOf(
@@ -273,6 +328,9 @@ object LayoutDefaults {
         PrefKeys.LANDSCAPE_MAX_APPS_OUTER,
         PrefKeys.LANDSCAPE_MAX_APPS_INNER,
         PrefKeys.LANDSCAPE_INNER_RADIUS,
-        PrefKeys.LANDSCAPE_OUTER_RADIUS
+        PrefKeys.LANDSCAPE_OUTER_RADIUS,
+        PrefKeys.FAN_FOG_INTENSITY,
+        PrefKeys.FAN_DIM_ENABLED,
+        PrefKeys.FAN_BLUR_SOURCE
     )
 }

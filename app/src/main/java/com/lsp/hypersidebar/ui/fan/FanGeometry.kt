@@ -388,16 +388,3 @@ fun computeSelectedIndex(
 
     return bestIndex
 }
-
-/**
- * 几何平移到窗口本地系（毛玻璃包围盒窗口专用，0913）：computeFanGeometry 恒在"屏幕
- * 参考系"下做边距自适应/收角（需要全屏尺寸做房间计算），产物先按全屏系得出，再由
- * 本函数平移进"包围盒窗口本地系"。全屏窗口 dx=dy=0 恒等（原路径不受影响）。
- */
-internal fun FanGeometry.offsetBy(dx: Float, dy: Float, windowSize: IntSize): FanGeometry = copy(
-    anchor = Offset(anchor.x + dx, anchor.y + dy),
-    windowSize = windowSize,
-    items = items.map { it.copy(centerX = it.centerX + dx, centerY = it.centerY + dy) },
-    quickBarX = quickBarX + dx,
-    quickBarY = quickBarY + dy
-)

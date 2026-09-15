@@ -31,8 +31,11 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 /**
  * 扇形背景二级页（0913 用户拍板，首页交互区入口进入）。
  *
- * 路线 C 视觉（用户 2026-09-06 拍板）：雾化浓度滑条（0=关闭填充可在线 A/B）
- * + 背景压暗 opt-in 开关。均"拖动暂存、松手落盘（=一次 ConfigSync 广播）"节奏，
+ * Route D（0915 重构）：两条轴各自可控 ——
+ * - 板材质轴：「板材质浓度」滑条，统一驱动板的混色/提亮/颗粒（miuix textureBlur 管线）
+ * - 背景模糊轴：「背景模糊来源」单项下拉（自动/系统裁剪模糊/采样壁纸/后方屏幕全屏/关闭），
+ *   来源失效时由 host 自动降级，保证板永远有材质
+ * 另有「背景压暗」opt-in。均"拖动/选择即落盘（=一次 ConfigSync 广播）"节奏，
  * 改动下次呼出生效；revision 通道回读外部改动。
  */
 @Composable
@@ -83,49 +86,36 @@ internal fun FanBackgroundPage(prefs: SharedPreferences, modifier: Modifier = Mo
                             repo.save(PrefKeys.FAN_DIM_ENABLED, it)
                         }
                     )
-                    // 磨砂来源三开关（0915 定稿，互斥：开一个自动关其余；全关=亚克力板）
-                    fun saveBlurMode(save: (Boolean) -> Unit, self: Boolean) {
-                        if (self) {
-                            repo.save(PrefKeys.FAN_WALLPAPER_BLUR_ENABLED, false)
-                            repo.save(PrefKeys.FAN_BLUR_BEHIND_ENABLED, false)
-                            repo.save(PrefKeys.FAN_DIALOG_BLUR_ENABLED, false)
-                        }
-                        save(self)
-                    }
-                    var dialogBlurOn by remember(effectivePrefs, repo.revision) {
-                        mutableStateOf(repo.fanDialogBlurEnabled())
-                    }
-                    SwitchPreference(
-                        title = stringResource(R.string.fan_dialog_blur_title),
-                        summary = stringResource(R.string.fan_dialog_blur_summary),
-                        checked = dialogBlurOn,
-                        onCheckedChange = {
-                            dialogBlurOn = it
-                            saveBlurMode({ v -> repo.save(PrefKeys.FAN_DIALOG_BLUR_ENABLED, v); dialogBlurOn = v }, it)
-                        }
+                    // 背景模糊来源（Route D 定稿：单项下拉取代旧三开关互斥）。
+                    // 取值顺序 = 契约 LayoutDefaults.FAN_BLUR_SOURCE_VALUES，下标映射不得内联
+                    val sourceValues = LayoutDefaults.FAN_BLUR_SOURCE_VALUES
+                    val sourceOptions = listOf(
+                        stringResource(R.string.fan_blur_source_auto),
+                        stringResource(R.string.fan_blur_source_wallpaper),
+                        stringResource(R.string.fan_blur_source_behind),
+                        stringResource(R.string.fan_blur_source_transparent),
+                        stringResource(R.string.fan_blur_source_off)
                     )
-                    var wallpaperBlurOn by remember(effectivePrefs, repo.revision) {
-                        mutableStateOf(repo.fanWallpaperBlurEnabled())
-                    }
-                    SwitchPreference(
-                        title = stringResource(R.string.fan_wallpaper_blur_title),
-                        summary = stringResource(R.string.fan_wallpaper_blur_summary),
-                        checked = wallpaperBlurOn,
-                        onCheckedChange = {
-                            wallpaperBlurOn = it
-                            saveBlurMode({ v -> repo.save(PrefKeys.FAN_WALLPAPER_BLUR_ENABLED, v); wallpaperBlurOn = v }, it)
-                        }
+                    val sourceSummaries = listOf(
+                        stringResource(R.string.fan_blur_source_summary_auto),
+                        stringResource(R.string.fan_blur_source_summary_wallpaper),
+                        stringResource(R.string.fan_blur_source_summary_behind),
+                        stringResource(R.string.fan_blur_source_summary_transparent),
+                        stringResource(R.string.fan_blur_source_summary_off)
                     )
-                    var behindOn by remember(effectivePrefs, repo.revision) {
-                        mutableStateOf(repo.fanBlurBehindEnabled())
+                    var blurSource by remember(effectivePrefs, repo.revision) {
+                        mutableStateOf(repo.fanBlurSource())
                     }
-                    SwitchPreference(
-                        title = stringResource(R.string.fan_blur_behind_title),
-                        summary = stringResource(R.string.fan_blur_behind_summary),
-                        checked = behindOn,
-                        onCheckedChange = {
-                            behindOn = it
-                            saveBlurMode({ v -> repo.save(PrefKeys.FAN_BLUR_BEHIND_ENABLED, v); behindOn = v }, it)
+                    val sourceIndex = sourceValues.indexOf(blurSource).coerceAtLeast(0)
+                    OverlayDropdownMenu(
+                        title = stringResource(R.string.fan_blur_source_title),
+                        options = sourceOptions,
+                        selectedIndex = sourceIndex,
+                        summary = sourceSummaries[sourceIndex],
+                        onSelectedIndexChange = { index ->
+                            val value = sourceValues[index]
+                            blurSource = value
+                            repo.save(PrefKeys.FAN_BLUR_SOURCE, value)
                         }
                     )
                 }

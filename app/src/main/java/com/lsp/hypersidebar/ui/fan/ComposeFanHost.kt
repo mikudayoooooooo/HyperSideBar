@@ -1,6 +1,5 @@
 package com.lsp.hypersidebar.ui.fan
 
-import android.app.Dialog
 import android.content.Context
 import android.content.SharedPreferences
 import android.graphics.PixelFormat
@@ -85,23 +84,16 @@ class ComposeFanHost(
     private var pendingExitGen = -1
     private var currentParams: WindowManager.LayoutParams? = null
 
-    /** 本次呼出是否走毛玻璃包围盒窗口（show 时决定，preDraw/命中测试/渲染按此分派） */
-    private var frostedWindow = false
+    /** 本次呼出的背景模糊来源（show() 求值；preDraw/命中测试/渲染按此分派） */
+    private var blurSource: FanBackdropSource = FanBackdropSource.NONE
 
-    /** 毛玻璃模式的 Dialog 窗口壳（非毛玻璃=null，走裸 addView 路径） */
-    private var dialog: android.app.Dialog? = null
-
-    /** 本次呼出的壁纸位图（竖屏 launcher 且缓存就绪时非空→miuix 内部采样磨砂） */
+    /** 本次呼出的壁纸位图（仅「采样壁纸」来源非空：竖屏 launcher 且缓存就绪） */
     private var wallpaperBitmap: android.graphics.Bitmap? = null
 
-    /** 壁纸在全屏壁纸位图中的窗口原点偏移（Dialog=盒原点；全屏=0,0，误差被模糊吞掉） */
+    /** 壁纸在全屏壁纸位图中的窗口原点偏移（当前恒 0：窗口全屏，无盒窗口平移） */
     private var wallpaperOffset: androidx.compose.ui.unit.IntOffset =
         androidx.compose.ui.unit.IntOffset.Zero
 
-    // 三模式标记（show() 求值；buildComposition 的组合 lambda 读用）
-    private var dialogMode = false
-    private var wallpaperMode = false
-    private var behindMode = false
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private companion object {
@@ -228,35 +220,29 @@ class ComposeFanHost(
             val tAddMs = SystemClock.elapsedRealtime()
             // 世代自增：在场的收拢回调/兜底定时器全部失效（收拢中再呼出=打断收拢直接重开）
             attachGen++
-            // 毛玻璃模式（0914 定稿 Route B）：Dialog 承载 overlay 窗口 + setBackgroundBlurRadius
-            // 背景模糊（AOSP 公开 API，按窗口背景 Drawable 轮廓裁剪=局部磨砂）。
-            // FLAG_BLUR_BEHIND 路线退役——MIUI 把它实现为全屏糊（真机实锤 0914）。
-            // 系统模糊被关（isCrossWindowBlurEnabled=false）→ 自动降级全屏窗口+窗内 scrim
-            // 磨砂来源三选一（0915 定稿互斥）：①Dialog 背景磨砂（AOSP 裁剪通道）
-            // ②采样壁纸（miuix 内部采样，窗口内）③后方屏幕全屏（FLAG_BLUR_BEHIND，
-            // MIUI=全屏糊）。全关=亚克力板（无系统 API）。优先级=开关顺序如下
+            // 背景模糊来源解析（Route D 0915 定稿：单项下拉，取代旧三开关互斥）。两条通道：
+            //  · 采样壁纸——miuix 内部采样，板材质完整生效，形状任意（竖屏桌面专属）
+            //  · 后方屏幕全屏景深——FLAG_BLUR_BEHIND（MIUI 实现为全屏糊，非局部）
+            // 另有「透明」（不取背后内容也不加材质）与「关闭」（板自身即材质）两档。
+            // 失效则降级：所选来源不可用时退无来源，板永远有材质。
+            // 注：原「系统裁剪模糊（Dialog 背景模糊）」已退役——AOSP 背景模糊区域恒等于窗口
+            // 矩形，与楔形板形必然打架，只能给出一个圆角大矩形，用户否决。
             val crossBlur = windowManager?.isCrossWindowBlurEnabled ?: false
-            dialogMode = readBoolean(PrefKeys.FAN_DIALOG_BLUR_ENABLED, LayoutDefaults.FAN_DIALOG_BLUR_ENABLED) && crossBlur
-            wallpaperMode = !dialogMode &&
-                readBoolean(PrefKeys.FAN_WALLPAPER_BLUR_ENABLED, LayoutDefaults.FAN_WALLPAPER_BLUR_ENABLED) &&
-                wallpaperBitmap != null
-            behindMode = !dialogMode && !wallpaperMode &&
-                readBoolean(PrefKeys.FAN_BLUR_BEHIND_ENABLED, LayoutDefaults.FAN_BLUR_BEHIND_ENABLED) && crossBlur
-            frostedWindow = dialogMode || wallpaperMode || behindMode
-            if (dialogMode) {
-                attachDialog(wrapper, anchorX, anchorY, apps, quickApps, isLandscape)
-            } else {
-                wallpaperOffset = androidx.compose.ui.unit.IntOffset.Zero
-                val params = buildWindowParams()
-                if (behindMode) {
-                    params.flags = params.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
-                    params.blurBehindRadius =
-                        (LayoutDefaults.FAN_BEHIND_BLUR_RADIUS_DP * density).toInt()
-                }
-                currentParams = params
-                wm.addView(wrapper, params)
+            blurSource = resolveBlurSource(
+                pref = readString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT),
+                crossWindowBlurEnabled = crossBlur,
+                wallpaperReady = wallpaperBitmap != null && !isLandscape
+            )
+            wallpaperOffset = androidx.compose.ui.unit.IntOffset.Zero
+            val params = buildWindowParams()
+            if (blurSource == FanBackdropSource.BEHIND_SCREEN) {
+                params.flags = params.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+                // 半径单位 px（AOSP 建议 20px 起、上限 150px），不乘 density
+                params.blurBehindRadius = LayoutDefaults.FAN_BEHIND_BLUR_RADIUS_PX.toInt()
             }
-            HLog.i(TAG, "addView: ${SystemClock.elapsedRealtime() - tAddMs}ms frosted=$frostedWindow")
+            currentParams = params
+            wm.addView(wrapper, params)
+            HLog.i(TAG, "addView: ${SystemClock.elapsedRealtime() - tAddMs}ms source=$blurSource")
         } catch (e: Throwable) {
             HLog.e(TAG, "Failed to attach fan window", e)
             detachWindow()
@@ -266,6 +252,30 @@ class ComposeFanHost(
         // 真实原点/尺寸只有布局后才可知。池化后视图多次 attach，OneShot 逐 show 重挂
         OneShotPreDrawListener.add(wrapper) { computeAndPublishGeometry(); true }
         HLog.i(TAG, "fan window attached (pooled=$built, firstBuild=$firstBuild), ${apps.size} apps, ${quickApps.size} quick")
+    }
+
+    /**
+     * 背景模糊来源解析（Route D 0915）。auto = 按宿主与能力自动选路，优先级体现「哪条路
+     * 能做出完整的 miuix 板」：竖屏桌面壁纸就绪 → 采样壁纸（唯一拿得到真像素、模糊/混色/
+     * 噪点全部生效、形状任意）→ 否则无来源（板自身即材质，最稳）。显式指定失效时同样降级。
+     */
+    private fun resolveBlurSource(
+        pref: String,
+        crossWindowBlurEnabled: Boolean,
+        wallpaperReady: Boolean
+    ): FanBackdropSource = when (pref) {
+        PrefKeys.FAN_BLUR_SOURCE_WALLPAPER ->
+            if (wallpaperReady) FanBackdropSource.WALLPAPER else FanBackdropSource.NONE
+
+        PrefKeys.FAN_BLUR_SOURCE_BEHIND ->
+            if (crossWindowBlurEnabled) FanBackdropSource.BEHIND_SCREEN
+            else FanBackdropSource.NONE
+
+        PrefKeys.FAN_BLUR_SOURCE_TRANSPARENT -> FanBackdropSource.TRANSPARENT
+
+        PrefKeys.FAN_BLUR_SOURCE_OFF -> FanBackdropSource.NONE
+
+        else -> if (wallpaperReady) FanBackdropSource.WALLPAPER else FanBackdropSource.NONE
     }
 
     /** 逐呼出重置交互态（几何清空 → 首帧前不渲染，touch/选中态归零）。 */
@@ -283,22 +293,12 @@ class ComposeFanHost(
         val wrapper = wrapperView ?: return
         val loc = IntArray(2)
         runCatching { wrapper.getLocationOnScreen(loc) }
-        val g = if (frostedWindow) {
-            // 毛玻璃：边距自适应需要全屏参考系（房间=到屏幕边的距离，而非到包围盒边），
-            // 先按屏幕系算出，再平移进包围盒窗口本地系（offsetBy）
-            val dm = context.resources.displayMetrics
-            computeFanGeometry(
-                Offset(input.anchorX, input.anchorY),
-                IntSize(dm.widthPixels, dm.heightPixels),
-                input.apps, input.quickApps, config, density, input.isLandscape
-            ).offsetBy(-loc[0].toFloat(), -loc[1].toFloat(), IntSize(wrapper.width, wrapper.height))
-        } else {
-            computeFanGeometry(
-                Offset(input.anchorX - loc[0], input.anchorY - loc[1]),
-                IntSize(wrapper.width, wrapper.height),
-                input.apps, input.quickApps, config, density, input.isLandscape
-            )
-        }
+        // 窗口恒为全屏 overlay：边距自适应直接用窗口本地系（锚点减去窗口实际原点）
+        val g = computeFanGeometry(
+            Offset(input.anchorX - loc[0], input.anchorY - loc[1]),
+            IntSize(wrapper.width, wrapper.height),
+            input.apps, input.quickApps, config, density, input.isLandscape
+        )
         geometryState.value = g
         HLog.i(
             TAG,
@@ -337,9 +337,9 @@ class ComposeFanHost(
                             ),
                             dimEnabled = readBoolean(
                                 PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED
-                            ) && !frostedWindow, // 毛玻璃模式全屏压暗由 FLAG_DIM_BEHIND 承担
-                            frosted = frostedWindow,
-                            wallpaper = if (wallpaperMode) wallpaperBitmap else null,
+                            ),
+                            source = blurSource,
+                            wallpaper = if (blurSource == FanBackdropSource.WALLPAPER) wallpaperBitmap else null,
                             wallpaperOffset = wallpaperOffset,
                             exitTick = exitTickState.value,
                             onExitFinished = { finishExitFromCompose() },
@@ -508,175 +508,8 @@ class ComposeFanHost(
             y = 0
         }
 
-    /**
-     * 毛玻璃 Dialog 承载（2026-09-14 Route B 定稿）：android.app.Dialog 作 overlay 窗口壳
-     * （真 Window 对象→够得着 Window#setBackgroundBlurRadius），塞入现有 wrapper View 树
-     * （内含 ComposeView，Compose 层零改动——hook 手动转发的事件直接调 View 方法，
-     * 与窗口形态无关）。背景模糊=AOSP 公开 API，按窗口背景 Drawable 轮廓裁剪：
-     * 圆角 ShapeDrawable 即模糊区域 mask，仅扇形+快捷栏包围盒内磨砂，板外背景不动。
-     * FLAG_BLUR_BEHIND 路线退役（MIUI 实现成全屏糊，真机 0914 实锤）。
-     */
-    private fun attachDialog(
-        wrapper: View,
-        anchorX: Float,
-        anchorY: Float,
-        apps: List<FanAppInfo>,
-        quickApps: List<FanAppInfo>,
-        isLandscape: Boolean
-    ) {
-        val dm = context.resources.displayMetrics
-        // 屏幕参考系几何（仅用于求包围盒；渲染几何在 preDraw 按实际窗口原点平移）
-        val g = computeFanGeometry(
-            Offset(anchorX, anchorY), IntSize(dm.widthPixels, dm.heightPixels),
-            apps, quickApps, config, density, isLandscape
-        )
-        val bounds = frostedBounds(g, dm)
-        val dialog = Dialog(context)
-        // Dialog.dismiss 只摘 DecorView，不移除 content 里的子视图——复用 wrapper 前必须
-        // 手动脱离旧 parent，否则第二次呼出 setContentView 必炸 "already has a parent"
-        // （真机 0914 实锤，且该路径失败会计熔断）
-        (wrapper.parent as? android.view.ViewGroup)?.removeView(wrapper)
-        // setContentView 必须先于 setBackgroundBlurRadius：后者内部委托 DecorView，
-        // 而 DecorView 懒安装（真机 NPE 实锤 0914）——先塞内容触发 installDecor
-        dialog.setContentView(wrapper)
-        dialog.window?.apply {
-            setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
-            setLayout(bounds.width(), bounds.height())
-            setGravity(Gravity.TOP or Gravity.START)
-            attributes.x = bounds.left
-            attributes.y = bounds.top
-            setFormat(PixelFormat.TRANSLUCENT)
-            setFlags(
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
-            )
-            clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-            // 背景模糊（AOSP 裁剪语义：区域=背景 Drawable 轮廓；150px=AOSP 上限档）。
-            setBackgroundBlurRadius(
-                (LayoutDefaults.FAN_DIALOG_BLUR_RADIUS_DP * density).toInt()
-            )
-            // 轮廓自定义=扇形饼+快捷栏胶囊并集 Path——模糊区域贴合板的实际形状，
-            // 消灭矩形框感（0914 用户反馈"框太扎眼"）；自身 draw 留空（画面由 Compose 画）
-            setBackgroundDrawable(
-                object : android.graphics.drawable.Drawable() {
-                    override fun draw(canvas: android.graphics.Canvas) {}
-                    override fun getOutline(outline: android.graphics.Outline) {
-                        outline.setPath(frostRegionPath(g, bounds, quickCount = minOf(6, quickApps.size)))
-                    }
-                    override fun setAlpha(alpha: Int) {}
-                    override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) {}
-                    @Deprecated("Deprecated in Java")
-                    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
-                }
-            )
-        }
-        dialog.setCanceledOnTouchOutside(false)
-        dialog.setCancelable(false) // BACK/外部点击不得绕过收拢状态机
-        currentParams = null
-        wallpaperOffset = androidx.compose.ui.unit.IntOffset(bounds.left, bounds.top)
-        this.dialog = dialog
-        dialog.show()
-        HLog.i(
-            TAG,
-            "frosted dialog: box=[${"%d,%d %dx%d".format(bounds.left, bounds.top, bounds.width(), bounds.height())}] " +
-                "anchorRaw=(${anchorX.toInt()},${anchorY.toInt()})"
-        )
-    }
-
-    /**
-     * 模糊区域轮廓 Path（窗口本地系）：扇形饼（锚点圆心+外弧扇区）∪ 快捷栏胶囊。
-     * 传给背景 Drawable 的 Outline——背景模糊区域即此形状（贴合板，消灭矩形框感）。
-     * g 为屏幕参考系几何，[bounds] 提供平移量。
-     */
-    private fun frostRegionPath(
-        g: FanGeometry,
-        bounds: android.graphics.Rect,
-        quickCount: Int
-    ): android.graphics.Path {
-        val ax = g.anchor.x - bounds.left
-        val ay = g.anchor.y - bounds.top
-        val r = g.outerRadius
-        val sector = android.graphics.Path().apply {
-            moveTo(ax, ay)
-            arcTo(
-                android.graphics.RectF(ax - r, ay - r, ax + r, ay + r),
-                g.startAngle, g.spanAngle, false
-            )
-            close()
-        }
-        if (quickCount <= 0) return sector
-        val q = g.quickIconSize * density
-        val bx = g.quickBarX - bounds.left
-        val by = g.quickBarY - bounds.top
-        val w = quickCount * q + (quickCount - 1) * q * 0.35f + q
-        val h = q * 1.5f
-        val cr = (g.quickIconSize / 2f + 4f) * density
-        val capsule = android.graphics.Path().apply {
-            addRoundRect(
-                android.graphics.RectF(bx, by, bx + w, by + h), cr, cr,
-                android.graphics.Path.Direction.CW
-            )
-        }
-        return android.graphics.Path().apply { op(sector, capsule, android.graphics.Path.Op.UNION) }
-    }
-
-    /**
-     * 扇形+快捷栏包围盒（屏幕系，px）：弧扫角极值 ∪ 图标（含 1.25 选中放大）∪ 快捷栏矩形，
-     * 外扩=雾化 blur 羽化溢出+呼吸（顶部另加选中标签余量），最后钳回屏幕。
-     * 尺寸/间距公式与 computeFanGeometry/渲染同源（quickIcon 0.35 间距、0.5 边距）。
-     */
-    private fun frostedBounds(g: FanGeometry, dm: android.util.DisplayMetrics): android.graphics.Rect {
-        val iconHalf = g.iconSize * density * 0.5f * SELECTED_ICON_SCALE
-        var l = g.anchor.x
-        var t = g.anchor.y
-        var r = g.anchor.x
-        var b = g.anchor.y
-        val (minSin, maxSin, minCos, maxCos) = sweepExtremes(g.startAngle, g.endAngle)
-        // 弧界（外弧覆盖内弧：同圆心同角域）
-        l = minOf(l, g.anchor.x + g.outerRadius * minCos)
-        r = maxOf(r, g.anchor.x + g.outerRadius * maxCos)
-        t = minOf(t, g.anchor.y + g.outerRadius * minSin)
-        b = maxOf(b, g.anchor.y + g.outerRadius * maxSin)
-        g.items.forEach { item ->
-            l = minOf(l, item.centerX - iconHalf)
-            r = maxOf(r, item.centerX + iconHalf)
-            t = minOf(t, item.centerY - iconHalf)
-            b = maxOf(b, item.centerY + iconHalf)
-        }
-        val n = minOf(6, g.quickApps.size)
-        if (n > 0) {
-            val q = g.quickIconSize * density
-            val barW = n * q + (n - 1) * q * 0.35f + q   // 图标+间距+两侧 0.5 padding
-            val barH = q * 2f
-            l = minOf(l, g.quickBarX)
-            r = maxOf(r, g.quickBarX + barW)
-            t = minOf(t, g.quickBarY)
-            b = maxOf(b, g.quickBarY + barH)
-        }
-        val pad = 26f * density          // 雾化 blur(6dp) 羽化溢出 + 呼吸
-        val topExtra = 36f * density     // 选中标签（图标顶上方 ~10dp 间隙 + 标签高）
-        l -= pad; r += pad; t -= pad + topExtra; b += pad
-        val left = l.toInt().coerceIn(0, dm.widthPixels - 1)
-        val top = t.toInt().coerceIn(0, dm.heightPixels - 1)
-        val right = r.toInt().coerceIn(left + 1, dm.widthPixels)
-        val bottom = b.toInt().coerceIn(top + 1, dm.heightPixels)
-        return android.graphics.Rect(left, top, right, bottom)
-    }
-
     /** 摘窗口并复位交互态（不动 composition/lifecycle——池化复用的前提）。 */
     private fun detachWindow() {
-        // 毛玻璃路径：Dialog 壳（dismiss=摘窗；content wrapper 随之脱离，composition 保留）
-        dialog?.let { d ->
-            dialog = null
-            runCatching { d.dismiss() }
-                .onFailure { HLog.w(TAG, "dialog dismiss failed: ${it.message}") }
-        }
         val wv = wrapperView ?: return
         try {
             windowManager?.removeViewImmediate(wv)
@@ -722,18 +555,6 @@ class ComposeFanHost(
 
     /** 收拢启动即断触摸：窗口仍挂载但事件全穿透到下层（返回手势/点击零拦截）。 */
     private fun setWindowNotTouchable() {
-        // 毛玻璃路径：Dialog window 直接改 flags（收拢启动即断触摸）
-        this.dialog?.let { d ->
-            runCatching {
-                d.window?.let { w ->
-                    w.setFlags(
-                        w.attributes.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-                        w.attributes.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                    )
-                }
-            }.onFailure { HLog.w(TAG, "dialog setNotTouchable failed: ${it.message}") }
-            return
-        }
         val params = currentParams ?: return
         runCatching {
             params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
@@ -972,6 +793,10 @@ class ComposeFanHost(
 
     private fun readBoolean(key: String, default: Boolean): Boolean {
         return try { prefs.getBoolean(key, default) } catch (_: Exception) { default }
+    }
+
+    private fun readString(key: String, default: String): String {
+        return try { prefs.getString(key, default) ?: default } catch (_: Exception) { default }
     }
 
     @Composable

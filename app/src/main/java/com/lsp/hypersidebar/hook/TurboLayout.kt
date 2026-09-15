@@ -157,6 +157,9 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private var sAnchorY = 0f
     private var sAnchorT = -1L
     private var sStallFired = false
+
+    /** 速度窗口基准时刻（与竖屏通道同源；基准位置复用 sAnchorX/Y） */
+    private var sSpeedWinT = 0L
     private var sGestureSeq = 0
     private var sFanSeen = false
     private var sPendingShow: Runnable? = null
@@ -248,17 +251,28 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         sAnchorX = ev.rawX
                         sAnchorY = ev.rawY
                         sAnchorT = ev.eventTime
+                        sSpeedWinT = ev.eventTime
                         vlog("s#$sGestureSeq swipe confirmed: travel=${travel.toInt()}px (>= ${sConfirmPx.toInt()}) angle=${angle.toInt()}")
                     }
                 }
 
                 if (sSwipeConfirmed && !sStallFired) {
-                    if (hypot(ev.rawX - sAnchorX, ev.rawY - sAnchorY) > GestureThresholds.STALL_RADIUS_PX) {
-                        // 显著位移：锚点随动重置计时
+                    // 速度判据（0915 三轮实测定案，与竖屏通道同款）：只有"窗内平均速度仍高于
+                    // 阈值"才重新计时。位移式判据会被缓慢持续漂移周期性触发，把 dwell 整轮重置
+                    // ——本通道实测「确认→STALL」均值 661ms，且数值是 250ms 的整数倍
+                    // （s#9=1270≈250×5、s#10=768≈250×3）。
+                    val dt = ev.eventTime - sSpeedWinT
+                    if (dt >= GestureThresholds.STALL_SPEED_WINDOW_MS) {
+                        val speed = hypot(ev.rawX - sAnchorX, ev.rawY - sAnchorY) * 1000f / dt
                         sAnchorX = ev.rawX
                         sAnchorY = ev.rawY
-                        sAnchorT = ev.eventTime
-                    } else if (ev.eventTime - sAnchorT >= stripDwellMs()) {
+                        sSpeedWinT = ev.eventTime
+                        if (speed > GestureThresholds.STALL_MAX_SPEED_PX_S) {
+                            sAnchorT = ev.eventTime
+                        }
+                    }
+                    // 达标判定独立于速度：本帧刚重新计时时 sAnchorT==eventTime，差值 0 天然不误触发
+                    if (ev.eventTime - sAnchorT >= stripDwellMs()) {
                         sStallFired = true
                         StatsRecorder.onStall()
                         vlog("s#$sGestureSeq STALL ${stripDwellMs()}ms anchor=(${sAnchorX.toInt()},${sAnchorY.toInt()})")
@@ -310,6 +324,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         sSwipeConfirmed = false
         sStallFired = false
         sAnchorT = -1L
+        sSpeedWinT = 0L
         sFanSeen = false
     }
 

@@ -99,6 +99,9 @@ class EdgeGestureHook(
     private var anchorY = 0f
     private var anchorT = -1L
     private var stallFired = false
+
+    /** 速度窗口基准时刻（见 GestureThresholds.STALL_SPEED_WINDOW_MS；基准位置复用 anchorX/Y） */
+    private var speedWinT = 0L
     private var gestureSeq = 0   // 手势取证 id：贯穿 DOWN/确认/停顿/拦截/UP 日志（S 门数据源）
     private var gestureInZone = false  // DOWN 判定的触发区归属；区外手势整条透传
 
@@ -530,17 +533,26 @@ class EdgeGestureHook(
                         anchorX = ev.rawX
                         anchorY = ev.rawY
                         anchorT = ev.eventTime
+                        speedWinT = ev.eventTime
                         vlog("g#$gestureSeq swipe confirmed: inward=${inward.toInt()}px (>= ${confirmPx.toInt()}) angle=${angle.toInt()}")
                     }
                 }
 
                 if (swipeConfirmed && !stallFired) {
-                    if (hypot(ev.rawX - anchorX, ev.rawY - anchorY) > GestureThresholds.STALL_RADIUS_PX) {
-                        // 显著位移：锚点随动重置计时
+                    // 速度判据（0915 三轮实测定案，见 GestureThresholds.STALL_MAX_SPEED_PX_S）：
+                    // 只有"窗内平均速度仍高于阈值"才重新计时。位移式判据会被缓慢持续漂移
+                    // 周期性触发，把 dwell 整轮重置（横屏实测均值 661ms，且数值是 250 的整数倍）。
+                    // 速度窗口同时把锚点刷成"settle 时刻的位置"，日志里的 anchor 更有意义。
+                    val dt = ev.eventTime - speedWinT
+                    if (dt >= GestureThresholds.STALL_SPEED_WINDOW_MS) {
+                        val speed = hypot(ev.rawX - anchorX, ev.rawY - anchorY) * 1000f / dt
                         anchorX = ev.rawX
                         anchorY = ev.rawY
-                        anchorT = ev.eventTime
-                    } else if (ev.eventTime - anchorT >= dwellMs()) {
+                        speedWinT = ev.eventTime
+                        if (speed > GestureThresholds.STALL_MAX_SPEED_PX_S) anchorT = ev.eventTime
+                    }
+                    // 达标判定独立于速度：本帧刚重新计时时 anchorT==eventTime，差值 0 天然不误触发
+                    if (ev.eventTime - anchorT >= dwellMs()) {
                         stallFired = true
                         StatsRecorder.onStall()
                         vlog("g#$gestureSeq STALL ${dwellMs()}ms 达标 anchor=(${anchorX.toInt()},${anchorY.toInt()})")
@@ -653,6 +665,7 @@ class EdgeGestureHook(
         swipeConfirmed = false
         stallFired = false
         anchorT = -1L
+        speedWinT = 0L
         fanSeenThisGesture = false
     }
 

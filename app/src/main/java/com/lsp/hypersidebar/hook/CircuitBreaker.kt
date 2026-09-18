@@ -29,31 +29,35 @@ class CircuitBreaker(
     @Volatile
     var open = false
         private set
-    private var consecutive = 0
+
+    /** 连续失败计数：宿主失败回调可能来自多线程，用 AtomicInteger 保证自增不丢更新。 */
+    private val consecutive = java.util.concurrent.atomic.AtomicInteger(0)
     @Volatile private var trippedAtMs = 0L
     @Volatile private var lastReason = ""
 
     /** 熔断动作由宿主 hook 注入（launcher=toast；:ui=enterDegradedMode） */
     var onTripped: ((reason: String) -> Unit)? = null
 
+    @Synchronized
     fun recordFailure(reason: String) {
         if (open) return
-        consecutive++
+        val n = consecutive.incrementAndGet()
         lastReason = reason
-        HLog.w(TAG, "mechanism failure #$consecutive/$THRESHOLD ($processKey): $reason")
-        if (consecutive < THRESHOLD) return
+        HLog.w(TAG, "mechanism failure #$n/$THRESHOLD ($processKey): $reason")
+        if (n < THRESHOLD) return
         open = true
         trippedAtMs = System.currentTimeMillis()
         HLog.e(TAG, "CIRCUIT OPEN ($processKey): $reason — 停止侵入，等待重启或手动重试")
         runCatching {
-            remotePrefs.edit().putBoolean(processKey, true).commit()
+            remotePrefs.edit().putBoolean(processKey, true).apply()
         }.onFailure { HLog.w(TAG, "circuit status write failed: ${it.message}") }
         onTripped?.invoke(reason)
     }
 
+    @Synchronized
     fun recordSuccess() {
-        if (open || consecutive == 0) return
-        consecutive = 0
+        if (open || consecutive.get() == 0) return
+        consecutive.set(0)
         HLog.i(TAG, "success resets consecutive failures ($processKey)")
     }
 
@@ -69,11 +73,12 @@ class CircuitBreaker(
     }
 
     /** 解除熔断并发布状态（init 时也用它发布"本进程未熔断"，清掉陈旧键） */
+    @Synchronized
     fun forceReset() {
         open = false
-        consecutive = 0
+        consecutive.set(0)
         trippedAtMs = 0L
-        runCatching { remotePrefs.edit().putBoolean(processKey, false).commit() }
+        runCatching { remotePrefs.edit().putBoolean(processKey, false).apply() }
     }
 
     companion object {
@@ -88,7 +93,7 @@ class CircuitBreaker(
     fun snapshot(): String = org.json.JSONObject()
         .put("process", processKey)
         .put("open", open)
-        .put("consecutive", consecutive)
+        .put("consecutive", consecutive.get())
         .put("threshold", THRESHOLD)
         .put("trippedAt", trippedAtMs)
         .put("lastReason", lastReason)

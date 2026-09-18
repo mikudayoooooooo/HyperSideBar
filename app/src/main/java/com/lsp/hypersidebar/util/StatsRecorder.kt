@@ -54,6 +54,9 @@ object StatsRecorder {
     private const val MAX_RECENT = 200
     private const val KEEP_DAYS = 30
 
+    /** 线程安全的日期格式化器（原每调用 new SimpleDateFormat，热路径重复构造） */
+    private val DAY_FMT = java.time.format.DateTimeFormatter.ISO_LOCAL_DATE
+
     // ===== 内存聚合结构 =====
     private val dayCounters = LinkedHashMap<String, MutableMap<String, Int>>() // day→counters
     private val selectMs = ArrayDeque<Int>()
@@ -254,9 +257,7 @@ object StatsRecorder {
     // ===== 内部 =====
 
     /** 当天键（StatsPage 合并 dump 取今日计数同用——日期格式此前两处各写一份） */
-    fun dayKey(): String =
-        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
-            .format(java.util.Date())
+    fun dayKey(): String = java.time.LocalDate.now().format(DAY_FMT)
 
     private fun bump(key: String) {
         loadIfNeeded()
@@ -297,12 +298,10 @@ object StatsRecorder {
         dirty = false
         // 裁剪老天
         synchronized(dayCounters) {
-            val cutoff = (System.currentTimeMillis() / 86_400_000L) - KEEP_DAYS
+            val cutoff = java.time.LocalDate.now().toEpochDay() - KEEP_DAYS
             dayCounters.keys.removeAll { d ->
-                runCatching {
-                    java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).apply { isLenient = false }
-                        .parse(d)?.time?.div(86_400_000L)?.let { it < cutoff } ?: true
-                }.getOrDefault(false)
+                runCatching { java.time.LocalDate.parse(d).toEpochDay() < cutoff }
+                    .getOrDefault(false)
             }
         }
         runCatching {

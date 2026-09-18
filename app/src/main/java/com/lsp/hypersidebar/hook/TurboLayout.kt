@@ -578,7 +578,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         coverRefs.forEach { ref -> ref.get()?.let { v -> applyCoverFlag(v) } }
         // 状态标注（设置页读）：remotePrefs 跨进程写，尽力而为
         runCatching {
-            remotePrefs.edit().putBoolean(PrefKeys.PASSTHROUGH_DEGRADED, true).commit()
+            remotePrefs.edit().putBoolean(PrefKeys.PASSTHROUGH_DEGRADED, true).apply()
         }.onFailure { HLog.w(TAG, "degrade status write failed: ${it.message}") }
         // toast 为空串=调用方已另行告知（数据源死亡时 DataLoader 先弹「推荐数据获取失败」）
         if (toast.isNotEmpty()) toastOnMain(safeAppContext(), toast)

@@ -47,6 +47,10 @@ object HLog {
     @Volatile
     var verboseEnabled: Boolean = false
 
+    /** 线程安全的行时间格式化器（原每次 formatLine 都 new SimpleDateFormat） */
+    private val LINE_TS_FMT: java.time.format.DateTimeFormatter =
+        java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+
     class Entry(
         val wallMs: Long,
         val level: Char,
@@ -55,8 +59,9 @@ object HLog {
         val msg: String,
     ) {
         fun formatLine(): String {
-            val t = java.text.SimpleDateFormat("MM-dd HH:mm:ss.SSS", java.util.Locale.US)
-                .format(java.util.Date(wallMs))
+            val t = LINE_TS_FMT.format(
+                java.time.Instant.ofEpochMilli(wallMs).atZone(java.time.ZoneId.systemDefault())
+            )
             return "$t ${levelIcon()} [$proc/$tag] $msg"
         }
 

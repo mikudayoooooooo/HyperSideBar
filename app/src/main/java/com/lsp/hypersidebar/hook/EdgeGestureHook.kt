@@ -28,6 +28,9 @@ import com.lsp.hypersidebar.util.toastOnMain
 
 private const val TAG = "EdgeGesture"
 
+/** 包名合法性（热路径复用，避免每次呼出重复构造 Regex） */
+private val PKG_NAME_REGEX = Regex("[A-Za-z0-9._]+")
+
 /** 高频明细（g#N 系列）：默认关（HLog.verboseEnabled），关时零字符串构造（§11.2） */
 private fun vlog(msg: String) { if (HLog.verboseEnabled) HLog.i(TAG, msg) }
 
@@ -330,7 +333,7 @@ class EdgeGestureHook(
                                 )
                                 if (expected.isNullOrEmpty() || got.isNullOrEmpty() || got != expected) {
                                     why = "token rejected"
-                                } else if (!pkg.matches(Regex("[A-Za-z0-9._]+"))) {
+                                } else if (!pkg.matches(PKG_NAME_REGEX)) {
                                     why = "malformed pkg"
                                 } else {
                                     val la: android.content.pm.LauncherApps? = c.getSystemService(

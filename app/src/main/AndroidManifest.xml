@@ -11,8 +11,12 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
+    <!-- allowBackup 关闭：RelayToken 防伪令牌、熔断状态、应用/快捷方式配置属安全敏感
+         的跨进程 IPC 状态，随云备份/换机迁移会导致令牌在新设备失效或被外泄。模块配置
+         丢失可由 LSPosed 作用域与重新选择恢复，不做备份（backup_rules/data_extraction_rules
+         仍保留供需要时启用）。 -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:description="@string/module_description"
         android:enableOnBackInvokedCallback="true"

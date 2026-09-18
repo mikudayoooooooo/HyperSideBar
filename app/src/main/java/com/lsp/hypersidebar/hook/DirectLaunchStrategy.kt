@@ -133,7 +133,7 @@ class DirectLaunchStrategy(
         }
 
         // 非 exported 目标预检失败时直接转发模块 App 代发（§2.4 实测定案）：
-        // 本进程（:ui，平台签名特权；注意并非 uid 1000）startActivityAsUser 对启动不了的目标静默假成功
+        // 本进程（:ui，平台签名特权；uid=1000/system，0918 ps+dumpsys 定案）startActivityAsUser 对启动不了的目标静默假成功
         // （不抛异常、实际不启动，无法靠异常触发 root 回退），且本进程无 su 授权；
         // 模块 App 进程持 root，其 validate→直试→ANF→su 链路已被编辑页测试验证。
         if (shortcut.kind != ShortcutKind.SERVICE && shortcut.kind != ShortcutKind.SHORTCUT_ID) {

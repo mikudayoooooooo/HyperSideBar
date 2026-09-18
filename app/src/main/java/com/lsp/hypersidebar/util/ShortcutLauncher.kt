@@ -364,9 +364,11 @@ object ShortcutLauncher {
             strategy.startActivity(context, intent)
             LaunchResult.Success(intent.component)
         } catch (e: SecurityException) {
+            HLog.w(TAG, "launchAsActivity: SecurityException via ${strategy.name}, trying ROOT", e)
             if (allowRootFallback && isRootAvailable()) launchViaRoot(activityAction)
             else LaunchResult.Failure(FailureReason.SECURITY_EXCEPTION, e.message ?: "Permission denied")
         } catch (e: Exception) {
+            HLog.w(TAG, "launchAsActivity: exception via ${strategy.name}, trying ROOT", e)
             if (allowRootFallback && isRootAvailable()) launchViaRoot(activityAction)
             else LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, e.message ?: "Unknown error")
         }
@@ -424,7 +426,7 @@ object ShortcutLauncher {
             if (validation.reason == FailureReason.ACTIVITY_NOT_FOUND &&
                 !action.packageName.isNullOrEmpty()
             ) {
-                HLog.w(TAG, "launchService: validateService refused (${validation.detail}), trying direct launch")
+                HLog.w(TAG, "ShortcutLauncher: validateService refused (${validation.detail}), trying direct launch")
                 return tryLaunchServiceDirect(context, intent, action, allowRootFallback)
             }
             // 非 exported 或不可见（包可见性限制）→ ROOT 可绕过
@@ -725,20 +727,16 @@ object ShortcutLauncher {
     }
 
     /**
-     * 对 activityName 做规范化：
-     * - 如果 act 是完整类名且以 packageName 为前缀，则剥离前缀，只保留类名部分（以 . 开头）。
-     * - 否则原样返回。
-     *
-     * 避免 ComponentName(pkg, "com.xxx.Activity") 拼出双重包名导致 Class Not Found。
+     * 对 activityName 做规范化，一律返回**绝对类名**：
+     * PMS/AMS 对组件类名字面匹配，前导点组件查不到也启不了（ComponentName 双参构造
+     * 不展开前导点，只有 unflattenFromString/am -n 才展开）——历史版在此剥 pkg 前缀
+     * 产出 ".相对名"，是 fan COMPONENT 快捷方式静默假成功的真根因（0918 saga）。
      */
     private fun normalizeActivityName(pkg: String, act: String): String {
         var cleaned = act.trim { it <= ' ' || it in '\u0000'..'\u001f' || it in '\u007f'..'\u009f' }
-        if (cleaned.startsWith(".")) return cleaned  // 已是相对名，无需处理
+        if (cleaned.startsWith(".")) return pkg + cleaned  // 相对名拼回包名成绝对名
         if (!cleaned.contains('.')) return cleaned   // 不是类名，原样返回
-        if (cleaned.startsWith("$pkg.")) {
-            return cleaned.substring(pkg.length)  // 剥离 pkg 前缀，保留以 . 开头的类名
-        }
-        return cleaned  // act 是其他包的完整类名，无法自动剥离，原样返回让上层判断
+        return cleaned  // 完整类名原样返回（含 pkg 前缀不再剥离）
     }
 
     /**
@@ -791,15 +789,12 @@ object ShortcutLauncher {
     }
 
     /**
-     * 对 serviceName 做规范化（同 normalizeActivityName）。
+     * 对 serviceName 做规范化（同 normalizeActivityName：一律返回绝对类名，不剥前缀）。
      */
     private fun normalizeServiceName(pkg: String, svc: String): String {
         var cleaned = svc.trim { it <= ' ' || it in '\u0000'..'\u001f' || it in '\u007f'..'\u009f' }
-        if (cleaned.startsWith(".")) return cleaned
+        if (cleaned.startsWith(".")) return pkg + cleaned
         if (!cleaned.contains('.')) return cleaned
-        if (cleaned.startsWith("$pkg.")) {
-            return cleaned.substring(pkg.length)
-        }
         return cleaned
     }
 
@@ -930,10 +925,10 @@ object ShortcutLauncher {
             "Resolved but no activityInfo"
         )
 
-        // 事实注记（0907 uid 修正）：:ui 并非 uid 1000（真实 uid 未测得；10613 曾误判为
-        // :ui，实为模块 App 自身 uid）——本判断的实际语义是"除字面 uid 1000 外一律不做非 exported 直启"，
-        // :ui 直启非导出实测静默假成功（SUCCESS via SYSTEM 但不启动），统一走 root relay；
-        // 仅普通应用进程（如设置页测试启动）之外的 uid-1000 进程理论上可直启
+        // uid 注记（0918 ps+dumpsys 定案）：:ui（com.miui.securitycenter:ui）真实 uid=1000/system
+        // （sharedUser=android.uid.system，持 START_ANY_ACTIVITY），非 exported 目标由 uid-1000
+        // 进程直启是放行的；0907"并非 uid 1000"系 getCallingUid 误读已作废，当年"直启静默假成功"
+        // 实为相对类名组件 bug（normalizeActivityName 剥前缀产出 ".相对名"），0918 已修
         if (!activityInfo.exported && android.os.Process.myUid() != android.os.Process.SYSTEM_UID) {
             return LaunchResult.Failure(
                 FailureReason.NOT_EXPORTED,
@@ -1121,8 +1116,8 @@ object ShortcutLauncher {
             ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> {
                 val pkg = action.packageName ?: return null
                 val act = normalizeActivityName(pkg, action.activityName ?: return null)
-                // normalizeActivityName 常产出以 "." 开头的相对名（如 ".ui.MainActivity"），
-                // PKG_ACTIVITY_REGEX 不接受前导点，先展开为绝对类名再校验
+                // normalizeActivityName 0918 起产出绝对类名；此处前导点展开保留兜底
+                //（PKG_ACTIVITY_REGEX 不接受前导点）
                 val fullAct = if (act.startsWith(".")) "$pkg$act" else act
                 if (!pkg.matches(PKG_ACTIVITY_REGEX) || !fullAct.matches(PKG_ACTIVITY_REGEX)) {
                     return null

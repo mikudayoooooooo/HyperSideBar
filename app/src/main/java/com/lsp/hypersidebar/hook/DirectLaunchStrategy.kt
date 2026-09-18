@@ -103,7 +103,7 @@ class DirectLaunchStrategy(
                             val msg = if (viaHook) "已触发磁贴：${shortcut.label}"
                             else "已发送磁贴指令：${shortcut.label}"
                             Toast.makeText(appCtx, msg, Toast.LENGTH_SHORT).show()
-                        }
+                        }.onFailure { HLog.w(TAG, "qs toast failed: ${it.message}") }
                     }
                 }.start()
                 return
@@ -126,7 +126,7 @@ class DirectLaunchStrategy(
                             else "无法启动：${shortcut.label}",
                             Toast.LENGTH_SHORT
                         ).show()
-                    }
+                    }.onFailure { HLog.w(TAG, "shortcut toast failed: ${it.message}") }
                 }
             }.start()
             return
@@ -152,12 +152,12 @@ class DirectLaunchStrategy(
         if (shortcut.kind == ShortcutKind.SERVICE && result is LaunchResult.Success) {
             runCatching {
                 Toast.makeText(context, "已拉起服务：${shortcut.label}", Toast.LENGTH_SHORT).show()
-            }
+            }.onFailure { HLog.w(TAG, "service toast failed: ${it.message}") }
         } else if (result is LaunchResult.Failure) {
             // PRD §9.4：非编辑页场景启动失败 toast 兜底（编辑页测试启动自带原因展示）
             runCatching {
                 Toast.makeText(context, "activity/Service无法正常启动", Toast.LENGTH_SHORT).show()
-            }
+            }.onFailure { HLog.w(TAG, "failure toast failed: ${it.message}") }
         }
     }
 

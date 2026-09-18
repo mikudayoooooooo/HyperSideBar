@@ -40,6 +40,8 @@ object AppIconCache {
         cache.get(pkg)?.let { return it }
         val bitmap = runCatching {
             context.packageManager.getApplicationIcon(pkg).toBitmap(ICON_SIZE_PX, ICON_SIZE_PX)
+        }.onFailure {
+            HLog.w(TAG, "icon load failed: $pkg (${it.javaClass.simpleName}: ${it.message})")
         }.getOrNull()
         if (bitmap != null) cache.put(pkg, bitmap)
         return bitmap

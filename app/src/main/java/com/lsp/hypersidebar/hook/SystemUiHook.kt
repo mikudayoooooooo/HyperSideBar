@@ -118,22 +118,29 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
             val interactor = readField(adapter, "interactor")
                 ?: error("interactor field is null")
             val tiles = interactor.javaClass.methods
-                .first { it.name == "getCurrentQSTiles" && it.parameterCount == 0 }
-                .invoke(interactor) as? List<*>
-                ?: return@runCatching 0
+                .firstOrNull { it.name == "getCurrentQSTiles" && it.parameterCount == 0 }
+                ?.invoke(interactor) as? List<*>
+                ?: run {
+                    HLog.w(TAG, "clickTile: getCurrentQSTiles not found/returned non-list")
+                    return@runCatching 0
+                }
             HLog.i(TAG, "clickTile: current tiles=${tiles.size}")
             val toSpec = cl.loadClass(CUSTOM_TILE_CLASS)
-                .methods.first { it.name == "toSpec" && it.parameterCount == 1 }
+                .methods.firstOrNull { it.name == "toSpec" && it.parameterCount == 1 }
+                ?: run {
+                    HLog.w(TAG, "clickTile: toSpec method not found in $CUSTOM_TILE_CLASS")
+                    return@runCatching 0
+                }
             val spec = toSpec.invoke(null, cn) as? String ?: return@runCatching 0
 
             var isPinned = false
             val tile = tiles.firstOrNull { t ->
                 t != null && runCatching {
                     t.javaClass.methods
-                        .first { it.name == "getTileSpec" && it.parameterCount == 0 }
-                        .invoke(t) == spec
+                        .firstOrNull { it.name == "getTileSpec" && it.parameterCount == 0 }
+                        ?.invoke(t) == spec
                 }.getOrNull() == true
-            }?.also { isPinned = true } ?: createdTiles[spec]
+            }?.also { isPinned = true } ?: createdTiles.get(spec)
             ?: run {
                 // 未固定磁贴：现场创建（createTile 返回 null 则彻底不可触发）
                 val created = adapter.javaClass.methods
@@ -144,7 +151,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                         return@runCatching 0
                     }
                 HLog.i(TAG, "clickTile: tile created on demand: $spec")
-                createdTiles[spec] = created
+                createdTiles.put(spec, created)
                 created
             }
 
@@ -183,8 +190,8 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                     if (readField(mgr!!, "mBound") == true) writeField(mgr!!, "mBound", false)
                 }
                 mgr!!.javaClass.methods
-                    .first { it.name == "setBindRequested" && it.parameterCount == 1 }
-                    .invoke(mgr, true)
+                    .firstOrNull { it.name == "setBindRequested" && it.parameterCount == 1 }
+                    ?.invoke(mgr, true)
             }.onFailure {
                 HLog.w(TAG, "prime bind failed: ${it.javaClass.simpleName}: ${it.message}")
             }
@@ -193,8 +200,8 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
             // 里 !mListening 会打 "Managed to get click on non-listening state..." 直接丢弃）
             runCatching {
                 lifecycle!!.javaClass.methods
-                    .first { it.name == "onStartListening" && it.parameterCount == 0 }
-                    .invoke(lifecycle)
+                    .firstOrNull { it.name == "onStartListening" && it.parameterCount == 0 }
+                    ?.invoke(lifecycle)
             }.onFailure {
                 HLog.w(TAG, "onStartListening failed: ${it.javaClass.simpleName}: ${it.message}")
             }
@@ -263,8 +270,9 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                         }.onFailure { HLog.w(TAG, "addWindowToken failed: ${it.message}") }
                         val svc = readField(tile, "mService") ?: error("mService field is null")
                         svc.javaClass.methods
-                            .first { it.name == "onClick" && it.parameterCount == 1 }
-                            .invoke(svc, token)
+                            .firstOrNull { it.name == "onClick" && it.parameterCount == 1 }
+                            ?.invoke(svc, token)
+                            ?: error("onClick method not found")
                         HLog.i(TAG, "clickTile: direct onClick delivered $spec")
                     }.onFailure { HLog.w(TAG, "direct onClick failed: ${it.message}") }
                 }
@@ -289,7 +297,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
         h.postDelayed({
             val pending = runCatching {
                 lifecycle?.javaClass?.methods
-                    ?.first { it.name == "hasPendingClick" && it.parameterCount == 0 }
+                    ?.firstOrNull { it.name == "hasPendingClick" && it.parameterCount == 0 }
                     ?.invoke(lifecycle) as? Boolean
             }.getOrNull()
             HLog.i(TAG, "clickTile: post-delivery pendingClick=$pending")
@@ -326,7 +334,12 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
          */
         const val TILE_WINDOW_TOKEN_TYPE = 2035
 
-        /** createTile 现场创建的实例按 spec 缓存复用（上界=用户添加的磁贴快捷方式数） */
-        val createdTiles = java.util.concurrent.ConcurrentHashMap<String, Any>()
+        /**
+         * createTile 现场创建的实例按 spec 缓存复用（LruCache 内部同步，跨线程安全）。
+         * 上界=用户添加的磁贴快捷方式数，再设硬上限防异常场景无界增长（每个实例持
+         * Context/Handler/TileLifecycleManager，无界会随增删磁贴持续泄漏）。
+         */
+        const val MAX_CREATED_TILES = 32
+        val createdTiles = android.util.LruCache<String, Any>(MAX_CREATED_TILES)
     }
 }

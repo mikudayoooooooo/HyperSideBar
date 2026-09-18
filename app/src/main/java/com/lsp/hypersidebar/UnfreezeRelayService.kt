@@ -105,8 +105,9 @@ class UnfreezeRelayService : Service() {
         var detail = ""
         runCatching {
             val proc = Runtime.getRuntime().exec(arrayOf("su", "-c", script))
-            val out = proc.inputStream.bufferedReader().readText()
-            val err = proc.errorStream.bufferedReader().readText()
+            // use 确保异常路径也关闭管道，避免反复失败时泄漏 FD
+            val out = proc.inputStream.bufferedReader().use { it.readText() }
+            val err = proc.errorStream.bufferedReader().use { it.readText() }
             proc.waitFor()
             ok = proc.exitValue() == 0
             detail = "out=[${out.trim()}] err=[${err.trim()}]"

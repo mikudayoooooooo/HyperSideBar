@@ -282,8 +282,10 @@ object LayoutDefaults {
     //   · 采样壁纸——有真像素可糊，板要淡，否则闷死模糊
     //   · 系统跨窗模糊 / 后方屏幕模糊——像素在窗口层，板再浓就盖死系统模糊，只出一层淡色保底可见
     //   · 无来源——板自身承担全部材质，浓度直通
-    /** 内层模糊半径（dp）：AOSP/miuix 文档上限 150，120 为磨砂感与性能折中 */
-    const val FAN_BOARD_BLUR_RADIUS_DP = 120f
+    /** 内层模糊半径（px，机械口径）：miuix 0.9.1 起 `textureBlur.blurRadius` 改按 dp 解释
+     *  （内部自动 ×density）。此常量沿用 0.9.0 时代的 px 物理量（120px@440dpi≈43.6dp），
+     *  调用处除以 density 还原，保证跨设备观感与旧版一致。AOSP/miuix 文档上限 150dp */
+    const val FAN_BOARD_BLUR_RADIUS_PX = 120f
     /** 噪点抗条带系数基数（= miuix BlurDefaults.NoiseCoefficient 同值） */
     const val FAN_BOARD_NOISE_BASE = 0.0045f
     /** 噪点系数随浓度的增量（亚克力颗粒感来源） */

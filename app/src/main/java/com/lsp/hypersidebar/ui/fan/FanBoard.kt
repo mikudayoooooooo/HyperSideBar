@@ -151,7 +151,7 @@ internal fun FanBoard(
                     .textureBlur(
                         backdrop = backdrop,
                         shape = remember(geometry, density) { boardShape(geometry, density) },
-                        blurRadius = LayoutDefaults.FAN_BOARD_BLUR_RADIUS_DP,
+                        blurRadius = LayoutDefaults.FAN_BOARD_BLUR_RADIUS_PX / density,
                         noiseCoefficient = noise,
                         colors = BlurColors(
                             blendColors = listOf(

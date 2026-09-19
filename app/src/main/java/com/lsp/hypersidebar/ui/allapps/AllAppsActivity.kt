@@ -16,7 +16,6 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -26,7 +25,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
@@ -56,7 +54,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -88,6 +85,8 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.SinkFeedback
+import top.yukonga.miuix.kmp.utils.pressable
 import java.util.Locale
 
 private const val TAG = "AllAppsActivity"
@@ -633,20 +632,16 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
     }
     // Painter 随位图记忆化：否则每次重组（含同位图）都重建 BitmapPainter/asImageBitmap
     val painter = remember(bitmap) { bitmap?.let { BitmapPainter(it.asImageBitmap()) } }
-    // A3 按压反馈：scale 0.92、无 ripple（MIUI 磁贴只有缩放没有水波纹）；
-    // scale 值在 graphicsLayer lambda（draw 阶段）读取，动画帧跳过重组直接作用绘制
+    // A3 按压反馈：改用 miuix pressable + SinkFeedback 下沉反馈（无 ripple，贴合 MIUI 磁贴观感）
     val interactionSource = remember { MutableInteractionSource() }
-    val pressed by interactionSource.collectIsPressedAsState()
-    val pressScale = animateFloatAsState(if (pressed) 0.92f else 1f, label = "tilePressScale")
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .fillMaxWidth()
-            .graphicsLayer {
-                val s = pressScale.value
-                scaleX = s
-                scaleY = s
-            }
+            .pressable(
+                interactionSource = interactionSource,
+                indication = SinkFeedback()
+            )
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,

@@ -47,6 +47,7 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
+import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 
 /**
  * 运行日志页（迭代六 §11.2）：三进程 HLog 环形缓冲的汇聚视图。
@@ -206,6 +207,7 @@ internal fun LogPage(
             Modifier
                 .weight(1f)
                 .overScrollVertical()
+                .scrollEndHaptic()
         ) {
             items(entries, key = { "${it.wallMs}-${it.tag}-${it.msg.hashCode()}" }) { e ->
                 Text(

@@ -52,6 +52,7 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Sort
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
+import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 
 private data class AppItem(
     val label: String,
@@ -289,6 +290,7 @@ private fun AppList(
         modifier = Modifier
             .fillMaxSize()
             .overScrollVertical()
+            .scrollEndHaptic()
     ) {
         items(apps.size, key = { apps[it].packageName }) { index ->
             val app = apps[index]

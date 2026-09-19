@@ -87,6 +87,7 @@ import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.SinkFeedback
 import top.yukonga.miuix.kmp.utils.pressable
+import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 import java.util.Locale
 
 private const val TAG = "AllAppsActivity"
@@ -461,7 +462,9 @@ private fun AllAppsScreen(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
                 state = gridState,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxSize()
+                    .scrollEndHaptic()
             ) {
                 itemsIndexed(
                     entries,

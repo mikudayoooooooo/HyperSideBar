@@ -22,7 +22,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -44,7 +43,6 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -56,7 +54,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -89,6 +86,7 @@ import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.Locale
 
@@ -96,11 +94,11 @@ private const val TAG = "AllAppsActivity"
 private const val PREFS_NAME = PrefsFiles.APP_LOCAL
 private const val MAX_DATA_WAIT_MS = 1500L
 
-/** 磁贴圆角提为常量：避免每磁贴每次重组重复分配 Shape。A3：14→18dp（MIUI 抽屉近亲） */
-private val TILE_SHAPE = RoundedCornerShape(18.dp)
+/** 磁贴圆角（A3：14→18dp，MIUI 抽屉近亲）。squircle 直接吃 Dp，无 Shape 分配。 */
+private val TILE_CORNER = 18.dp
 
 /** 索引气泡圆角（A2）：MIUI 抽屉同款圆角方，非整圆。 */
-private val BUBBLE_SHAPE = RoundedCornerShape(24.dp)
+private val BUBBLE_CORNER = 24.dp
 
 /**
  * 全部应用面板（PRD §7.3.2，样式参照 assets/image/全部应用.png 的抽屉网格）：
@@ -552,8 +550,10 @@ private fun AllAppsScreen(
                 Box(
                     modifier = Modifier
                         .size(88.dp)
-                        .clip(BUBBLE_SHAPE)
-                        .background(MiuixTheme.colorScheme.primary),
+                        .squircleSurface(
+                            color = MiuixTheme.colorScheme.primary,
+                            cornerRadius = BUBBLE_CORNER
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
@@ -597,9 +597,9 @@ private fun SkeletonGrid(modifier: Modifier = Modifier) {
                     Modifier
                         .size(52.dp)
                         .alpha(alpha.value)
-                        .background(
-                            MiuixTheme.colorScheme.secondaryContainer,
-                            RoundedCornerShape(14.dp)
+                        .squircleSurface(
+                            color = MiuixTheme.colorScheme.secondaryContainer,
+                            cornerRadius = 14.dp
                         )
                 )
                 Spacer(Modifier.padding(top = 8.dp))
@@ -609,9 +609,9 @@ private fun SkeletonGrid(modifier: Modifier = Modifier) {
                         .padding(bottom = 4.dp)
                         .height(10.dp)
                         .alpha(alpha.value)
-                        .background(
-                            MiuixTheme.colorScheme.secondaryContainer,
-                            RoundedCornerShape(5.dp)
+                        .squircleSurface(
+                            color = MiuixTheme.colorScheme.secondaryContainer,
+                            cornerRadius = 5.dp
                         )
                 )
             }
@@ -667,8 +667,10 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .clip(TILE_SHAPE)
-                        .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                        .squircleSurface(
+                            color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                            cornerRadius = TILE_CORNER
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(label.take(1), style = MiuixTheme.textStyles.title4, color = MiuixTheme.colorScheme.onSurface)

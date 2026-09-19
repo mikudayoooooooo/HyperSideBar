@@ -7,13 +7,11 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -24,14 +22,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.MutableState
 import androidx.compose.ui.layout.onSizeChanged
@@ -48,6 +43,8 @@ import top.yukonga.miuix.kmp.anim.AccelerateEasing
 import top.yukonga.miuix.kmp.anim.DecelerateEasing
 import top.yukonga.miuix.kmp.anim.SinOutEasing
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.squircle.squircleBorder
+import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 /** 选中态图标放大倍数（PRD §7.3.2"图标放大1.25倍"）；SelectedLabel 避让计算同源。 */
@@ -292,8 +289,10 @@ private fun FanAppIcon(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .clip(RoundedCornerShape((iconSize * 0.25f).dp))
-                    .background(colors.primaryContainer.copy(alpha = 0.9f))
+                    .squircleSurface(
+                        color = colors.primaryContainer.copy(alpha = 0.9f),
+                        cornerRadius = (iconSize * 0.25f).dp
+                    )
             )
         }
         AppIconImage(
@@ -306,14 +305,16 @@ private fun FanAppIcon(
         )
 
         if (isSelected) {
-            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
-                // B1：描边随 mask 同形状（圆角方）
-                drawRoundRect(
-                    color = colors.primary,
-                    cornerRadius = CornerRadius(size.minDimension * 0.25f, size.minDimension * 0.25f),
-                    style = Stroke(width = 2.dp.toPx())
-                )
-            }
+            // B1：描边随 mask 同形状（squircle 圆角方），绘于图标之上
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .squircleBorder(
+                        width = 2.dp,
+                        color = colors.primary,
+                        cornerRadius = (iconSize * 0.25f).dp
+                    )
+            )
         }
     }
 }
@@ -341,10 +342,17 @@ private fun SelectedLabel(
             }
             .alpha(if (labelSize == IntSize.Zero) 0f else 1f)
             .onSizeChanged { labelSize = it }
-            // 描边防隐身：板材质与标签同色系，无边框时标签融进板里（0914 真机反馈）
-            .border(1.dp, colors.outline.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
-            .clip(RoundedCornerShape(12.dp))
-            .background(colors.surfaceContainerHigh.copy(alpha = 0.95f))
+            // 描边防隐身：板材质与标签同色系，无边框时标签融进板里（0914 真机反馈）。
+            // squircle：surface 外层填充+裁剪，border 内层描边（绘于填充之上）
+            .squircleSurface(
+                color = colors.surfaceContainerHigh.copy(alpha = 0.95f),
+                cornerRadius = 12.dp
+            )
+            .squircleBorder(
+                width = 1.dp,
+                color = colors.outline.copy(alpha = 0.65f),
+                cornerRadius = 12.dp
+            )
             .padding(horizontal = 10.dp, vertical = 4.dp),
         contentAlignment = Alignment.Center
     ) {

@@ -3,8 +3,6 @@ package com.lsp.hypersidebar.ui.settings
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -20,13 +18,10 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -44,6 +39,9 @@ import com.lsp.hypersidebar.ui.fan.FanThemeColors
 import com.lsp.hypersidebar.ui.fan.computeFanGeometry
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.squircle.squircleBorder
+import top.yukonga.miuix.kmp.squircle.squircleClip
+import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import kotlin.math.cos
 import kotlin.math.sin
@@ -195,7 +193,7 @@ private fun PreviewPane(
     Column(
         modifier = modifier
             .fillMaxHeight()
-            .clip(RoundedCornerShape(12.dp))
+            .squircleClip(cornerRadius = 12.dp)
             .clickable(onClick = onClick)
             .padding(horizontal = 8.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -245,14 +243,19 @@ private fun StaticFanPreview(
 ) {
     val density = LocalDensity.current
     val colors = currentFanThemeColors()
-    val shape = RoundedCornerShape(12.dp)
     val viewport = remember(geometry) { previewViewport(geometry) }
 
     BoxWithConstraints(
         modifier = modifier
-            .clip(shape)
-            .background(MiuixTheme.colorScheme.surfaceContainerHigh, shape)
-            .border(1.dp, colors.outline.copy(alpha = 0.35f), shape)
+            .squircleSurface(
+                color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                cornerRadius = 12.dp
+            )
+            .squircleBorder(
+                width = 1.dp,
+                color = colors.outline.copy(alpha = 0.35f),
+                cornerRadius = 12.dp
+            )
     ) {
         val widthPx = with(density) { maxWidth.toPx() }
         val heightPx = with(density) { maxHeight.toPx() }
@@ -404,9 +407,9 @@ private fun PreviewIcon(
     Box(
         modifier = modifier
             .size(size.dp)
-            .background(
+            .squircleSurface(
                 color = placeholderColor(colors),
-                shape = RoundedCornerShape((size * 0.24f).dp)
+                cornerRadius = (size * 0.24f).dp
             )
     )
 }
@@ -434,8 +437,15 @@ private fun PreviewQuickBar(
                     y = (offsetY + geometry.quickBarY * scale).toInt()
                 )
             }
-            .background(colors.surfaceContainer.copy(alpha = 0.94f), RoundedCornerShape(10.dp))
-            .border(1.dp, colors.outline.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+            .squircleSurface(
+                color = colors.surfaceContainer.copy(alpha = 0.94f),
+                cornerRadius = 10.dp
+            )
+            .squircleBorder(
+                width = 1.dp,
+                color = colors.outline.copy(alpha = 0.3f),
+                cornerRadius = 10.dp
+            )
             .padding(horizontal = 5.dp, vertical = 4.dp)
     ) {
         geometry.quickApps.take(4).forEach { _ ->
@@ -448,8 +458,10 @@ private fun PreviewQuickBar(
                 Box(
                     modifier = Modifier
                         .size(iconSizeDp.value.dp)
-                        .clip(RoundedCornerShape((iconSizeDp.value * 0.25f).dp))
-                        .background(placeholderColor(colors))
+                        .squircleSurface(
+                            color = placeholderColor(colors),
+                            cornerRadius = (iconSizeDp.value * 0.25f).dp
+                        )
                 )
             }
         }

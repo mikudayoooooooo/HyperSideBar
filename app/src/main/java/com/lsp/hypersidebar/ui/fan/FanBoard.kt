@@ -29,6 +29,7 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import top.yukonga.miuix.kmp.blur.BlendColorEntry
 import top.yukonga.miuix.kmp.blur.BlurBlendMode
 import top.yukonga.miuix.kmp.blur.BlurColors
+import top.yukonga.miuix.kmp.blur.highlight.Highlight
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
@@ -81,8 +82,8 @@ internal enum class FanBackdropSource {
  * `drawContent()`（空 → 屏幕无输出）+ `recordLayer(backdrop.graphicsLayer) { onDraw(...) }`，
  * 内容由 onDraw 画进图层，所以屏幕上看不到整屏壁纸/底板——板外仍是真实桌面。
  *
- * 边缘高光：miuix 0.9.0 尚无 `Highlight`（0.9.1 起提供），按 0915 拍板「先不做」，
- * 描边沿用自绘 Stroke。
+ * 边缘高光：板形轮廓的玻璃描边由 miuix `Highlight`（0.9.1 起提供）承担——随主题明暗取
+ * GlassStrokeBig{Dark,Light} 预设，作用于 textureBlur 的模糊区域轮廓，无需再自绘 Stroke。
  */
 @Composable
 internal fun FanBoard(
@@ -166,21 +167,14 @@ internal fun FanBoard(
                             } else 0f,
                             contrast = 1f,
                             saturation = LayoutDefaults.FAN_BOARD_SATURATION
-                        )
+                        ),
+                        // 边缘玻璃高光：贴合模糊区域轮廓（板形并集路径），替代旧自绘 Stroke
+                        highlight = if (colors.isDark) Highlight.GlassStrokeBigDark
+                        else Highlight.GlassStrokeBigLight
                     )
             )
         }
-        // ③ 板形描边（贴合模糊区域轮廓，随 sweep 生长）
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val sweepP = sweep()
-            if (sweepP <= 0.01f) return@Canvas
-            drawPath(
-                boardPath(geometry, density, sweepP),
-                color = colors.outline.copy(alpha = 0.55f),
-                style = Stroke(width = 1.5.dp.toPx())
-            )
-        }
-        // ④ 锐利外弧描边：不参与模糊，始终清晰——边界感的锚（随 sweep 同步生长）
+        // ③ 锐利外弧描边：不参与模糊，始终清晰——边界感的锚（随 sweep 同步生长）
         Canvas(modifier = Modifier.fillMaxSize()) {
             val sweepP = sweep()
             if (sweepP <= 0.01f) return@Canvas

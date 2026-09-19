@@ -10,6 +10,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
@@ -17,6 +18,8 @@ import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -29,7 +32,6 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import top.yukonga.miuix.kmp.blur.BlendColorEntry
 import top.yukonga.miuix.kmp.blur.BlurBlendMode
 import top.yukonga.miuix.kmp.blur.BlurColors
-import top.yukonga.miuix.kmp.blur.highlight.Highlight
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
@@ -82,8 +84,9 @@ internal enum class FanBackdropSource {
  * `drawContent()`（空 → 屏幕无输出）+ `recordLayer(backdrop.graphicsLayer) { onDraw(...) }`，
  * 内容由 onDraw 画进图层，所以屏幕上看不到整屏壁纸/底板——板外仍是真实桌面。
  *
- * 边缘高光：板形轮廓的玻璃描边由 miuix `Highlight`（0.9.1 起提供）承担——随主题明暗取
- * GlassStrokeBig{Dark,Light} 预设，作用于 textureBlur 的模糊区域轮廓，无需再自绘 Stroke。
+ * 边缘高光：自绘玻璃渐变描边。miuix `Highlight` 只支持圆角矩形（`CornerBasedShape`），
+ * 对板形「饼∪胶囊」的 `Outline.Generic` 会回退成整窗 SDF，描不到板轮廓（0919 真机反馈：
+ * 快捷栏框选线条消失），故改回自绘——沿 [boardPath] 画两笔竖向渐变 Stroke（宽柔光 + 细锐边）。
  */
 @Composable
 internal fun FanBoard(
@@ -167,31 +170,50 @@ internal fun FanBoard(
                             } else 0f,
                             contrast = 1f,
                             saturation = LayoutDefaults.FAN_BOARD_SATURATION
-                        ),
-                        // 边缘玻璃高光：贴合模糊区域轮廓（板形并集路径），替代旧自绘 Stroke
-                        highlight = if (colors.isDark) Highlight.GlassStrokeBigDark
-                        else Highlight.GlassStrokeBigLight
+                        )
                     )
             )
         }
-        // ③ 锐利外弧描边：不参与模糊，始终清晰——边界感的锚（随 sweep 同步生长）
+        // ③ 板形玻璃渐变描边：不参与模糊、始终清晰——沿整块轮廓（饼∪胶囊）画两笔竖向渐变
+        // Stroke（宽柔光 + 细锐边），随 sweep 同步生长。这是快捷栏「框选线条」与扇形边界感的
+        // 唯一来源（miuix Highlight 描不到自定义并集路径，见函数头注释）
         Canvas(modifier = Modifier.fillMaxSize()) {
             val sweepP = sweep()
             if (sweepP <= 0.01f) return@Canvas
-            drawArc(
-                color = colors.outline.copy(alpha = 0.45f),
-                startAngle = geometry.startAngle,
-                sweepAngle = geometry.spanAngle * sweepP.coerceAtMost(1f),
-                useCenter = false,
-                topLeft = Offset(
-                    geometry.anchor.x - geometry.outerRadius,
-                    geometry.anchor.y - geometry.outerRadius
-                ),
-                size = androidx.compose.ui.geometry.Size(
-                    geometry.outerRadius * 2,
-                    geometry.outerRadius * 2
-                ),
-                style = Stroke(width = 2.dp.toPx())
+            val path = boardPath(geometry, density, sweepP)
+            // 竖向渐变：亮端在扇顶、暗端在快捷栏底（玻璃受顶光）。浅主题白描边不可见，改用 outline
+            val topColor = if (colors.isDark) Color.White.copy(alpha = 0.50f)
+            else colors.outline.copy(alpha = 0.45f)
+            val bottomColor = if (colors.isDark) Color.White.copy(alpha = 0.06f)
+            else colors.outline.copy(alpha = 0.10f)
+            val brush = Brush.linearGradient(
+                colors = listOf(topColor, bottomColor),
+                start = Offset(geometry.anchor.x, geometry.anchor.y - geometry.outerRadius),
+                end = Offset(
+                    geometry.anchor.x,
+                    geometry.quickBarY + geometry.quickIconSize * density * 1.5f
+                )
+            )
+            // 内层柔光：宽 6dp、低不透明度（假 bloom）
+            drawPath(
+                path = path,
+                brush = brush,
+                alpha = 0.35f,
+                style = Stroke(
+                    width = 6.dp.toPx(),
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
+            )
+            // 外层锐边：1.5dp、全强度（旧板形描边的边界锚）
+            drawPath(
+                path = path,
+                brush = brush,
+                style = Stroke(
+                    width = 1.5.dp.toPx(),
+                    cap = StrokeCap.Round,
+                    join = StrokeJoin.Round
+                )
             )
         }
     }

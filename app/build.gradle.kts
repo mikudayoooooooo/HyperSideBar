@@ -119,6 +119,7 @@ dependencies {
     implementation(libs.miuix.ui)
     implementation(libs.miuix.preference)
     implementation(libs.miuix.icons)
+    implementation(libs.miuix.squircle)
     // 毛玻璃（0913 用户拍板路线③）：窗口内组件 backdrop 模糊（AGSL RuntimeShader，API 33+=minSdk）
     implementation(libs.miuix.blur)
     implementation(libs.miuix.navigation3.ui)
@@ -136,6 +137,5 @@ dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.foundation)
-    implementation(libs.compose.material3)
     implementation(libs.compose.activity)
 }

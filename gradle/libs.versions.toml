@@ -1,6 +1,6 @@
 [versions]
 agp = "9.1.1"
-kotlin = "2.0.21"
+kotlin = "2.4.0"
 coreKtx = "1.10.1"
 ezxhelperVersion = "3.2.0-preview1"
 junit = "4.13.2"
@@ -8,8 +8,8 @@ junitVersion = "1.1.5"
 espressoCore = "3.5.1"
 appcompat = "1.6.1"
 material = "1.10.0"
-miuixUi = "0.9.0"
-navigation3 = "1.1.0-rc01"
+miuixUi = "0.9.3"
+navigation3 = "1.1.4"
 xposed-api = "101.0.1"
 xposed-service = "101.0.0"
 composeBom = "2024.02.00"
@@ -29,6 +29,7 @@ miuix-blur = { module = "top.yukonga.miuix.kmp:miuix-blur", version.ref = "miuix
 miuix-navigation3-ui = { module = "top.yukonga.miuix.kmp:miuix-navigation3-ui", version.ref = "miuixUi" }
 miuix-preference = { module = "top.yukonga.miuix.kmp:miuix-preference", version.ref = "miuixUi" }
 miuix-ui = { module = "top.yukonga.miuix.kmp:miuix-ui", version.ref = "miuixUi" }
+miuix-squircle = { module = "top.yukonga.miuix.kmp:miuix-squircle", version.ref = "miuixUi" }
 libxposed-api = { group = "io.github.libxposed", name = "api", version.ref = "xposed-api" }
 libxposed-service = { group = "io.github.libxposed", name = "service", version.ref = "xposed-service" }
 xposed-api-x01 = { module = "io.github.kyuubiran.ezxhelper:xposed-api-101", version.ref = "ezxhelperVersion" }
@@ -36,7 +37,6 @@ ezxhelper-core = { module = "io.github.kyuubiran.ezxhelper:core", version.ref = 
 compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 compose-ui = { group = "androidx.compose.ui", name = "ui" }
 compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 compose-activity = { group = "androidx.activity", name = "activity-compose", version.ref = "composeActivity" }
 
 [plugins]

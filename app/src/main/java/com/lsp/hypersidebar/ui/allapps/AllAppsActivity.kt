@@ -86,9 +86,9 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.Locale
 
@@ -418,11 +418,10 @@ private fun AllAppsScreen(
 
     Scaffold(
         topBar = {
-            // freeform 小窗纵向空间有限：先取小标题形态（largeTitle 置空）。
-            // 真机 A/B：若想试 MIUI 大标题收缩，去掉 largeTitle 参数即可（迭代五批次 1 验证门）
-            TopAppBar(
-                title = stringResource(R.string.all_apps_title),
-                largeTitle = ""
+            // freeform 小窗纵向空间有限：用小标题形态（不含 largeTitle 占位）。
+            // 此前用 TopAppBar(largeTitle = "") 仍在顶部留出大标题高度——顶部空白根因
+            SmallTopAppBar(
+                title = stringResource(R.string.all_apps_title)
             )
         }
     ) { innerPadding ->
@@ -520,17 +519,26 @@ private fun AllAppsScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // 每字母 weight(1f) 均分条高：27 字母不再溢出被裁；且与 letterAt 的
+                // 均匀映射（y/条高×字母数）同源，点按/拖动命中与视觉槽位一致
                 letters.forEach { letter ->
-                    Text(
-                        letter,
-                        style = MiuixTheme.textStyles.footnote2,
-                        // 优先级：拖动/点按中的字母 > 当前组字母 > 普通态
-                        color = if (letter == (activeLetter ?: currentLetter)) {
-                            MiuixTheme.colorScheme.primary
-                        } else {
-                            MiuixTheme.colorScheme.onSurfaceVariantSummary
-                        }
-                    )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            letter,
+                            style = MiuixTheme.textStyles.footnote2,
+                            // 优先级：拖动/点按中的字母 > 当前组字母 > 普通态
+                            color = if (letter == (activeLetter ?: currentLetter)) {
+                                MiuixTheme.colorScheme.primary
+                            } else {
+                                MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            }
+                        )
+                    }
                 }
             }
             // 中央大字气泡（A2）：MIUI 抽屉同款，primary 蓝底白字（暗色 primaryContainer

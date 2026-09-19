@@ -1,5 +1,7 @@
 package com.lsp.hypersidebar.ui.settings
 
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
@@ -91,6 +93,34 @@ internal fun Modifier.dragReorderHandle(state: DragReorderState, key: Any): Modi
             onDragCancel = { state.end(cancelled = true) }
         )
     }
+
+/**
+ * 拖动手柄：**即时**起拖（无需长按）。用于行内同时挂了 combinedClickable 长按（批量选择）
+ * 的列表——长按起拖会与行内长按同刻触发 selectionMode，重组移除手柄节点导致拖拽协程被取消。
+ *
+ * - `detectDragGestures` 越过 touchSlop 即起拖，移动被消费后父级长按自然取消；
+ * - 前置一个 pointerInput 立即消费 down，彻底阻断行内长按（长按选择只保留在手柄以外的行体）。
+ */
+internal fun Modifier.dragReorderHandleImmediate(state: DragReorderState, key: Any): Modifier =
+    this
+        .pointerInput(key) {
+            awaitPointerEventScope {
+                while (true) {
+                    awaitFirstDown(requireUnconsumed = false).consume()
+                }
+            }
+        }
+        .pointerInput(state, key) {
+            detectDragGestures(
+                onDragStart = { state.start(key) },
+                onDrag = { change, dragAmount ->
+                    change.consume()
+                    state.drag(dragAmount)
+                },
+                onDragEnd = { state.end(cancelled = false) },
+                onDragCancel = { state.end(cancelled = true) }
+            )
+        }
 
 /** 列表行视觉态：被拖项浮起跟手（zIndex + translationY），其余项静止。 */
 internal fun Modifier.dragReorderItem(state: DragReorderState, key: Any): Modifier =

@@ -224,7 +224,7 @@ internal fun ShortcutListPage(
                                     modifier = Modifier
                                         .padding(start = 8.dp)
                                         .size(24.dp)
-                                        .dragReorderHandle(dragState, shortcut.id)
+                                        .dragReorderHandleImmediate(dragState, shortcut.id)
                                 )
                             },
                             modifier = Modifier

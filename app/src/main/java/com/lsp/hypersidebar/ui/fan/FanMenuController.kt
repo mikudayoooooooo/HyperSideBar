@@ -258,7 +258,7 @@ class FanMenuController(
                     val isAllApps = appInfo.packageName == ALL_APPS_PKG
                     // 数据记录（§11.3）：打开次数/全部应用次数/选择时长
                     StatsRecorder.onOpen(
-                        appInfo.packageName, isAllApps,
+                        isAllApps,
                         (android.os.SystemClock.elapsedRealtime() - showStartElapsed).toInt()
                     )
                     exitAfterLaunch = true
@@ -276,9 +276,7 @@ class FanMenuController(
                 val context = activeContext
                 if (context != null) {
                     if (appInfo.actionHandle != null) {
-                        StatsRecorder.onShortcut(
-                            (android.os.SystemClock.elapsedRealtime() - showStartElapsed).toInt()
-                        )
+                        StatsRecorder.onShortcut()
                         exitAfterLaunch = true
                         appInfo.actionHandle.invoke(context)
                         dismiss()

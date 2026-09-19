@@ -19,16 +19,14 @@ import org.json.JSONObject
  * - 手势停顿达标 → [onStall]（EdgeGestureHook/TurboLayout 状态机）
  * - 扇形展示成功 → [onFanShown]（FanMenuController.showInternal；含响应时间=
  *   停顿达标→装配完成、两次呼出间隔）
- * - 选中应用/全部应用/快捷方式 → [onOpen]/[onShortcut]（选中回调；含选择时长）
+ * - 选中应用/全部应用 → [onOpen]（选中回调；含选择时长）；快捷方式 → [onShortcut]
  * - 收起 → [onFanClosed]（doDismiss；区分"启动后自动退出"与"取消退出"）
  * - 启动机制结果 → [onLaunchResult]（launcher=BroadcastLaunchStrategy.onRelayResult；
  *   :ui=root 代发回告 ACTION_RELAY_RESULT；DirectLaunchStrategy 本地直启无结果
  *   回调，不产 launchOk/Fail——成功率口径=有确定性结果的启动）
  *
- * 误触率（0914 重定义上线；PRD §9.3 原链式定义「3s 内不再呼出」废除——它把"看了
- * 不用"计入、把"误弹→关→重试"豁免）：按 show 独立判定，取消时延 <1s（反射关掉）
- * 或选择时长 ≤500ms（反射快抓）=误触，见 [misfireRateFrom]。
- * 全部应用占比=allApps/opens。
+ * 全部应用占比=allApps/opens。（误触率随后移除：口径依赖逐事件 recent 流水，与
+ * "按天计数"聚合模型异构、判定争议大，故不再采集）
  */
 object StatsRecorder {
 
@@ -51,7 +49,6 @@ object StatsRecorder {
     private const val KEY_STATS = "stats"
     private const val SAVE_DELAY_MS = 2000L
     private const val MAX_SAMPLES = 200
-    private const val MAX_RECENT = 200
     private const val KEEP_DAYS = 30
 
     /** 线程安全的日期格式化器（原每调用 new SimpleDateFormat，热路径重复构造） */
@@ -62,7 +59,6 @@ object StatsRecorder {
     private val selectMs = ArrayDeque<Int>()
     private val responseMs = ArrayDeque<Int>()
     private val gapMs = ArrayDeque<Long>()
-    private val recent = ArrayDeque<JSONObject>() // {ts,type,pkg?,ms?}
 
     @Volatile private var lastStallAt = 0L
     @Volatile private var lastShowAt = 0L
@@ -92,23 +88,20 @@ object StatsRecorder {
         }
         lastShowAt = now
         bump(MetricKeys.SHOWS)
-        addEvent("show")
         scheduleSave()
     }
 
     /** 选中并打开应用（全部应用入口 isAllApps=true）；selMs=展示→选中 */
-    fun onOpen(pkg: String, isAllApps: Boolean, selMs: Int) {
+    fun onOpen(isAllApps: Boolean, selMs: Int) {
         bump(MetricKeys.OPENS)
         if (isAllApps) bump(MetricKeys.ALL_APPS)
         pushSample(selectMs, selMs.coerceAtLeast(0))
-        addEvent(if (isAllApps) "allApps" else "open", pkg, selMs)
         scheduleSave()
     }
 
-    /** 选中快捷栏快捷方式（PRD §9.2 未单列，独立计数供观察）；selMs=展示→选中（误触快抓判据） */
-    fun onShortcut(selMs: Int) {
+    /** 选中快捷栏快捷方式（PRD §9.2 未单列，独立计数供观察） */
+    fun onShortcut() {
         bump(MetricKeys.SHORTCUTS)
-        addEvent("shortcut", ms = selMs)
         scheduleSave()
     }
 
@@ -116,7 +109,6 @@ object StatsRecorder {
     fun onFanClosed(launched: Boolean) {
         if (!launched) {
             bump(MetricKeys.CANCELS)
-            addEvent("cancel")
             scheduleSave()
         }
     }
@@ -124,43 +116,7 @@ object StatsRecorder {
     /** 有确定性结果的启动回告（alive/ok=true 计成功） */
     fun onLaunchResult(ok: Boolean) {
         bump(if (ok) MetricKeys.LAUNCH_OK else MetricKeys.LAUNCH_FAIL)
-        addEvent(if (ok) "launchOk" else "launchFail")
         scheduleSave()
-    }
-
-    // ===== 误触率（0914 重定义：按 show 独立判定，无链式豁免） =====
-
-    // 0914 用户实测场景拍板：反射关掉 <1s、反射快抓 ≤500ms；停留 ≥1s 取消=有意浏览后放弃
-    private const val MISFIRE_CANCEL_MS = 1_000L
-    private const val MISFIRE_QUICK_SELECT_MS = 500
-
-    /**
-     * 误触率纯函数（StatsPage 对合并 dump 唯一消费）：events=(ts, type, ms) 需时间升序，
-     * ms=选择时长（open/allApps/shortcut 携带；旧数据或缺失时 null 不判快抓）。
-     * 每次 show 取其后第一个结果事件：cancel 且时延 <[MISFIRE_CANCEL_MS] → 反射关掉；
-     * 选中且 ms ≤[MISFIRE_QUICK_SELECT_MS] → 反射快抓（误触发后顺水推舟选中）——均计误触；
-     * 其余（停留 ≥1s 才取消、正常节奏选中、launch 回告、看门狗超时）→ 非误触。
-     * 返回 (误触数, 总呼出)，无呼出返回 null。
-     */
-    fun misfireRateFrom(events: List<Triple<Long, String, Int?>>): Pair<Int, Int>? {
-        if (events.isEmpty()) return null
-        var shows = 0
-        var misfires = 0
-        for (i in events.indices) {
-            if (events[i].second != "show") continue
-            shows++
-            // show 后第一个结果事件定生死（链式关系不参与判定）
-            val oi = (i + 1 until events.size).firstOrNull { events[it].second != "show" }
-                ?: continue // 无结果事件（仍在展示/窗口尾）只进分母
-            val (ots, otype, oms) = events[oi]
-            val misfired = when (otype) {
-                "cancel" -> ots - events[i].first < MISFIRE_CANCEL_MS
-                "open", "allApps", "shortcut" -> (oms ?: Int.MAX_VALUE) <= MISFIRE_QUICK_SELECT_MS
-                else -> false
-            }
-            if (misfired) misfires++
-        }
-        return if (shows == 0) null else misfires to shows
     }
 
     // ===== 展示侧读取 =====
@@ -209,17 +165,15 @@ object StatsRecorder {
         root.put("selectMs", arr(synchronized(selectMs) { selectMs.toList() }))
         root.put("responseMs", arr(synchronized(responseMs) { responseMs.toList() }))
         root.put("gapMs", arr(synchronized(gapMs) { gapMs.toList() }))
-        root.put("recent", arr(synchronized(recent) { recent.toList() }.map { it.toString() }))
         return root.toString()
     }
 
-    /** 模块侧合并多进程 dump（按天计数器求和，样本/recent 拼接） */
+    /** 模块侧合并多进程 dump（按天计数器求和，样本拼接） */
     fun mergeDumps(dumps: List<String>): JSONObject {
         val days = JSONObject()
         val select = mutableListOf<Int>()
         val resp = mutableListOf<Int>()
         val gap = mutableListOf<Long>()
-        val recentAll = mutableListOf<Pair<Long, JSONObject>>()
         dumps.forEach { raw ->
             runCatching {
                 val o = JSONObject(raw)
@@ -239,11 +193,6 @@ object StatsRecorder {
                 o.optJSONArray("selectMs")?.let { a -> (0 until a.length()).forEach { select.add(a.optInt(it)) } }
                 o.optJSONArray("responseMs")?.let { a -> (0 until a.length()).forEach { resp.add(a.optInt(it)) } }
                 o.optJSONArray("gapMs")?.let { a -> (0 until a.length()).forEach { gap.add(a.optLong(it)) } }
-                o.optJSONArray("recent")?.let { a ->
-                    (0 until a.length()).forEach {
-                        runCatching { val e = JSONObject(a.optString(it)); recentAll.add(e.optLong("ts") to e) }
-                    }
-                }
             }
         }
         return JSONObject()
@@ -251,7 +200,6 @@ object StatsRecorder {
             .put("selectMs", JSONArray(select))
             .put("responseMs", JSONArray(resp))
             .put("gapMs", JSONArray(gap))
-            .put("recent", JSONArray(recentAll.sortedBy { it.first }.map { it.second }))
     }
 
     // ===== 内部 =====
@@ -271,19 +219,6 @@ object StatsRecorder {
         synchronized(q) {
             if (q.size >= MAX_SAMPLES) q.removeFirst()
             q.addLast(v)
-        }
-    }
-
-    private fun addEvent(type: String, pkg: String? = null, ms: Int? = null) {
-        val e = JSONObject().apply {
-            put("ts", System.currentTimeMillis())
-            put("type", type)
-            pkg?.let { put("pkg", it) }
-            ms?.let { put("ms", it) }
-        }
-        synchronized(recent) {
-            if (recent.size >= MAX_RECENT) recent.removeFirst()
-            recent.addLast(e)
         }
     }
 
@@ -342,9 +277,6 @@ object StatsRecorder {
             o.optJSONArray("selectMs")?.let { a -> (0 until a.length()).forEach { selectMs.addLast(a.optInt(it)) } }
             o.optJSONArray("responseMs")?.let { a -> (0 until a.length()).forEach { responseMs.addLast(a.optInt(it)) } }
             o.optJSONArray("gapMs")?.let { a -> (0 until a.length()).forEach { gapMs.addLast(a.optLong(it)) } }
-            o.optJSONArray("recent")?.let { a ->
-                (0 until a.length()).forEach { runCatching { recent.addLast(JSONObject(a.optString(it))) } }
-            }
         }.onFailure { HLog.w("Stats", "hydrate failed: ${it.message}") }
     }
 

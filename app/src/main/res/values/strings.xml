@@ -267,7 +267,7 @@
 
     <!-- 使用统计页（迭代六 §11.3，PRD §9.2/§9.3；误触率为 0914 重定义版） -->
     <string name="stats_entry">使用统计</string>
-    <string name="stats_entry_summary">呼出/打开/成功率/误触率等指标（§9.2），可导出 CSV</string>
+    <string name="stats_entry_summary">呼出/打开/成功率等指标（§9.2），可导出 CSV</string>
     <string name="stats_title">使用统计</string>
     <string name="stats_refresh">刷新</string>
     <string name="stats_export">导出 CSV</string>
@@ -279,11 +279,10 @@
     <string name="stats_shortcuts">快捷方式次数</string>
     <string name="stats_cancels">取消退出次数</string>
     <string name="stats_success_rate">打开成功率</string>
-    <string name="stats_misfire_rate">误触率</string>
     <string name="stats_avg_select">平均选择时长</string>
     <string name="stats_avg_response">平均响应时间</string>
     <string name="stats_avg_gap">平均两次呼出间隔</string>
     <string name="stats_all_apps_share">全部应用占比</string>
-    <string name="stats_note">口径：成功率=有确定性结果的启动（不含 :ui 本地直启）；误触=呼出后 &lt;1s 取消（反射关掉）或呼出后 ≤500ms 内快速选中（反射快抓，应用/快捷方式）；停留 ≥1s 取消、正常节奏选中不算；基于最近 200 条事件；样本窗=各进程最近 200 条时长。</string>
+    <string name="stats_note">口径：成功率=有确定性结果的启动（不含 :ui 本地直启）；全部应用占比=打开全部应用次数/打开应用次数；样本窗=各进程最近 200 条时长。</string>
     <string name="logs_verbose_summary">逐手势明细（g#N/s#N），排查呼出灵敏度时开启；默认关（关闭时零开销），开启后下次手势生效</string>
 </resources>

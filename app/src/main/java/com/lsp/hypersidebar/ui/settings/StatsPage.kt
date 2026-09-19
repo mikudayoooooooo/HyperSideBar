@@ -42,7 +42,7 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 /**
  * 使用统计页（迭代六 §11.3，PRD §9.2/§9.3）。
  * 数据源=launcher/:ui 两进程 StatsRecorder 聚合（经日志拉取同通道回传），按天合并；
- * 误触率为 0914 重定义版（口径见 StatsRecorder 与页底文案）；支持导出 CSV。
+ * 支持导出 CSV。
  */
 @Composable
 internal fun StatsPage(modifier: Modifier = Modifier) {
@@ -114,10 +114,6 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
             MetricRow(
                 stringResource(R.string.stats_success_rate),
                 successRate(today[StatsRecorder.MetricKeys.LAUNCH_OK], today[StatsRecorder.MetricKeys.LAUNCH_FAIL]), isRate = true
-            )
-            MetricRow(
-                stringResource(R.string.stats_misfire_rate),
-                misfireRateText(merged), isRate = true
             )
             MetricRow(stringResource(R.string.stats_avg_select), avgMs(samples.selectMs), suffix = "ms")
             MetricRow(stringResource(R.string.stats_avg_response), avgMs(samples.responseMs), suffix = "ms")
@@ -214,21 +210,6 @@ private fun allAppsShare(opens: Int?, allApps: Int?): String? {
     val a = allApps ?: 0
     if (o == 0) return null
     return (a * 100 / o).toString()
-}
-
-/** 误触率文本：判据与阈值单源 StatsRecorder.misfireRateFrom（0914 重定义版） */
-private fun misfireRateText(merged: JSONObject): String? {
-    val recent = merged.optJSONArray("recent") ?: return null
-    val events = (0 until recent.length()).mapNotNull { recent.optJSONObject(it) }
-        .map {
-            Triple(
-                it.optLong("ts"), it.optString("type"),
-                if (it.has("ms")) it.optInt("ms") else null
-            )
-        }
-    return StatsRecorder.misfireRateFrom(events)?.let { (misfires, shows) ->
-        (misfires * 100 / shows).toString()
-    }
 }
 
 /** 导出按天 CSV（下载目录，复用 SelfCheck 的 MediaStore 路径）：表头与行同源 MetricKeys，防漂移 */

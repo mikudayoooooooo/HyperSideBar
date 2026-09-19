@@ -103,7 +103,7 @@ fun QuickAppsBar(
                 // 连体玻璃板（0914 定稿）：栏的底=FanBackground 磨砂板胶囊本身，此处不再
                 // 叠任何染色——深色主题下两层深色叠加曾让栏明显深于扇形（"连体感"破功）
                 .padding(
-                    horizontal = (iconSizeDp * 0.25f).dp,
+                    horizontal = (iconSizeDp * 0.5f).dp,
                     vertical = (iconSizeDp * 0.25f).dp
                 ),
             horizontalArrangement = Arrangement.spacedBy((iconSizeDp * 0.35f).dp),

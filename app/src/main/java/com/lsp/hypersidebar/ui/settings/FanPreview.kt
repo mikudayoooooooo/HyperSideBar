@@ -153,8 +153,49 @@ internal fun buildPreviewConfig(repo: SettingsRepository): FanConfig = FanConfig
     landscapeMaxAppsOuter = repo.landscapeMaxAppsOuter(),
     landscapeMaxAppsInner = repo.landscapeMaxAppsInner(),
     landscapeInnerRadiusDp = repo.landscapeInnerRadius(),
-    landscapeOuterRadiusDp = repo.landscapeOuterRadius()
+    landscapeOuterRadiusDp = repo.landscapeOuterRadius(),
+    cornerIconSizeDp = repo.cornerIconSize(),
+    cornerInnerRadiusDp = repo.cornerInnerRadius(),
+    cornerOuterRadiusDp = repo.cornerOuterRadius(),
+    cornerMaxAppsOuter = repo.cornerMaxAppsOuter(),
+    cornerMaxAppsInner = repo.cornerMaxAppsInner()
 )
+
+/**
+ * 底角预览卡（效果预览分区第二项，与竖/横屏同级）：单格整宽、点击打开「底角侧滑」sheet。
+ * 草稿优先读，故 sheet 内拖动滑条时本卡实时跟随（revision 通道）。
+ */
+@Composable
+internal fun CornerLayoutPreviewCard(
+    repo: SettingsRepository,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val rev = repo.revision
+    val config = remember(rev) { buildPreviewConfig(repo) }
+    val geometry = remember(config) {
+        previewGeometry(
+            config = config,
+            width = PORTRAIT_WIDTH,
+            height = PORTRAIT_HEIGHT,
+            isLandscape = false,
+            corner = true
+        )
+    }
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        insideMargin = PaddingValues(0.dp)
+    ) {
+        PreviewPane(
+            title = stringResource(R.string.corner_preview),
+            geometry = geometry,
+            onClick = onClick,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(180.dp)
+        )
+    }
+}
 
 /** 单方向静态扇形预览（BottomSheet 内实时预览复用；geometry 与实机 computeFanGeometry 同源）。 */
 @Composable
@@ -162,23 +203,31 @@ internal fun FanStaticPreview(
     config: FanConfig,
     isLandscape: Boolean,
     modifier: Modifier = Modifier,
-    includeQuickBar: Boolean = true
+    includeQuickBar: Boolean = true,
+    /** 底角预览：锚点=精确底角、弧占向上象限（与竖/横屏同构的第三种形态）。 */
+    corner: Boolean = false
 ) {
-    val geometry = remember(config, isLandscape) {
+    val geometry = remember(config, isLandscape, corner) {
         previewGeometry(
             config = config,
             width = if (isLandscape) LANDSCAPE_WIDTH else PORTRAIT_WIDTH,
             height = if (isLandscape) LANDSCAPE_HEIGHT else PORTRAIT_HEIGHT,
             isLandscape = isLandscape,
+            corner = corner,
             quickApps = if (includeQuickBar) previewQuickApps else emptyList()
         )
     }
-    // 固定宽高比预览框（竖屏 3:4 / 横屏 4:3）：滑条拖动时框形稳定不抖，
-    // 扇形按内容适配缩放居中；sheet 内预览不带快捷栏（不受布局滑条影响）
+    // 固定宽高比预览框（竖屏 3:4 / 横屏 4:3 / 底角近方形）：框形稳定不抖，扇形按内容适配缩放居中
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         StaticFanPreview(
             geometry = geometry,
-            modifier = Modifier.aspectRatio(if (isLandscape) 4f / 3f else 3f / 4f)
+            modifier = Modifier.aspectRatio(
+                when {
+                    corner -> 1f
+                    isLandscape -> 4f / 3f
+                    else -> 3f / 4f
+                }
+            )
         )
     }
 }
@@ -218,21 +267,24 @@ private fun previewGeometry(
     width: Float,
     height: Float,
     isLandscape: Boolean,
+    corner: Boolean = false,
     quickApps: List<FanAppInfo> = previewQuickApps
 ): FanGeometry {
-    val appLimit = if (isLandscape) {
-        config.landscapeMaxAppsOuter + config.landscapeMaxAppsInner
-    } else {
-        config.maxAppsOuter + config.maxAppsInner
+    val appLimit = when {
+        corner -> config.cornerMaxAppsOuter + config.cornerMaxAppsInner
+        isLandscape -> config.landscapeMaxAppsOuter + config.landscapeMaxAppsInner
+        else -> config.maxAppsOuter + config.maxAppsInner
     }
     return computeFanGeometry(
-        anchor = Offset(0f, height / 2f),
+        // 底角预览：锚点=精确底角 (0,H)，与实机 postShowFanCorner 同源
+        anchor = if (corner) Offset(0f, height) else Offset(0f, height / 2f),
         screenSize = IntSize(width.toInt(), height.toInt()),
         apps = previewApps.take(appLimit.coerceIn(1, previewApps.size)),
         quickApps = quickApps,
         config = config,
         density = PREVIEW_DENSITY,
-        isLandscape = isLandscape
+        isLandscape = isLandscape,
+        cornerAnchor = corner
     )
 }
 

@@ -169,7 +169,8 @@ class ComposeFanHost(
         val anchorY: Float,
         val apps: List<FanAppInfo>,
         val quickApps: List<FanAppInfo>,
-        val isLandscape: Boolean
+        val isLandscape: Boolean,
+        val cornerAnchor: Boolean = false
     )
 
     fun show(
@@ -177,7 +178,8 @@ class ComposeFanHost(
         anchorY: Float,
         apps: List<FanAppInfo>,
         quickApps: List<FanAppInfo>,
-        isLandscape: Boolean
+        isLandscape: Boolean,
+        cornerAnchor: Boolean = false
     ) {
         val wm = windowManager
             ?: (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
@@ -193,7 +195,7 @@ class ComposeFanHost(
                 "fog=${readFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)} " +
                 "dim=${readBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)}"
         )
-        pendingInput = GeometryInput(anchorX, anchorY, apps, quickApps, isLandscape)
+        pendingInput = GeometryInput(anchorX, anchorY, apps, quickApps, isLandscape, cornerAnchor)
         resetInteractionState()
         // 壁纸磨砂（0914 用户拍板"优先 miuix 内部采样"）：launcher 与 :ui 双宿主同接、
         // 共用同一张壁纸图（0915 用户拍板）——竖屏桌面采样内容=真实背景；横屏 :ui 垫的
@@ -306,7 +308,8 @@ class ComposeFanHost(
         val g = computeFanGeometry(
             Offset(input.anchorX - loc[0], input.anchorY - loc[1]),
             IntSize(wrapper.width, wrapper.height),
-            input.apps, input.quickApps, config, density, input.isLandscape
+            input.apps, input.quickApps, config, density, input.isLandscape,
+            input.cornerAnchor
         )
         geometryState.value = g
         HLog.i(
@@ -788,7 +791,12 @@ class ComposeFanHost(
             landscapeMaxAppsOuter = readInt(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER),
             landscapeMaxAppsInner = readInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER),
             landscapeInnerRadiusDp = readFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS),
-            landscapeOuterRadiusDp = readFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
+            landscapeOuterRadiusDp = readFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS),
+            cornerIconSizeDp = readFloat(PrefKeys.CORNER_ICON_SIZE, LayoutDefaults.CORNER_ICON_SIZE),
+            cornerInnerRadiusDp = readFloat(PrefKeys.CORNER_INNER_RADIUS, LayoutDefaults.CORNER_INNER_RADIUS),
+            cornerOuterRadiusDp = readFloat(PrefKeys.CORNER_OUTER_RADIUS, LayoutDefaults.CORNER_OUTER_RADIUS),
+            cornerMaxAppsOuter = readInt(PrefKeys.CORNER_MAX_APPS_OUTER, LayoutDefaults.CORNER_MAX_APPS_OUTER),
+            cornerMaxAppsInner = readInt(PrefKeys.CORNER_MAX_APPS_INNER, LayoutDefaults.CORNER_MAX_APPS_INNER)
         )
     }
 

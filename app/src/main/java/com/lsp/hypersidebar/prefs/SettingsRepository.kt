@@ -73,10 +73,32 @@ class SettingsRepository(val prefs: SharedPreferences) {
         prefs.getFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
     }
 
+    // 底角斜滑扇形样式 5 键同为布局键：走草稿优先读法（sheet 实时预览跟随草稿）
+    fun cornerIconSize(): Float = getDraft(PrefKeys.CORNER_ICON_SIZE) {
+        prefs.getFloat(PrefKeys.CORNER_ICON_SIZE, LayoutDefaults.CORNER_ICON_SIZE)
+    }
+    fun cornerInnerRadius(): Float = getDraft(PrefKeys.CORNER_INNER_RADIUS) {
+        prefs.getFloat(PrefKeys.CORNER_INNER_RADIUS, LayoutDefaults.CORNER_INNER_RADIUS)
+    }
+    fun cornerOuterRadius(): Float = getDraft(PrefKeys.CORNER_OUTER_RADIUS) {
+        prefs.getFloat(PrefKeys.CORNER_OUTER_RADIUS, LayoutDefaults.CORNER_OUTER_RADIUS)
+    }
+    fun cornerMaxAppsOuter(): Int = getDraft(PrefKeys.CORNER_MAX_APPS_OUTER) {
+        prefs.getInt(PrefKeys.CORNER_MAX_APPS_OUTER, LayoutDefaults.CORNER_MAX_APPS_OUTER)
+    }
+    fun cornerMaxAppsInner(): Int = getDraft(PrefKeys.CORNER_MAX_APPS_INNER) {
+        prefs.getInt(PrefKeys.CORNER_MAX_APPS_INNER, LayoutDefaults.CORNER_MAX_APPS_INNER)
+    }
+
     fun deadZone(): Float = prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)
     fun triggerDwellMs(): Int = prefs.getInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
     fun triggerMinDistanceDp(): Float =
         prefs.getFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
+
+    /** 底角斜滑触发开关（N1，opt-in）。draft-aware：sheet 内开关与样式"✕全撤/✓全存"同步。 */
+    fun cornerSwipeEnabled(): Boolean = getDraft(PrefKeys.CORNER_SWIPE_ENABLED) {
+        prefs.getBoolean(PrefKeys.CORNER_SWIPE_ENABLED, LayoutDefaults.CORNER_SWIPE_ENABLED)
+    }
 
     fun fanFogIntensity(): Float =
         prefs.getFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
@@ -160,9 +182,15 @@ class SettingsRepository(val prefs: SharedPreferences) {
             putInt(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
             putFloat(PrefKeys.LANDSCAPE_INNER_RADIUS, LayoutDefaults.LANDSCAPE_INNER_RADIUS)
             putFloat(PrefKeys.LANDSCAPE_OUTER_RADIUS, LayoutDefaults.LANDSCAPE_OUTER_RADIUS)
+            putFloat(PrefKeys.CORNER_ICON_SIZE, LayoutDefaults.CORNER_ICON_SIZE)
+            putFloat(PrefKeys.CORNER_INNER_RADIUS, LayoutDefaults.CORNER_INNER_RADIUS)
+            putFloat(PrefKeys.CORNER_OUTER_RADIUS, LayoutDefaults.CORNER_OUTER_RADIUS)
+            putInt(PrefKeys.CORNER_MAX_APPS_OUTER, LayoutDefaults.CORNER_MAX_APPS_OUTER)
+            putInt(PrefKeys.CORNER_MAX_APPS_INNER, LayoutDefaults.CORNER_MAX_APPS_INNER)
             putFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)
             putInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
             putFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
+            putBoolean(PrefKeys.CORNER_SWIPE_ENABLED, LayoutDefaults.CORNER_SWIPE_ENABLED)
             putFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
             putBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)
             putString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT)

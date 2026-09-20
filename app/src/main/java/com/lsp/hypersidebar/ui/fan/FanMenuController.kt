@@ -79,19 +79,23 @@ class FanMenuController(
         mainHandler.removeCallbacks(watchdogRunnable)
     }
 
-    fun show(context: Context, anchorX: Float, anchorY: Float) {
+    fun show(context: Context, anchorX: Float, anchorY: Float, cornerAnchor: Boolean = false) {
         // hook 的触摸回调可能不在主线程（launcher 的 GestureStubView.onTouchEvent 经
         // MiuiMirror 输入线程分发，实测 tid≠主线程）；Compose 生命周期装配必须主线程
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
             HLog.i(TAG, "show: hopping to main thread (from ${Thread.currentThread().name})")
-            mainHandler.post { showInternal(context, anchorX, anchorY) }
+            mainHandler.post { showInternal(context, anchorX, anchorY, cornerAnchor) }
         } else {
-            showInternal(context, anchorX, anchorY)
+            showInternal(context, anchorX, anchorY, cornerAnchor)
         }
     }
 
-    private fun showInternal(context: Context, anchorX: Float, anchorY: Float) {
-        // 实测轮七：入口状态遥测——定位 isShowing 被无日志翻转的路径（双开根因）
+    private fun showInternal(
+        context: Context,
+        anchorX: Float,
+        anchorY: Float,
+        cornerAnchor: Boolean = false
+    ) {        // 实测轮七：入口状态遥测——定位 isShowing 被无日志翻转的路径（双开根因）
         Trace.current = Trace.new()
         HLog.i(TAG, tl() + "showInternal enter: isShowing=$isShowing host=${host != null} anchor=($anchorX,$anchorY)")
         if (isShowing && host != null) return
@@ -113,14 +117,14 @@ class FanMenuController(
             val isLandscape = context.resources.configuration.orientation ==
                 android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
-            val data = assembleFanData(context)
+            val data = assembleFanData(context, cornerAnchor)
 
             // 池=1 复用（1C P2）：host 不逐呼出重建，context 经 activeContext 提供
             activeContext = context
             val firstAssembly = idleHost == null
             val fanHost = obtainHost()
             host = fanHost
-            fanHost.show(anchorX, anchorY, data.apps, data.allQuick, isLandscape)
+            fanHost.show(anchorX, anchorY, data.apps, data.allQuick, isLandscape, cornerAnchor)
             touchHeartbeat()
             // 数据记录（§11.3）：呼出次数/响应时间/两次呼出间隔
             exitAfterLaunch = false
@@ -158,16 +162,21 @@ class FanMenuController(
      * 数据组装（呼出与空闲预热共用，主线程调用）：配置读取+固定应用/推荐合并+哨兵+快捷栏。
      * label 经 AppMetaCache（init 时 preloadConfiguredFanIcons 已盘灌+预热固定项）。
      */
-    private fun assembleFanData(context: Context): FanData {
+    private fun assembleFanData(context: Context, cornerAnchor: Boolean = false): FanData {
         val isLandscape = context.resources.configuration.orientation ==
             android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
-        val (maxOuter, maxInner) = if (isLandscape) {
-            readPref(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER) to
-                readPref(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
-        } else {
-            readPref(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER) to
-                readPref(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER)
+        // 数量键按呼出形态取：底角用底角独立键（此前误用竖屏键——底角 sheet 调数量不生效）
+        val (maxOuter, maxInner) = when {
+            cornerAnchor ->
+                readPref(PrefKeys.CORNER_MAX_APPS_OUTER, LayoutDefaults.CORNER_MAX_APPS_OUTER) to
+                    readPref(PrefKeys.CORNER_MAX_APPS_INNER, LayoutDefaults.CORNER_MAX_APPS_INNER)
+            isLandscape ->
+                readPref(PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER) to
+                    readPref(PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)
+            else ->
+                readPref(PrefKeys.MAX_APPS_OUTER, LayoutDefaults.MAX_APPS_OUTER) to
+                    readPref(PrefKeys.MAX_APPS_INNER, LayoutDefaults.MAX_APPS_INNER)
         }
 
         val customApps = readStringSetPref(PrefKeys.CUSTOM_APPS, emptySet())

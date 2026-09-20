@@ -23,6 +23,21 @@ object GestureThresholds {
     const val MAX_SWIPE_ANGLE_DEG = 60f
 
     /**
+     * 底角触发区宽度占比（N1 底角斜滑，仅竖屏）：左右各 W×此值。
+     * 0.2 = W/5，实机 spike（S1）在 W=1080 下 cornerW=216px 判定正确。
+     */
+    const val CORNER_WIDTH_RATIO = 0.2f
+
+    /** 底角斜滑接受锥下限（度）：与内滑轴夹角低于此=水平尾巴，接管但静默忽略。 */
+    const val CORNER_MIN_ANGLE_DEG = 20f
+
+    /** 底角斜滑接受锥上限（度）：高于此=竖直尾巴，接管但静默忽略。 */
+    const val CORNER_MAX_ANGLE_DEG = 82f
+
+    /** 底角热区高度兜底（dp）：反射 NavStubView.getHotSpaceHeight() 失败时使用。 */
+    const val CORNER_BAND_DP = 25f
+
+    /**
      * dwell 期间「还在动」的判据：**速度**（px/s），而不是"位移超过某个半径"。
      *
      * 0915 真机实测三轮定案：位移式判据（15px / 后来放宽到 40px + 连续 3 次）在横屏持续失效——

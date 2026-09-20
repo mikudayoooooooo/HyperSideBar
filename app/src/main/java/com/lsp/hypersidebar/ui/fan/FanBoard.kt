@@ -10,6 +10,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
@@ -35,6 +36,8 @@ import top.yukonga.miuix.kmp.blur.BlurColors
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * 板材质背后的像素来源（Route D 0915 重构）。
@@ -85,8 +88,8 @@ internal enum class FanBackdropSource {
  * 内容由 onDraw 画进图层，所以屏幕上看不到整屏壁纸/底板——板外仍是真实桌面。
  *
  * 边缘高光：自绘玻璃渐变描边。miuix `Highlight` 只支持圆角矩形（`CornerBasedShape`），
- * 对板形「饼∪胶囊」的 `Outline.Generic` 会回退成整窗 SDF，描不到板轮廓（0919 真机反馈：
- * 快捷栏框选线条消失），故改回自绘——沿 [boardPath] 画两笔竖向渐变 Stroke（宽柔光 + 细锐边）。
+ * 对板形「磨砂弧带∪胶囊」的 `Outline.Generic` 会回退成整窗 SDF，描不到板轮廓（0919 真机反馈：
+ * 快捷栏框选线条消失），故改回自绘——沿 [boardPath] 画竖向渐变 Stroke（细锐边 + 极淡柔光）。
  */
 @Composable
 internal fun FanBoard(
@@ -174,13 +177,12 @@ internal fun FanBoard(
                     )
             )
         }
-        // ③ 板形玻璃渐变描边：不参与模糊、始终清晰——沿整块轮廓（饼∪胶囊）画两笔竖向渐变
-        // Stroke（宽柔光 + 细锐边），随 sweep 同步生长。这是快捷栏「框选线条」与扇形边界感的
-        // 唯一来源（miuix Highlight 描不到自定义并集路径，见函数头注释）
+        // ③ 玻璃描边：不参与模糊、始终清晰。用户 2026-09-20 定稿——扇形只描**最外层一条圆弧**
+        //（柔光 + 细线，round 收尾），不再描内缘/径向线、也不用半圆端帽包起来；快捷栏单独描胶囊框。
+        // 磨砂弧带的填充模糊区仍在（boardPath 的 band 供 textureBlur 裁剪），只是不再勾整圈轮廓
         Canvas(modifier = Modifier.fillMaxSize()) {
             val sweepP = sweep()
             if (sweepP <= 0.01f) return@Canvas
-            val path = boardPath(geometry, density, sweepP)
             // 竖向渐变：亮端在扇顶、暗端在快捷栏底（玻璃受顶光）。浅主题白描边不可见，改用 outline
             val topColor = if (colors.isDark) Color.White.copy(alpha = 0.50f)
             else colors.outline.copy(alpha = 0.45f)
@@ -194,32 +196,34 @@ internal fun FanBoard(
                     geometry.quickBarY + geometry.quickIconSize * density * 1.5f
                 )
             )
-            // 内层柔光：宽 6dp、低不透明度（假 bloom）
-            drawPath(
-                path = path,
-                brush = brush,
-                alpha = 0.35f,
-                style = Stroke(
-                    width = 6.dp.toPx(),
-                    cap = StrokeCap.Round,
-                    join = StrokeJoin.Round
-                )
+            val (_, bandOuterR) = fanBandRadii(geometry, density)
+            val swept = geometry.spanAngle * sweepP.coerceAtMost(1f)
+            val arcTopLeft = Offset(geometry.anchor.x - bandOuterR, geometry.anchor.y - bandOuterR)
+            val arcSize = Size(bandOuterR * 2f, bandOuterR * 2f)
+            // 极淡柔光弧（假 bloom）
+            drawArc(
+                brush = brush, startAngle = geometry.startAngle, sweepAngle = swept,
+                useCenter = false, topLeft = arcTopLeft, size = arcSize, alpha = 0.18f,
+                style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
             )
-            // 外层锐边：1.5dp、全强度（旧板形描边的边界锚）
-            drawPath(
-                path = path,
-                brush = brush,
-                style = Stroke(
-                    width = 1.5.dp.toPx(),
-                    cap = StrokeCap.Round,
-                    join = StrokeJoin.Round
-                )
+            // 最外层单条细弧
+            drawArc(
+                brush = brush, startAngle = geometry.startAngle, sweepAngle = swept,
+                useCenter = false, topLeft = arcTopLeft, size = arcSize,
+                style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
             )
+            // 快捷栏胶囊框线（与弧带同源渐变）
+            quickCapsulePath(geometry, density)?.let { capsule ->
+                drawPath(
+                    path = capsule, brush = brush,
+                    style = Stroke(width = 1.25.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                )
+            }
         }
     }
 }
 
-/** 板形 Shape（饼∪胶囊并集，sweep=1 终态）——miuix textureBlur 的模糊区域。 */
+/** 板形 Shape（磨砂弧带∪胶囊并集，sweep=1 终态）——miuix textureBlur 的模糊区域。 */
 private fun boardShape(geometry: FanGeometry, density: Float) = object : Shape {
     override fun createOutline(
         size: androidx.compose.ui.geometry.Size,
@@ -229,33 +233,68 @@ private fun boardShape(geometry: FanGeometry, density: Float) = object : Shape {
 }
 
 /**
- * 板形轮廓 Path（窗口本地系，与命中测试/FanBackground 同源坐标）：扇形饼（随 sweep 生长）
- * ∪ 快捷栏胶囊。描边与模糊区域共用同一几何。
+ * 板形轮廓 Path（窗口本地系，与命中测试/FanBackground 同源坐标）：**磨砂弧带**（覆盖双环图标群的
+ * 扇环，随 sweep 生长）∪ 快捷栏胶囊。去掉从角顶点撑出的整块填充饼（用户 2026-09-20：饼→磨砂弧带），
+ * 底角与常规边缘档共用同一几何。这里只做模糊填充裁剪区；描边另在 FanBoard ③ 层只勾最外层一条圆弧。
  */
 internal fun boardPath(geometry: FanGeometry, density: Float, sweepP: Float): Path {
-    val sector = Path().apply {
-        moveTo(geometry.anchor.x, geometry.anchor.y)
-        arcTo(
-            Rect(
-                geometry.anchor.x - geometry.outerRadius,
-                geometry.anchor.y - geometry.outerRadius,
-                geometry.anchor.x + geometry.outerRadius,
-                geometry.anchor.y + geometry.outerRadius
-            ),
-            geometry.startAngle, geometry.spanAngle * sweepP.coerceAtMost(1f), false
+    val band = bandPath(geometry, density, sweepP)
+    val capsule = quickCapsulePath(geometry, density) ?: return band
+    return Path().apply { op(band, capsule, PathOperation.Union) }
+}
+
+/**
+ * 磨砂弧带轮廓：外缘弧 start→end、内缘弧 end→start，两端径向直边不描边（模糊柔化）。
+ * 内外缘**紧贴实际图标群**（[fanBandRadii]），而非裸 inner/outer 半径——否则弧线会比外圈图标
+ * 外飘 (外-中)/2 的距离，看着像一根乱飘的曲线（0920 真机截图反馈）。
+ */
+private fun bandPath(geometry: FanGeometry, density: Float, sweepP: Float): Path {
+    val anchor = geometry.anchor
+    val (bandInnerR, bandOuterR) = fanBandRadii(geometry, density)
+    val start = geometry.startAngle
+    val swept = geometry.spanAngle * sweepP.coerceAtMost(1f)
+    val end = start + swept
+    return Path().apply {
+        val outerOval = Rect(anchor.x - bandOuterR, anchor.y - bandOuterR, anchor.x + bandOuterR, anchor.y + bandOuterR)
+        val innerOval = Rect(anchor.x - bandInnerR, anchor.y - bandInnerR, anchor.x + bandInnerR, anchor.y + bandInnerR)
+        val startRad = Math.toRadians(start.toDouble())
+        moveTo(
+            anchor.x + bandOuterR * cos(startRad).toFloat(),
+            anchor.y + bandOuterR * sin(startRad).toFloat()
         )
+        arcTo(outerOval, start, swept, false)
+        arcTo(innerOval, end, -swept, false)
         close()
     }
+}
+
+/**
+ * 弧带内外缘半径：外缘 = 最外圈图标外缘 + 内边距，内缘 = 最内圈图标内缘 - 内边距。
+ * 让磨砂带与描边弧"包住"图标群（图标坐在带子里、弧线贴着外圈图标），不随裸半径外飘。
+ */
+private fun fanBandRadii(geometry: FanGeometry, density: Float): Pair<Float, Float> {
+    val iconHalf = geometry.iconSize * density / 2f
+    val pad = 12f * density
+    if (geometry.items.isEmpty()) {
+        return geometry.innerRadius.coerceAtLeast(24f * density) to geometry.outerRadius
+    }
+    val maxR = geometry.items.maxOf { it.radius }
+    val minR = geometry.items.minOf { it.radius }
+    val outerEdge = maxR + iconHalf + pad
+    val innerEdge = (minR - iconHalf - pad).coerceAtLeast(24f * density)
+    return innerEdge to outerEdge
+}
+
+/** 快捷栏胶囊轮廓（无快捷项时返回 null）。尺寸公式与 computeQuickAppCenter / QuickAppsBar Row 同源。 */
+private fun quickCapsulePath(geometry: FanGeometry, density: Float): Path? {
     val n = minOf(6, geometry.quickApps.size)
-    if (n <= 0) return sector
+    if (n <= 0) return null
     val q = geometry.quickIconSize * density
-    val capsule = Path().apply {
+    return Path().apply {
         addRoundRect(
             RoundRect(
                 geometry.quickBarX, geometry.quickBarY,
-                // 尺寸公式与 computeQuickAppCenter / QuickAppsBar Row 同源：图标 0.35 间距、两侧 0.5 边距
                 geometry.quickBarX + n * q + (n - 1) * q * 0.35f + q,
-                // 板高 = Row 真实高度（icon + 上下各 0.25q）= 1.5q
                 geometry.quickBarY + q * 1.5f,
                 CornerRadius(
                     (geometry.quickIconSize / 2f + 4f) * density,
@@ -264,5 +303,4 @@ internal fun boardPath(geometry: FanGeometry, density: Float, sweepP: Float): Pa
             )
         )
     }
-    return Path().apply { op(sector, capsule, PathOperation.Union) }
 }

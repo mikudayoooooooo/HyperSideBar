@@ -59,6 +59,9 @@ class EdgeGestureHook(
     companion object {
         const val STUB_CLASS = "com.miui.home.recents.GestureStubView"
         const val CALLBACK_CLASS = "com.miui.home.recents.GestureStubView\$3"
+
+        /** 底部热区窗口（N1 底角斜滑）：底部 25dp 带的触摸直达此处（spike S1 实锤）。 */
+        const val NAV_STUB_CLASS = "com.miui.home.recents.NavStubView"
     }
 
     private val breaker = CircuitBreaker(PrefKeys.CIRCUIT_OPEN_HOME, remotePrefs)
@@ -118,6 +121,12 @@ class EdgeGestureHook(
     private var fanSeenThisGesture = false
     private var probeRegistered = false
 
+    // ===== 底角斜滑（N1，仅竖屏，opt-in）=====
+    // NavStubView.onTouchEvent 入口；CornerTrigger 纯逻辑判定，本类负责消费/呼出。
+    private val cornerTrigger = CornerTrigger()
+    private var hotMethod: java.lang.reflect.Method? = null
+    private var cornerSeq = 0
+
     override fun init() {
         HLog.i(TAG, "=== EdgeGestureHook init, pid=${android.os.Process.myPid()} ===")
         // 熔断器：发布本进程新鲜状态（清掉上进程生命周期遗留的熔断键）+ 熔断动作
@@ -153,9 +162,13 @@ class EdgeGestureHook(
         val okStop = runCatching { hookOnSwipeStop() }
             .onFailure { HLog.e(TAG, "C FAILED hookOnSwipeStop: ${it.message}", it) }
             .getOrDefault(false)
+        // 底角斜滑（N1）：NavStubView 底部热区触摸入口
+        val okCorner = runCatching { hookNavBottomGesture() }
+            .onFailure { HLog.e(TAG, "D FAILED hookNavBottomGesture: ${it.message}", it) }
+            .getOrDefault(false)
         // okStop=真实安装结果（含兜底扫描成功）：此前"未抛异常"就算 true，曾把拦截层
         // 静默失效伪装成 installed（1C 轮一实测教训）
-        HLog.i(TAG, "hooks installed: onTouchEvent=$okTouch onSwipeStop=$okStop")
+        HLog.i(TAG, "hooks installed: onTouchEvent=$okTouch onSwipeStop=$okStop corner=$okCorner")
         // 预热推荐列表缓存：launcher 进程 init 时 EzXposed.appContext 可能尚未就绪
         // （实测 getAppContext 直接抛 NPE 而非返回 null，首轮 prewarm skipped 是
         // "首次呼出只有固定应用"的根因）——prewarmWithRetry 每 5s 重试直到就绪
@@ -385,6 +398,156 @@ class EdgeGestureHook(
     }
 
     /**
+     * 底角斜滑入口（N1）：hook `NavStubView.onTouchEvent`。
+     * DOWN 命中底角区 → 接管整条手势（含触发失败的尾巴），beforeHook 置 result=true
+     * 压掉原生 `startRecentsAnimationPre`（spike S4 实锤）；非底角一律放行。
+     */
+    private fun hookNavBottomGesture(): Boolean {
+        val method = MethodFinder.fromClass(NAV_STUB_CLASS)
+            .filterByName("onTouchEvent")
+            .filterByParamTypes(MotionEvent::class.java)
+            .filterByReturnType(Boolean::class.java)
+            .firstOrNull() ?: run {
+            HLog.e(TAG, "onTouchEvent NOT FOUND on $NAV_STUB_CLASS（底角手势不可用）")
+            return false
+        }
+        method.createBeforeHook {
+            val ev = it.args[0] as? MotionEvent ?: return@createBeforeHook
+            val view = it.thisObject as? View
+            if (handleCornerTouch(ev, view)) it.result = true
+        }
+        HLog.i(TAG, "corner gesture hooked: $NAV_STUB_CLASS.onTouchEvent")
+        return true
+    }
+
+    /** 反射 `NavStubView.getHotSpaceHeight()`（spike S1 实锤 hot=25dp）；失败用 25dp 兜底。 */
+    private fun hotSpacePx(view: View): Int {
+        val fallback = (GestureThresholds.CORNER_BAND_DP * view.resources.displayMetrics.density).toInt()
+        val m = hotMethod ?: runCatching {
+            view.javaClass.getDeclaredMethod("getHotSpaceHeight").apply { isAccessible = true }
+        }.getOrNull()?.also { hotMethod = it } ?: return fallback
+        return runCatching { (m.invoke(view) as Number).toInt() }.getOrDefault(fallback)
+    }
+
+    /**
+     * 底角手势状态机（NavStubView 入口）。返回 true = 消费（压掉原生）。
+     *
+     * 冻结语义（N1 定稿）：接管后一路消费到 UP/CANCEL，**禁止** DOWN 消费而 MOVE 放行
+     * （原生会把 MOVE 当 DOWN 再次触发 `startRecentsAnimationPre`）。关闭态完全透传。
+     */
+    private fun handleCornerTouch(ev: MotionEvent, view: View?): Boolean {
+        if (DataDeadState.dead) {
+            if (cornerTrigger.claimed) cornerTrigger.reset()
+            return false
+        }
+        if (!moduleEnabled()) {
+            if (cornerTrigger.claimed) cornerTrigger.reset()
+            return false
+        }
+        // fan 展示中：事件转发给 fan 并消费；UP/CANCEL 收起（与边缘通道同款）
+        if (fanController.isShowing) {
+            if (!fanSeenThisGesture) {
+                val down = MotionEvent.obtain(
+                    ev.downTime, ev.eventTime, MotionEvent.ACTION_DOWN, ev.rawX, ev.rawY, 0
+                )
+                try { fanSeenThisGesture = fanController.dispatchTouchEvent(down) } finally { down.recycle() }
+            }
+            fanController.dispatchTouchEvent(ev)
+            if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+                fanController.dismiss()
+                resetGesture()
+            }
+            return true
+        }
+        // 底角功能关（默认）：完全透传（读走 SyncedPrefs 内存缓存）
+        if (!cornerSwipeEnabled()) {
+            if (cornerTrigger.claimed) cornerTrigger.reset()
+            return false
+        }
+        // 熔断门：新手势不再接管；手动重试仅在熔断态检查（DOWN 高频路径不碰）
+        if (breaker.open) {
+            if (ev.actionMasked == MotionEvent.ACTION_DOWN) breaker.maybeManualReset()
+            if (breaker.open) {
+                if (cornerTrigger.claimed) cornerTrigger.reset()
+                return false
+            }
+        }
+
+        val action = ev.actionMasked
+        val dm = (view?.context ?: safeAppContext())?.resources?.displayMetrics
+        val w = dm?.widthPixels?.toFloat() ?: 0f
+        val h = dm?.heightPixels?.toFloat() ?: 0f
+
+        when (action) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = ev.rawX
+                downY = ev.rawY
+                cornerSeq++
+                gestureSeq++
+                fanSeenThisGesture = false
+                // 呼出确认距离：与边缘通道同源（TRIGGER_MIN_DISTANCE dp），DOWN 一次缓存整条手势
+                dm?.let {
+                    val distanceDp = runCatching {
+                        remotePrefs.getFloat(
+                            PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
+                        )
+                    }.getOrDefault(LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
+                    confirmPx = distanceDp * it.density
+                    resetPx = confirmPx * GestureThresholds.SWIPE_RESET_RATIO
+                }
+                val hot = view?.let { v -> hotSpacePx(v).toFloat() } ?: 0f
+                val claimed = cornerTrigger.onDown(
+                    ev.rawX, ev.rawY, w, h, hot,
+                    w * GestureThresholds.CORNER_WIDTH_RATIO,
+                    confirmPx,
+                    GestureThresholds.CORNER_MIN_ANGLE_DEG,
+                    GestureThresholds.CORNER_MAX_ANGLE_DEG
+                )
+                vlog(
+                    "c#$cornerSeq DOWN raw=(${ev.rawX.toInt()},${ev.rawY.toInt()}) " +
+                        "screen=(${w.toInt()},${h.toInt()}) hot=${hot.toInt()} claimed=$claimed"
+                )
+                return claimed
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                when (cornerTrigger.onMove(ev.rawX, ev.rawY)) {
+                    CornerTrigger.Action.SHOW -> {
+                        HLog.i(
+                            TAG,
+                            "c#$cornerSeq corner swipe SHOW raw=(${ev.rawX.toInt()},${ev.rawY.toInt()})"
+                        )
+                        StatsRecorder.onStall()
+                        fanSeenThisGesture = false
+                        // 底角专用几何：锚点=精确底角、半径固定取竖屏设置、弧占向上象限、
+                        // 快捷栏在上缘之上（N1 option B，用户定案）
+                        postShowFanCorner(view)
+                        return true
+                    }
+                    CornerTrigger.Action.CONSUME -> return true
+                    CornerTrigger.Action.PASS -> return false
+                }
+            }
+
+            MotionEvent.ACTION_POINTER_DOWN ->
+                return cornerTrigger.onPointerDown() == CornerTrigger.Action.CONSUME
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                val consume = cornerTrigger.onEnd() == CornerTrigger.Action.CONSUME
+                // 未展示前松手（触发后主线程装配尚未落地）：撤销排队的 show（"未预选松手即收起"）
+                if (consume && !fanController.isShowing) cancelPendingShow()
+                vlog("c#$cornerSeq UP/CANCEL consume=$consume shown=${fanController.isShowing}")
+                cornerTrigger.reset()
+                return consume
+            }
+
+            // 已接管手势的其余事件（POINTER_UP 等）一律消费，绝不中途放行
+            else -> return cornerTrigger.claimed
+        }
+        return cornerTrigger.claimed
+    }
+
+    /**
      * 拦截层：停顿标志命中时翻转 shouldBack → 原生走 onBackCancelled 复位分支。
      * 主路 = 实测混淆名 `$3` 直连；类名漂移（匿名类数字索引随混淆轮次变动）时按
      * 接口契约扫描兜底（1C 新写，0.x 仅识别未实现）：遍历 GestureStubView 全部
@@ -484,7 +647,9 @@ class EdgeGestureHook(
             MotionEvent.ACTION_DOWN -> {
                 // 配置新鲜度检查（迭代六 §11.1）：过期才后台 bind 拉取，此处仅 volatile 读，
                 // 不在呼出关键路径上；新配置下次读取生效
-                com.lsp.hypersidebar.util.ConfigPullBridge.refreshIfStale(stub?.context ?: EzXposed.appContext)
+                (stub?.context ?: safeAppContext())?.let { ctx ->
+                    com.lsp.hypersidebar.util.ConfigPullBridge.refreshIfStale(ctx)
+                }
                 downX = ev.rawX
                 downY = ev.rawY
                 gestureSeq++
@@ -492,7 +657,7 @@ class EdgeGestureHook(
                 stallFired = false
                 anchorT = -1L
                 // 滑动距离换算（dp→px，DOWN 一次缓存整条手势；设置项即时经 ConfigSync 生效）
-                (stub?.context ?: EzXposed.appContext)?.resources?.displayMetrics?.let { dm ->
+                (stub?.context ?: safeAppContext())?.resources?.displayMetrics?.let { dm ->
                     val distanceDp = try {
                         remotePrefs.getFloat(
                             PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
@@ -584,7 +749,7 @@ class EdgeGestureHook(
 
     /** 停顿触发 → 主线程弹 fan（launcher 触摸回调在 MiuiMirror 输入线程，Compose 需主线程装配）。 */
     private fun postShowFan(ev: MotionEvent, stub: View?) {
-        val ctx = EzXposed.appContext ?: stub?.context ?: run {
+        val ctx = safeAppContext() ?: stub?.context ?: run {
             HLog.w(TAG, "postShowFan: no context available")
             return
         }
@@ -605,6 +770,29 @@ class EdgeGestureHook(
             pendingShow = null
             vlog("g#$gestureSeq showFan runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
             fanController.show(ctx, anchorX, anchorY)
+        }
+        pendingShow = r
+        mainHandler.post(r)
+    }
+
+    /**
+     * 底角触发 → 主线程弹 fan（锚点=精确底角 (0,H)/(W,H)，cornerAnchor 专用几何：
+     * 半径固定取竖屏设置、弧占向上象限、快捷栏在上缘之上）。仅竖屏（CornerTrigger 已门控）。
+     */
+    private fun postShowFanCorner(view: View?) {
+        val ctx = safeAppContext() ?: view?.context ?: run {
+            HLog.w(TAG, "postShowFanCorner: no context available")
+            return
+        }
+        val dm = ctx.resources.displayMetrics
+        val anchorX = if (downX < dm.widthPixels / 2f) 0f else dm.widthPixels.toFloat()
+        val anchorY = dm.heightPixels.toFloat()
+        HLog.i(TAG, "showFan(corner): anchor=($anchorX, $anchorY) downX=$downX")
+        val postAtMs = android.os.SystemClock.uptimeMillis()
+        val r = Runnable {
+            pendingShow = null
+            vlog("c#$cornerSeq showFan(corner) runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
+            fanController.show(ctx, anchorX, anchorY, cornerAnchor = true)
         }
         pendingShow = r
         mainHandler.post(r)
@@ -642,7 +830,7 @@ class EdgeGestureHook(
 
     /** PRD 触发区（§9.5 行为规则 3 / §7.3.1）：竖屏 [H/3, 2H/3]；横屏=原小白条位置带。 */
     private fun isInTriggerZone(x: Float, y: Float, stub: View?): Boolean {
-        val dm = (stub?.context ?: EzXposed.appContext)?.resources?.displayMetrics ?: return false
+        val dm = (stub?.context ?: safeAppContext())?.resources?.displayMetrics ?: return false
         val (top, bottom) = zoneBounds(dm)
         return y in top..bottom
     }
@@ -661,7 +849,7 @@ class EdgeGestureHook(
         if (downX < screenHalfWidth()) x - downX else downX - x
 
     private fun screenHalfWidth(): Float =
-        EzXposed.appContext?.resources?.displayMetrics?.let { it.widthPixels / 2f }
+        safeAppContext()?.resources?.displayMetrics?.let { it.widthPixels / 2f }
             ?: downX  // 上下文不可用时以自身为界（保守：按左边缘处理）
 
     private fun resetGesture() {
@@ -681,4 +869,9 @@ class EdgeGestureHook(
     /** 总开关（设置页"启用超级侧边栏"，PrefKeys.ENABLED）：关闭=本 hook 停止一切侵入。 */
     private fun moduleEnabled(): Boolean =
         runCatching { remotePrefs.getBoolean(PrefKeys.ENABLED, true) }.getOrDefault(true)
+
+    /** 底角斜滑开关（N1，默认关）：关闭=底角手势完全透传原生。 */
+    private fun cornerSwipeEnabled(): Boolean = runCatching {
+        remotePrefs.getBoolean(PrefKeys.CORNER_SWIPE_ENABLED, LayoutDefaults.CORNER_SWIPE_ENABLED)
+    }.getOrDefault(LayoutDefaults.CORNER_SWIPE_ENABLED)
 }

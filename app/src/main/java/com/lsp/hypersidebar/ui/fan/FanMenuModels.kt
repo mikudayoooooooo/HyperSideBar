@@ -28,7 +28,13 @@ data class FanConfig(
     val landscapeMaxAppsOuter: Int = 5,
     val landscapeMaxAppsInner: Int = 3,
     val landscapeInnerRadiusDp: Float = 110f,
-    val landscapeOuterRadiusDp: Float = 150f
+    val landscapeOuterRadiusDp: Float = 150f,
+    // 底角斜滑专用样式（N1，仅竖屏）：半径独立放大（仿 Flyme 大半径朝上弧），图标/数量=竖屏值
+    val cornerIconSizeDp: Float = 48f,
+    val cornerInnerRadiusDp: Float = 270f,
+    val cornerOuterRadiusDp: Float = 380f,
+    val cornerMaxAppsOuter: Int = 7,
+    val cornerMaxAppsInner: Int = 4
 )
 
 data class FanThemeColors(

@@ -185,6 +185,14 @@ internal fun SettingsPage(
                 onLandscapeClick = { openLayoutSheet(LayoutOrientation.LANDSCAPE) }
             )
         }
+        item {
+            // 底角侧滑入口：与竖/横屏同分区、独立整宽卡（避免三格挤压）；
+            // 点击进同一款布局 sheet（CORNER 变体：内含触发开关 + 底角独立样式）
+            CornerLayoutPreviewCard(
+                repo = effectiveRepo,
+                onClick = { openLayoutSheet(LayoutOrientation.CORNER) }
+            )
+        }
 
         item { SmallTitle(text = stringResource(R.string.apps_section)) }
         item {
@@ -368,7 +376,9 @@ internal fun SettingsSliderItem(
     steps: Int = 0,
     sliderHorizontalPadding: Dp = 16.dp,
     compact: Boolean = false,
-    /** 量程退化（min==max，如弦长上限压到几何下限）时置 false：无可调空间就别给可拖的假象 */
+    /** 无可调空间（弦长上限已压到几何下限）时置 false：无可调空间就别给可拖的假象。
+     *  注意 [valueRange] 必须始终满足 start < end——miuix Slider 会先校验量程再管 enabled，
+     *  传等值量程（如 24f..24f）会直接抛 IllegalArgumentException 崩掉整个页面。 */
     enabled: Boolean = true
 ) {
     BasicComponent(

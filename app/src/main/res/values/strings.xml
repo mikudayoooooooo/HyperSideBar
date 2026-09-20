@@ -31,6 +31,7 @@
     <string name="portrait_preview_summary">侧边扇形菜单与快捷应用栏</string>
     <string name="landscape_preview">横屏</string>
     <string name="landscape_preview_summary">横屏使用更紧凑的展开角度</string>
+    <string name="corner_preview">底角侧滑</string>
 
     <string name="apps_section">应用</string>
     <string name="select_apps">扇形应用</string>
@@ -63,6 +64,8 @@
     <string name="state_off">关</string>
     <string name="trigger_dwell_title">呼出停顿</string>
     <string name="trigger_dwell_summary">贴边停顿 %1$d ms 后展开扇形；改动即时生效</string>
+    <string name="corner_swipe_title">底角斜滑呼出</string>
+    <string name="corner_swipe_summary">从屏幕左下/右下角斜向内上滑，直接呼出扇形（仅竖屏）；与停顿呼出并存，默认关闭</string>
     <string name="fan_fog_title">板材质浓度</string>
     <string name="fan_fog_summary">统一驱动板的混色、提亮与颗粒：%1$d%%（0 = 板材质全关，只剩弧线与图标；若背景模糊来源已开启，模糊本身仍在，板不会变透明）；改动下次呼出生效</string>
     <string name="fan_dim_title">背景压暗</string>
@@ -87,6 +90,7 @@
     <string name="reset_confirm">确认</string>
     <string name="portrait_layout">竖屏布局</string>
     <string name="landscape_layout">横屏布局</string>
+    <string name="corner_layout">底角侧滑</string>
     <string name="layout_sheet_cancel">取消</string>
     <string name="layout_sheet_save">保存</string>
     <string name="layout_sheet_restore_default">恢复默认</string>

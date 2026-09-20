@@ -29,7 +29,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.theme.ThemeMode
@@ -39,10 +38,8 @@ import com.lsp.hypersidebar.util.ShortcutStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.ArrowPreference
@@ -179,18 +176,10 @@ internal fun SettingsPage(
 
         item { SmallTitle(text = stringResource(R.string.effect_preview)) }
         item {
-            LayoutPreviewCard(
+            // 三形态（竖/横/底角）一张卡：miuix TabRow 切换 + 铺满预览，点击进对应布局 sheet
+            FanPreviewTabsCard(
                 repo = effectiveRepo,
-                onPortraitClick = { openLayoutSheet(LayoutOrientation.PORTRAIT) },
-                onLandscapeClick = { openLayoutSheet(LayoutOrientation.LANDSCAPE) }
-            )
-        }
-        item {
-            // 底角侧滑入口：与竖/横屏同分区、独立整宽卡（避免三格挤压）；
-            // 点击进同一款布局 sheet（CORNER 变体：内含触发开关 + 底角独立样式）
-            CornerLayoutPreviewCard(
-                repo = effectiveRepo,
-                onClick = { openLayoutSheet(LayoutOrientation.CORNER) }
+                onEditLayout = { orientation -> openLayoutSheet(orientation) }
             )
         }
 
@@ -362,42 +351,6 @@ private fun SettingsList(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         content = content
-    )
-}
-
-@Composable
-internal fun SettingsSliderItem(
-    title: String,
-    summary: String? = null,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit,
-    onValueChangeFinished: () -> Unit,
-    steps: Int = 0,
-    sliderHorizontalPadding: Dp = 16.dp,
-    compact: Boolean = false,
-    /** 无可调空间（弦长上限已压到几何下限）时置 false：无可调空间就别给可拖的假象。
-     *  注意 [valueRange] 必须始终满足 start < end——miuix Slider 会先校验量程再管 enabled，
-     *  传等值量程（如 24f..24f）会直接抛 IllegalArgumentException 崩掉整个页面。 */
-    enabled: Boolean = true
-) {
-    BasicComponent(
-        title = title,
-        summary = summary,
-        insideMargin = if (compact) SheetSliderInsideMargin else BasicComponentDefaults.InsideMargin,
-        bottomAction = {
-            Slider(
-                value = value,
-                onValueChange = onValueChange,
-                onValueChangeFinished = onValueChangeFinished,
-                valueRange = valueRange,
-                steps = steps,
-                enabled = enabled,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = sliderHorizontalPadding)
-            )
-        }
     )
 }
 

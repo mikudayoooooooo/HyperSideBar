@@ -25,6 +25,7 @@ import com.lsp.hypersidebar.util.RemotePrefsBridge
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
@@ -62,17 +63,17 @@ internal fun FanBackgroundPage(prefs: SharedPreferences, modifier: Modifier = Mo
                     var fog by remember(effectivePrefs, repo.revision) {
                         mutableStateOf(repo.fanFogIntensity())
                     }
-                    SettingsSliderItem(
+                    SliderPreference(
                         title = stringResource(R.string.fan_fog_title),
-                        summary = stringResource(R.string.fan_fog_summary, (fog * 100).roundToInt()),
+                        summary = stringResource(R.string.fan_fog_summary),
+                        valueText = "${(fog * 100).roundToInt()}%",
                         value = fog,
                         valueRange = fogMin..fogMax,
                         steps = sliderSteps(fogMin, fogMax, fogStep),
                         onValueChange = { fog = quantizeToStep(it, fogMin, fogMax, fogStep) },
                         onValueChangeFinished = {
                             repo.save(PrefKeys.FAN_FOG_INTENSITY, fog)
-                        },
-                        compact = true
+                        }
                     )
                     var dimOn by remember(effectivePrefs, repo.revision) {
                         mutableStateOf(repo.fanDimEnabled())

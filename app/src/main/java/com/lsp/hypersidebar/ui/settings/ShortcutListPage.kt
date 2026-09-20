@@ -317,7 +317,7 @@ internal fun ShortcutListPage(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .clickable(enabled = deleteEnabled) { showDeleteConfirm = true }
+                    .sinkClickable(enabled = deleteEnabled) { showDeleteConfirm = true }
                     .padding(horizontal = 32.dp)
                     .windowInsetsPadding(WindowInsets.navigationBars)
             ) {

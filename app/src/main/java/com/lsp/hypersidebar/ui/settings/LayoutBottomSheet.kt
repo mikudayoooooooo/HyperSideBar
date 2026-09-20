@@ -2,7 +2,6 @@ package com.lsp.hypersidebar.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,6 +25,7 @@ import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.ui.fan.CORNER_SPAN_DEG
 import com.lsp.hypersidebar.ui.fan.effectiveIconSizeDp
+import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
@@ -34,6 +34,7 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.basic.Check
 import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
+import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -295,84 +296,88 @@ private fun LayoutSheetContent(
     ) {
         // 底角：触发开关与样式同 sheet、同草稿（✕ 全撤 / ✓ 全存，语义与滑条一致）
         if (isCorner) {
-            SwitchPreference(
-                title = stringResource(R.string.corner_swipe_title),
-                summary = stringResource(R.string.corner_swipe_summary),
-                checked = repo.cornerSwipeEnabled(),
-                onCheckedChange = { repo.putDraft(PrefKeys.CORNER_SWIPE_ENABLED, it) }
+            Card(modifier = Modifier.fillMaxWidth()) {
+                SwitchPreference(
+                    title = stringResource(R.string.corner_swipe_title),
+                    summary = stringResource(R.string.corner_swipe_summary),
+                    checked = repo.cornerSwipeEnabled(),
+                    onCheckedChange = { repo.putDraft(PrefKeys.CORNER_SWIPE_ENABLED, it) }
+                )
+            }
+        }
+
+        // 实时预览：含快捷栏（扇形+胶囊完整构图，拖滑条时整体反馈更直观）
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = if (isCorner) 8.dp else 0.dp)
+        ) {
+            FanStaticPreview(
+                config = config,
+                isLandscape = isLandscape,
+                corner = isCorner,
+                includeQuickBar = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(150.dp)
             )
         }
 
-        // 实时预览：按内容宽高比收紧、无快捷栏（快捷栏不受这几个滑条影响）
-        FanStaticPreview(
-            config = config,
-            isLandscape = isLandscape,
-            corner = isCorner,
-            includeQuickBar = false,
+        // 5 项样式：miuix SliderPreference（标题左 / 数值右 / 滑条下，HyperOS 标准长相），
+        // 收进一张 Card（不加显式分割线——HyperOS 现行观感不用），取代旧手搓 SettingsSliderItem 裸堆
+        Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(110.dp)
-                .padding(bottom = 4.dp)
-        )
-
-        Column {
-            SettingsSliderItem(
+                .padding(top = 8.dp)
+        ) {
+            SliderPreference(
                 title = stringResource(R.string.icon_size),
                 summary = iconSummary,
+                valueText = "${iconSize.toInt()} dp",
                 // 存量值可能落在新量程之外（如旧值 48 而上限 31.5）→ 显示时钳进量程
                 value = iconSize.coerceIn(iconMin, iconMax),
                 valueRange = iconMin..iconMax,
                 enabled = iconSliderActive,
                 onValueChange = { putIcon(it) },
-                onValueChangeFinished = {},
-                sliderHorizontalPadding = 0.dp,
-                compact = true
+                onValueChangeFinished = {}
             )
-            SettingsSliderItem(
+            SliderPreference(
                 title = stringResource(R.string.inner_radius),
-                summary = stringResource(R.string.inner_radius_summary, innerRadius.toInt()),
+                valueText = "${innerRadius.toInt()} dp",
                 value = innerRadius.coerceIn(spec.innerRadiusRange),
                 valueRange = spec.innerRadiusRange,
                 steps = spec.innerRadiusSteps,
                 onValueChange = { putInnerWithClamp(it) },
-                onValueChangeFinished = {},
-                sliderHorizontalPadding = 0.dp,
-                compact = true
+                onValueChangeFinished = {}
             )
-            SettingsSliderItem(
+            SliderPreference(
                 title = stringResource(R.string.outer_radius_max),
-                summary = stringResource(R.string.outer_radius_summary, outerRadius.toInt()),
+                valueText = "${outerRadius.toInt()} dp",
                 value = outerRadius.coerceIn(spec.outerRadiusRange),
                 valueRange = spec.outerRadiusRange,
                 steps = spec.outerRadiusSteps,
                 onValueChange = { putOuterWithClamp(it) },
-                onValueChangeFinished = {},
-                sliderHorizontalPadding = 0.dp,
-                compact = true
+                onValueChangeFinished = {}
             )
-            // 内圈应用数（用户 2026-09-04：顺序置于外圈应用数之前；竖屏上限 8→6）。
-            // 实际可摆数另受"外圈先挑走应用"约束：内圈=总数−外圈，外圈调大内圈跟着变小
-            SettingsSliderItem(
+            // 内圈应用数（用户 2026-09-04：顺序置于外圈应用数之前）。实际可摆数受"外圈先挑走
+            // 应用"约束：内圈=总数−外圈，外圈调大内圈跟着变小
+            SliderPreference(
                 title = stringResource(R.string.inner_apps_count),
-                summary = stringResource(R.string.inner_apps_summary, innerCount),
+                valueText = innerCount.toString(),
                 value = innerCount.toFloat(),
                 valueRange = spec.innerCountRange,
                 steps = spec.innerCountSteps,
                 onValueChange = { putInnerCount(it.toInt()) },
-                onValueChangeFinished = {},
-                sliderHorizontalPadding = 0.dp,
-                compact = true
+                onValueChangeFinished = {}
             )
-            SettingsSliderItem(
+            SliderPreference(
                 title = stringResource(R.string.outer_apps_count),
-                summary = stringResource(R.string.outer_apps_summary, outerCount),
+                valueText = outerCount.toString(),
                 value = outerCount.toFloat(),
                 valueRange = spec.outerCountRange,
                 steps = spec.outerCountSteps,
                 onValueChange = { putOuterCount(it.toInt()) },
-                onValueChangeFinished = {},
-                sliderHorizontalPadding = 0.dp,
-                compact = true
+                onValueChangeFinished = {}
             )
         }
 
@@ -410,6 +415,3 @@ private fun LayoutSheetContent(
         }
     }
 }
-
-/** sheet 紧凑滑条行：上下边距 16→4dp，约省 40% 行高。 */
-internal val SheetSliderInsideMargin = PaddingValues(horizontal = 16.dp, vertical = 4.dp)

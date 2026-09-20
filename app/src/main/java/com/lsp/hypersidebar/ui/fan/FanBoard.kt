@@ -271,8 +271,9 @@ private fun bandPath(geometry: FanGeometry, density: Float, sweepP: Float): Path
 /**
  * 弧带内外缘半径：外缘 = 最外圈图标外缘 + 内边距，内缘 = 最内圈图标内缘 - 内边距。
  * 让磨砂带与描边弧"包住"图标群（图标坐在带子里、弧线贴着外圈图标），不随裸半径外飘。
+ * internal=设置页预览（FanPreview）复用同一口径，保证预览与真机弧带几何一致。
  */
-private fun fanBandRadii(geometry: FanGeometry, density: Float): Pair<Float, Float> {
+internal fun fanBandRadii(geometry: FanGeometry, density: Float): Pair<Float, Float> {
     val iconHalf = geometry.iconSize * density / 2f
     val pad = 12f * density
     if (geometry.items.isEmpty()) {

@@ -3,6 +3,9 @@ package com.lsp.hypersidebar.ui.settings
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -170,6 +173,49 @@ internal fun buildPreviewConfig(repo: SettingsRepository): FanConfig = FanConfig
     cornerMaxAppsInner = repo.cornerMaxAppsInner()
 )
 
+/**
+ * 预览数值缓动：半径滑条按 10dp 步进落值，直接重算会让预览"一格一格"跳。对当前方向的
+ * 图标/内外半径做短 tween，拖拽时弧带平滑生长。应用数不补间（中途增减图标会闪跳）。
+ */
+@Composable
+private fun animatedPreviewConfig(
+    config: FanConfig,
+    isLandscape: Boolean,
+    corner: Boolean
+): FanConfig {
+    val spec = tween<Float>(durationMillis = 180, easing = FastOutSlowInEasing)
+    val icon = animateFloatAsState(
+        when {
+            corner -> config.cornerIconSizeDp
+            isLandscape -> config.landscapeIconSizeDp
+            else -> config.iconSizeDp
+        }, spec, label = "previewIcon"
+    ).value
+    val inner = animateFloatAsState(
+        when {
+            corner -> config.cornerInnerRadiusDp
+            isLandscape -> config.landscapeInnerRadiusDp
+            else -> config.innerRadiusDp
+        }, spec, label = "previewInner"
+    ).value
+    val outer = animateFloatAsState(
+        when {
+            corner -> config.cornerOuterRadiusDp
+            isLandscape -> config.landscapeOuterRadiusDp
+            else -> config.outerRadiusDp
+        }, spec, label = "previewOuter"
+    ).value
+    return when {
+        corner -> config.copy(
+            cornerIconSizeDp = icon, cornerInnerRadiusDp = inner, cornerOuterRadiusDp = outer
+        )
+        isLandscape -> config.copy(
+            landscapeIconSizeDp = icon, landscapeInnerRadiusDp = inner, landscapeOuterRadiusDp = outer
+        )
+        else -> config.copy(iconSizeDp = icon, innerRadiusDp = inner, outerRadiusDp = outer)
+    }
+}
+
 /** 单方向静态扇形预览（BottomSheet 内实时预览复用；geometry 与实机 computeFanGeometry 同源）。 */
 @Composable
 internal fun FanStaticPreview(
@@ -180,9 +226,10 @@ internal fun FanStaticPreview(
     /** 底角预览：锚点=精确底角、弧占向上象限（与竖/横屏同构的第三种形态）。 */
     corner: Boolean = false
 ) {
-    val geometry = remember(config, isLandscape, corner) {
+    val animatedConfig = animatedPreviewConfig(config, isLandscape, corner)
+    val geometry = remember(animatedConfig, isLandscape, corner) {
         previewGeometry(
-            config = config,
+            config = animatedConfig,
             width = if (isLandscape) LANDSCAPE_WIDTH else PORTRAIT_WIDTH,
             height = if (isLandscape) LANDSCAPE_HEIGHT else PORTRAIT_HEIGHT,
             isLandscape = isLandscape,

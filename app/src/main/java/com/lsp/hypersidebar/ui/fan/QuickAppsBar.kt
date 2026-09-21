@@ -31,9 +31,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.lsp.hypersidebar.prefs.LayoutDefaults
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.squircle.squircleBorder
-import top.yukonga.miuix.kmp.squircle.squircleClip
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 
 @Composable
@@ -41,6 +41,7 @@ fun QuickAppsBar(
     geometry: FanGeometry,
     selectedIndex: Int,
     colors: FanThemeColors,
+    fogIntensity: Float,
     onQuickAppSelected: (FanAppInfo) -> Unit
 ) {
     val context = LocalContext.current
@@ -52,6 +53,10 @@ fun QuickAppsBar(
     val pxIconSize = iconSizeDp * density
     val pxSpacing = pxIconSize * 0.35f
     val barPadding = pxIconSize * 0.5f
+    // 胶囊底浓度跟随雾化滑条，但设下限：任何浓度（含"透明"来源档）下这层包裹都看得见
+    val capsuleAlpha = (LayoutDefaults.FAN_BOARD_VEIL_MIN +
+        fogIntensity * LayoutDefaults.FAN_BOARD_VEIL_SCALE_PLAIN)
+        .coerceIn(0.45f, LayoutDefaults.FAN_BOARD_VEIL_MAX)
 
     Box(
         modifier = Modifier.fillMaxSize()
@@ -104,9 +109,19 @@ fun QuickAppsBar(
                         geometry.quickBarY.toInt()
                     )
                 }
-                .squircleClip(cornerRadius = (iconSizeDp / 2f + 4f).dp)
-                // 连体玻璃板（0914 定稿）：栏的底=FanBackground 磨砂板胶囊本身，此处不再
-                // 叠任何染色——深色主题下两层深色叠加曾让栏明显深于扇形（"连体感"破功）
+                // 快捷栏**自带**胶囊底与描边（squircleSurface 同时完成填充+裁剪）：不再依赖
+                // FanBoard 的并集胶囊——背景模糊来源设为"透明"时整块板不画，旧写法会让胶囊
+                // 跟着一起消失（0920 真机反馈"圆角矩形没了"）。浓度仍跟雾化滑条走，但设下限
+                // 保证任何浓度下都看得见这层包裹。
+                .squircleSurface(
+                    color = colors.surfaceContainerHigh.copy(alpha = capsuleAlpha),
+                    cornerRadius = (iconSizeDp / 2f + 4f).dp
+                )
+                .squircleBorder(
+                    width = 1.dp,
+                    color = colors.outline.copy(alpha = 0.35f),
+                    cornerRadius = (iconSizeDp / 2f + 4f).dp
+                )
                 .padding(
                     horizontal = (iconSizeDp * 0.5f).dp,
                     vertical = (iconSizeDp * 0.25f).dp

@@ -6,10 +6,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -17,10 +15,8 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -89,7 +85,7 @@ internal enum class FanBackdropSource {
  *
  * 边缘高光：自绘玻璃渐变描边。miuix `Highlight` 只支持圆角矩形（`CornerBasedShape`），
  * 对板形「磨砂弧带∪胶囊」的 `Outline.Generic` 会回退成整窗 SDF，描不到板轮廓（0919 真机反馈：
- * 快捷栏框选线条消失），故改回自绘——沿 [boardPath] 画竖向渐变 Stroke（细锐边 + 极淡柔光）。
+ * 快捷栏框选线条消失），故改回自绘——沿最外层弧画竖向渐变 Stroke（细锐边 + 极淡柔光）。
  */
 @Composable
 internal fun FanBoard(
@@ -179,7 +175,7 @@ internal fun FanBoard(
         }
         // ③ 玻璃描边：不参与模糊、始终清晰。用户 2026-09-20 定稿——扇形只描**最外层一条圆弧**
         //（柔光 + 细线，round 收尾），不再描内缘/径向线、也不用半圆端帽包起来；快捷栏单独描胶囊框。
-        // 磨砂弧带的填充模糊区仍在（boardPath 的 band 供 textureBlur 裁剪），只是不再勾整圈轮廓
+        // 磨砂弧带的填充模糊区仍在（bandPath 供 textureBlur 裁剪），只是不再勾整圈轮廓
         Canvas(modifier = Modifier.fillMaxSize()) {
             val sweepP = sweep()
             if (sweepP <= 0.01f) return@Canvas
@@ -212,35 +208,18 @@ internal fun FanBoard(
                 useCenter = false, topLeft = arcTopLeft, size = arcSize,
                 style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
             )
-            // 快捷栏胶囊框线（与弧带同源渐变）
-            quickCapsulePath(geometry, density)?.let { capsule ->
-                drawPath(
-                    path = capsule, brush = brush,
-                    style = Stroke(width = 1.25.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
-                )
-            }
         }
     }
 }
 
-/** 板形 Shape（磨砂弧带∪胶囊并集，sweep=1 终态）——miuix textureBlur 的模糊区域。 */
+/** 板形 Shape（磨砂弧带，sweep=1 终态）——miuix textureBlur 的模糊区域。
+ *  快捷栏胶囊**不在其中**：它自带底（见 QuickAppsBar），与扇形板各自独立成块。 */
 private fun boardShape(geometry: FanGeometry, density: Float) = object : Shape {
     override fun createOutline(
         size: androidx.compose.ui.geometry.Size,
         layoutDirection: LayoutDirection,
         density: Density
-    ): Outline = Outline.Generic(boardPath(geometry, density.density, 1f))
-}
-
-/**
- * 板形轮廓 Path（窗口本地系，与命中测试/FanBackground 同源坐标）：**磨砂弧带**（覆盖双环图标群的
- * 扇环，随 sweep 生长）∪ 快捷栏胶囊。去掉从角顶点撑出的整块填充饼（用户 2026-09-20：饼→磨砂弧带），
- * 底角与常规边缘档共用同一几何。这里只做模糊填充裁剪区；描边另在 FanBoard ③ 层只勾最外层一条圆弧。
- */
-internal fun boardPath(geometry: FanGeometry, density: Float, sweepP: Float): Path {
-    val band = bandPath(geometry, density, sweepP)
-    val capsule = quickCapsulePath(geometry, density) ?: return band
-    return Path().apply { op(band, capsule, PathOperation.Union) }
+    ): Outline = Outline.Generic(bandPath(geometry, density.density, 1f))
 }
 
 /**
@@ -284,24 +263,4 @@ internal fun fanBandRadii(geometry: FanGeometry, density: Float): Pair<Float, Fl
     val outerEdge = maxR + iconHalf + pad
     val innerEdge = (minR - iconHalf - pad).coerceAtLeast(24f * density)
     return innerEdge to outerEdge
-}
-
-/** 快捷栏胶囊轮廓（无快捷项时返回 null）。尺寸公式与 computeQuickAppCenter / QuickAppsBar Row 同源。 */
-private fun quickCapsulePath(geometry: FanGeometry, density: Float): Path? {
-    val n = minOf(6, geometry.quickApps.size)
-    if (n <= 0) return null
-    val q = geometry.quickIconSize * density
-    return Path().apply {
-        addRoundRect(
-            RoundRect(
-                geometry.quickBarX, geometry.quickBarY,
-                geometry.quickBarX + n * q + (n - 1) * q * 0.35f + q,
-                geometry.quickBarY + q * 1.5f,
-                CornerRadius(
-                    (geometry.quickIconSize / 2f + 4f) * density,
-                    (geometry.quickIconSize / 2f + 4f) * density
-                )
-            )
-        )
-    }
 }

@@ -162,6 +162,9 @@ object SelfCheck {
                 appendLine("呼出停顿: ${i(prefs, PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)} ms" +
                     " / 滑动距离: ${f(prefs, PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP).toInt()} dp" +
                     " / 死区: ${f(prefs, PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)} dp")
+                appendLine("底角斜滑: ${runCatching {
+                    prefs.getBoolean(PrefKeys.CORNER_SWIPE_ENABLED, LayoutDefaults.CORNER_SWIPE_ENABLED)
+                }.getOrDefault(LayoutDefaults.CORNER_SWIPE_ENABLED)}")
                 appendLine("扇形雾化: ${f(prefs, PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)}" +
                     " / 背景压暗: ${runCatching { prefs.getBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED) }.getOrDefault(LayoutDefaults.FAN_DIM_ENABLED)}")
                 appendLine("主题: ${runCatching { prefs.getString(PrefKeys.THEME_MODE, "?") }.getOrNull() ?: "?"}")

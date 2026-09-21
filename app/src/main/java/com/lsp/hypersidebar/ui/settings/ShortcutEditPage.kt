@@ -398,7 +398,7 @@ internal fun ShortcutEditPage(
                         style = MiuixTheme.textStyles.body1,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(onClick = onDelete!!)
+                            .sinkClickable(onClick = onDelete!!)
                             .padding(vertical = 12.dp),
                         textAlign = TextAlign.Center
                     )

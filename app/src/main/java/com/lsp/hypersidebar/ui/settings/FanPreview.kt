@@ -2,15 +2,17 @@ package com.lsp.hypersidebar.ui.settings
 
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.SettingsRepository
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,12 +21,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -37,14 +44,13 @@ import com.lsp.hypersidebar.ui.fan.FanConfig
 import com.lsp.hypersidebar.ui.fan.FanGeometry
 import com.lsp.hypersidebar.ui.fan.FanThemeColors
 import com.lsp.hypersidebar.ui.fan.computeFanGeometry
+import com.lsp.hypersidebar.ui.fan.fanBandRadii
+import com.lsp.hypersidebar.ui.fan.sweepExtremes
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.squircle.squircleBorder
-import top.yukonga.miuix.kmp.squircle.squircleClip
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import kotlin.math.cos
-import kotlin.math.sin
 
 private const val PREVIEW_DENSITY = 0.5f
 private const val PORTRAIT_WIDTH = 360f
@@ -89,55 +95,61 @@ private val previewQuickApps = listOf(
     FanAppInfo("com.android.settings", "设置")
 )
 
+/**
+ * 效果预览分区唯一卡片：miuix TabRow（竖屏/横屏/底角侧滑）+ 一块铺满的抽象扇形预览。
+ * 取代旧"双格卡+整宽单格卡"两张卡（三形态两张卡不对称）。点击预览进当前 tab 方向的布局 sheet；
+ * 草稿优先读（revision 通道）→ sheet 内拖滑条时本卡实时跟随。
+ */
 @Composable
-internal fun LayoutPreviewCard(
+internal fun FanPreviewTabsCard(
     repo: SettingsRepository,
-    onPortraitClick: () -> Unit,
-    onLandscapeClick: () -> Unit,
+    onEditLayout: (LayoutOrientation) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 草稿优先读：BottomSheet 编辑期滑条变化实时反映到本卡（revision 通道驱动重组）
     val rev = repo.revision
     val config = remember(rev) { buildPreviewConfig(repo) }
-
-    val portraitGeometry = remember(config) {
-        previewGeometry(
-            config = config,
-            width = PORTRAIT_WIDTH,
-            height = PORTRAIT_HEIGHT,
-            isLandscape = false
-        )
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val orientation = when (selectedTab) {
+        1 -> LayoutOrientation.LANDSCAPE
+        2 -> LayoutOrientation.CORNER
+        else -> LayoutOrientation.PORTRAIT
     }
-    val landscapeGeometry = remember(config) {
-        previewGeometry(
-            config = config,
-            width = LANDSCAPE_WIDTH,
-            height = LANDSCAPE_HEIGHT,
-            isLandscape = true
-        )
-    }
-
+    val tabs = listOf(
+        stringResource(R.string.portrait_preview),
+        stringResource(R.string.landscape_preview),
+        stringResource(R.string.corner_preview)
+    )
     Card(
         modifier = modifier.fillMaxWidth(),
         insideMargin = PaddingValues(0.dp)
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(230.dp)
-        ) {
-            PreviewPane(
-                title = stringResource(R.string.portrait_preview),
-                geometry = portraitGeometry,
-                onClick = onPortraitClick,
-                modifier = Modifier.weight(1f)
+        Column {
+            TabRowWithContour(
+                tabs = tabs,
+                selectedTabIndex = selectedTab,
+                onTabSelected = { selectedTab = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
             )
-            PreviewPane(
-                title = stringResource(R.string.landscape_preview),
-                geometry = landscapeGeometry,
-                onClick = onLandscapeClick,
-                modifier = Modifier.weight(1f)
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(230.dp)
+                    .sinkClickable(onClick = { onEditLayout(orientation) })
+                    .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+            ) {
+                // 切 tab：新旧预览交叉淡入，避免硬切
+                Crossfade(targetState = orientation, label = "fanPreviewTab") { tab ->
+                    FanStaticPreview(
+                        config = config,
+                        isLandscape = tab == LayoutOrientation.LANDSCAPE,
+                        corner = tab == LayoutOrientation.CORNER,
+                        includeQuickBar = true,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
         }
     }
 }
@@ -153,8 +165,56 @@ internal fun buildPreviewConfig(repo: SettingsRepository): FanConfig = FanConfig
     landscapeMaxAppsOuter = repo.landscapeMaxAppsOuter(),
     landscapeMaxAppsInner = repo.landscapeMaxAppsInner(),
     landscapeInnerRadiusDp = repo.landscapeInnerRadius(),
-    landscapeOuterRadiusDp = repo.landscapeOuterRadius()
+    landscapeOuterRadiusDp = repo.landscapeOuterRadius(),
+    cornerIconSizeDp = repo.cornerIconSize(),
+    cornerInnerRadiusDp = repo.cornerInnerRadius(),
+    cornerOuterRadiusDp = repo.cornerOuterRadius(),
+    cornerMaxAppsOuter = repo.cornerMaxAppsOuter(),
+    cornerMaxAppsInner = repo.cornerMaxAppsInner()
 )
+
+/**
+ * 预览数值缓动：半径滑条按 10dp 步进落值，直接重算会让预览"一格一格"跳。对当前方向的
+ * 图标/内外半径做短 tween，拖拽时弧带平滑生长。应用数不补间（中途增减图标会闪跳）。
+ */
+@Composable
+private fun animatedPreviewConfig(
+    config: FanConfig,
+    isLandscape: Boolean,
+    corner: Boolean
+): FanConfig {
+    val spec = tween<Float>(durationMillis = 180, easing = FastOutSlowInEasing)
+    val icon = animateFloatAsState(
+        when {
+            corner -> config.cornerIconSizeDp
+            isLandscape -> config.landscapeIconSizeDp
+            else -> config.iconSizeDp
+        }, spec, label = "previewIcon"
+    ).value
+    val inner = animateFloatAsState(
+        when {
+            corner -> config.cornerInnerRadiusDp
+            isLandscape -> config.landscapeInnerRadiusDp
+            else -> config.innerRadiusDp
+        }, spec, label = "previewInner"
+    ).value
+    val outer = animateFloatAsState(
+        when {
+            corner -> config.cornerOuterRadiusDp
+            isLandscape -> config.landscapeOuterRadiusDp
+            else -> config.outerRadiusDp
+        }, spec, label = "previewOuter"
+    ).value
+    return when {
+        corner -> config.copy(
+            cornerIconSizeDp = icon, cornerInnerRadiusDp = inner, cornerOuterRadiusDp = outer
+        )
+        isLandscape -> config.copy(
+            landscapeIconSizeDp = icon, landscapeInnerRadiusDp = inner, landscapeOuterRadiusDp = outer
+        )
+        else -> config.copy(iconSizeDp = icon, innerRadiusDp = inner, outerRadiusDp = outer)
+    }
+}
 
 /** 单方向静态扇形预览（BottomSheet 内实时预览复用；geometry 与实机 computeFanGeometry 同源）。 */
 @Composable
@@ -162,53 +222,32 @@ internal fun FanStaticPreview(
     config: FanConfig,
     isLandscape: Boolean,
     modifier: Modifier = Modifier,
-    includeQuickBar: Boolean = true
+    includeQuickBar: Boolean = true,
+    /** 底角预览：锚点=精确底角、弧占向上象限（与竖/横屏同构的第三种形态）。 */
+    corner: Boolean = false
 ) {
-    val geometry = remember(config, isLandscape) {
+    val animatedConfig = animatedPreviewConfig(config, isLandscape, corner)
+    val geometry = remember(animatedConfig, isLandscape, corner) {
         previewGeometry(
-            config = config,
+            config = animatedConfig,
             width = if (isLandscape) LANDSCAPE_WIDTH else PORTRAIT_WIDTH,
             height = if (isLandscape) LANDSCAPE_HEIGHT else PORTRAIT_HEIGHT,
             isLandscape = isLandscape,
+            corner = corner,
             quickApps = if (includeQuickBar) previewQuickApps else emptyList()
         )
     }
-    // 固定宽高比预览框（竖屏 3:4 / 横屏 4:3）：滑条拖动时框形稳定不抖，
-    // 扇形按内容适配缩放居中；sheet 内预览不带快捷栏（不受布局滑条影响）
+    // 固定宽高比预览框（竖屏 3:4 / 横屏 4:3 / 底角近方形）：框形稳定不抖，扇形按内容适配缩放居中
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         StaticFanPreview(
             geometry = geometry,
-            modifier = Modifier.aspectRatio(if (isLandscape) 4f / 3f else 3f / 4f)
-        )
-    }
-}
-
-@Composable
-private fun PreviewPane(
-    title: String,
-    geometry: FanGeometry,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .fillMaxHeight()
-            .squircleClip(cornerRadius = 12.dp)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = title,
-            style = MiuixTheme.textStyles.body1,
-            color = MiuixTheme.colorScheme.onSurface
-        )
-        StaticFanPreview(
-            geometry = geometry,
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .padding(top = 8.dp)
+            modifier = Modifier.aspectRatio(
+                when {
+                    corner -> 1f
+                    isLandscape -> 4f / 3f
+                    else -> 3f / 4f
+                }
+            )
         )
     }
 }
@@ -218,21 +257,24 @@ private fun previewGeometry(
     width: Float,
     height: Float,
     isLandscape: Boolean,
+    corner: Boolean = false,
     quickApps: List<FanAppInfo> = previewQuickApps
 ): FanGeometry {
-    val appLimit = if (isLandscape) {
-        config.landscapeMaxAppsOuter + config.landscapeMaxAppsInner
-    } else {
-        config.maxAppsOuter + config.maxAppsInner
+    val appLimit = when {
+        corner -> config.cornerMaxAppsOuter + config.cornerMaxAppsInner
+        isLandscape -> config.landscapeMaxAppsOuter + config.landscapeMaxAppsInner
+        else -> config.maxAppsOuter + config.maxAppsInner
     }
     return computeFanGeometry(
-        anchor = Offset(0f, height / 2f),
+        // 底角预览：锚点=精确底角 (0,H)，与实机 postShowFanCorner 同源
+        anchor = if (corner) Offset(0f, height) else Offset(0f, height / 2f),
         screenSize = IntSize(width.toInt(), height.toInt()),
         apps = previewApps.take(appLimit.coerceIn(1, previewApps.size)),
         quickApps = quickApps,
         config = config,
         density = PREVIEW_DENSITY,
-        isLandscape = isLandscape
+        isLandscape = isLandscape,
+        cornerAnchor = corner
     )
 }
 
@@ -270,56 +312,30 @@ private fun StaticFanPreview(
 
         Canvas(modifier = Modifier.fillMaxSize()) {
             val anchor = map(geometry.anchor)
-            val outerRadius = geometry.outerRadius * scale
-            val outerTrackRadius = previewRingRadius(geometry, isOuter = true) * scale
-            val innerTrackRadius = previewRingRadius(geometry, isOuter = false) * scale
-            val iconSizePx = geometry.iconSize * PREVIEW_DENSITY * scale
+            // 弧带内外缘与真机同源（fanBandRadii），虚拟系算好再乘 scale
+            val (bandInnerR, bandOuterR) = fanBandRadii(geometry, PREVIEW_DENSITY)
+            val bandMidPx = (bandInnerR + bandOuterR) / 2f * scale
+            val bandThicknessPx = (bandOuterR - bandInnerR) * scale
+            val outerPx = bandOuterR * scale
+            // 磨砂弧带剪影：抽象平涂（粗描边弧 = 圆角端扇环），替代旧填充饼 + 双轨道
             drawArc(
                 color = colors.surfaceContainer.copy(alpha = 0.92f),
                 startAngle = geometry.startAngle,
                 sweepAngle = geometry.spanAngle,
-                useCenter = true,
-                topLeft = Offset(anchor.x - outerRadius, anchor.y - outerRadius),
-                size = Size(outerRadius * 2f, outerRadius * 2f)
-            )
-            drawArc(
-                color = colors.primaryContainer.copy(alpha = 0.34f),
-                startAngle = geometry.startAngle,
-                sweepAngle = geometry.spanAngle,
                 useCenter = false,
-                topLeft = Offset(anchor.x - outerTrackRadius, anchor.y - outerTrackRadius),
-                size = Size(outerTrackRadius * 2f, outerTrackRadius * 2f),
-                style = Stroke(width = iconSizePx * 1.08f)
+                topLeft = Offset(anchor.x - bandMidPx, anchor.y - bandMidPx),
+                size = Size(bandMidPx * 2f, bandMidPx * 2f),
+                style = Stroke(width = bandThicknessPx, cap = StrokeCap.Round)
             )
-            if (geometry.items.any { !it.isOuter }) {
-                drawArc(
-                    color = colors.surfaceContainerHigh.copy(alpha = 0.72f),
-                    startAngle = geometry.startAngle,
-                    sweepAngle = geometry.spanAngle,
-                    useCenter = false,
-                    topLeft = Offset(anchor.x - innerTrackRadius, anchor.y - innerTrackRadius),
-                    size = Size(innerTrackRadius * 2f, innerTrackRadius * 2f),
-                    style = Stroke(width = iconSizePx * 1.08f)
-                )
-            }
+            // 最外层单条弧线（与真机 FanBoard ③ 层同口径）
             drawArc(
                 color = colors.outline.copy(alpha = 0.45f),
                 startAngle = geometry.startAngle,
                 sweepAngle = geometry.spanAngle,
                 useCenter = false,
-                topLeft = Offset(anchor.x - outerRadius, anchor.y - outerRadius),
-                size = Size(outerRadius * 2f, outerRadius * 2f),
-                style = Stroke(width = 1.dp.toPx())
-            )
-            val dividerRadius = geometry.innerRadius * scale
-            drawArc(
-                color = colors.outline.copy(alpha = 0.18f),
-                startAngle = geometry.startAngle,
-                sweepAngle = geometry.spanAngle,
-                useCenter = false,
-                topLeft = Offset(anchor.x - dividerRadius, anchor.y - dividerRadius),
-                size = Size(dividerRadius * 2f, dividerRadius * 2f),
-                style = Stroke(width = 1.dp.toPx())
+                topLeft = Offset(anchor.x - outerPx, anchor.y - outerPx),
+                size = Size(outerPx * 2f, outerPx * 2f),
+                style = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Round)
             )
         }
 
@@ -361,22 +377,33 @@ private fun previewViewport(geometry: FanGeometry): PreviewViewport {
     }
     val quickHeight = quickIconSize + quickPadding * 2f
     val centers = geometry.items.map { Offset(it.centerX, it.centerY) }
+    // 弧带外缘纳入包围盒（预览画的是弧带剪影，不能只按图标中心裁，否则带边被切）
+    val (_, bandOuterR) = fanBandRadii(geometry, PREVIEW_DENSITY)
+    val (minSin, maxSin, minCos, maxCos) = sweepExtremes(geometry.startAngle, geometry.endAngle)
+    val bandLeft = geometry.anchor.x + bandOuterR * minCos
+    val bandRight = geometry.anchor.x + bandOuterR * maxCos
+    val bandTop = geometry.anchor.y + bandOuterR * minSin
+    val bandBottom = geometry.anchor.y + bandOuterR * maxSin
     val contentLeft = minOf(
         geometry.anchor.x,
         centers.minOfOrNull { it.x - iconSize / 2f } ?: geometry.anchor.x,
-        geometry.quickBarX
+        geometry.quickBarX,
+        bandLeft
     )
     val contentTop = minOf(
         centers.minOfOrNull { it.y - iconSize / 2f } ?: geometry.anchor.y,
-        geometry.quickBarY
+        geometry.quickBarY,
+        bandTop
     )
     val contentRight = maxOf(
         centers.maxOfOrNull { it.x + iconSize / 2f } ?: geometry.anchor.x,
-        geometry.quickBarX + quickWidth
+        geometry.quickBarX + quickWidth,
+        bandRight
     )
     val contentBottom = maxOf(
         centers.maxOfOrNull { it.y + iconSize / 2f } ?: geometry.anchor.y,
-        geometry.quickBarY + quickHeight
+        geometry.quickBarY + quickHeight,
+        bandBottom
     )
     val padding = iconSize * 0.55f
     return PreviewViewport(
@@ -385,16 +412,6 @@ private fun previewViewport(geometry: FanGeometry): PreviewViewport {
         width = contentRight - contentLeft + padding * 2f,
         height = contentBottom - contentTop + padding * 2f
     )
-}
-
-/** 轨道装饰弧半径：取实机布局中该圈图标的真实半径（无该圈图标时按实机公式兜底）。 */
-private fun previewRingRadius(geometry: FanGeometry, isOuter: Boolean): Float {
-    geometry.items.firstOrNull { it.isOuter == isOuter }?.let { return it.radius }
-    return if (isOuter) {
-        (geometry.innerRadius + geometry.outerRadius) / 2f
-    } else {
-        geometry.innerRadius * 0.85f
-    }
 }
 
 @Composable

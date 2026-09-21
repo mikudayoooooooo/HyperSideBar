@@ -25,6 +25,7 @@ import com.lsp.hypersidebar.util.RemotePrefsBridge
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 /**
@@ -64,9 +65,10 @@ internal fun InvokeSettingsPage(prefs: SharedPreferences, modifier: Modifier = M
                     var swipeDp by remember(effectivePrefs, repo.revision) {
                         mutableStateOf(repo.triggerMinDistanceDp().roundToInt())
                     }
-                    SettingsSliderItem(
+                    SliderPreference(
                         title = stringResource(R.string.trigger_swipe_distance_title),
-                        summary = stringResource(R.string.trigger_swipe_distance_summary, swipeDp),
+                        summary = stringResource(R.string.trigger_swipe_distance_summary),
+                        valueText = "$swipeDp dp",
                         value = swipeDp.toFloat(),
                         valueRange = distanceMin..distanceMax,
                         steps = sliderSteps(distanceMin, distanceMax, distanceStep),
@@ -75,15 +77,15 @@ internal fun InvokeSettingsPage(prefs: SharedPreferences, modifier: Modifier = M
                         },
                         onValueChangeFinished = {
                             repo.save(PrefKeys.TRIGGER_MIN_DISTANCE, swipeDp.toFloat())
-                        },
-                        compact = true
+                        }
                     )
                     var dwellMs by remember(effectivePrefs, repo.revision) {
                         mutableStateOf(repo.triggerDwellMs())
                     }
-                    SettingsSliderItem(
+                    SliderPreference(
                         title = stringResource(R.string.trigger_dwell_title),
-                        summary = stringResource(R.string.trigger_dwell_summary, dwellMs),
+                        summary = stringResource(R.string.trigger_dwell_summary),
+                        valueText = "$dwellMs ms",
                         value = dwellMs.toFloat(),
                         valueRange = dwellMin..dwellMax,
                         steps = sliderSteps(dwellMin, dwellMax, dwellStep),
@@ -92,8 +94,7 @@ internal fun InvokeSettingsPage(prefs: SharedPreferences, modifier: Modifier = M
                         },
                         onValueChangeFinished = {
                             repo.save(PrefKeys.TRIGGER_DWELL_MS, dwellMs)
-                        },
-                        compact = true
+                        }
                     )
                 }
             }

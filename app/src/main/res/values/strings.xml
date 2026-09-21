@@ -31,6 +31,7 @@
     <string name="portrait_preview_summary">侧边扇形菜单与快捷应用栏</string>
     <string name="landscape_preview">横屏</string>
     <string name="landscape_preview_summary">横屏使用更紧凑的展开角度</string>
+    <string name="corner_preview">底角侧滑</string>
 
     <string name="apps_section">应用</string>
     <string name="select_apps">扇形应用</string>
@@ -56,15 +57,17 @@
     <string name="invoke_section">呼出设置</string>
     <string name="invoke_settings_summary">滑动距离 %1$d dp · 呼出停顿 %2$d ms</string>
     <string name="trigger_swipe_distance_title">滑动距离</string>
-    <string name="trigger_swipe_distance_summary">内滑 %1$d dp 达确认线，停顿后呼出；太浅易误触、太深难触发；改动下次手势生效</string>
+    <string name="trigger_swipe_distance_summary">内滑达此距离进确认线，停顿后呼出；太浅易误触、太深难触发；改动下次手势生效</string>
     <string name="fan_background_section">扇形背景</string>
     <string name="fan_background_summary">材质 %1$d%% · 压暗%2$s</string>
     <string name="state_on">开</string>
     <string name="state_off">关</string>
     <string name="trigger_dwell_title">呼出停顿</string>
-    <string name="trigger_dwell_summary">贴边停顿 %1$d ms 后展开扇形；改动即时生效</string>
+    <string name="trigger_dwell_summary">贴边停顿达此时长后展开扇形；改动即时生效</string>
+    <string name="corner_swipe_title">底角斜滑呼出</string>
+    <string name="corner_swipe_summary">从屏幕左下/右下角斜向内上滑，直接呼出扇形（仅竖屏）；与停顿呼出并存，默认关闭</string>
     <string name="fan_fog_title">板材质浓度</string>
-    <string name="fan_fog_summary">统一驱动板的混色、提亮与颗粒：%1$d%%（0 = 板材质全关，只剩弧线与图标；若背景模糊来源已开启，模糊本身仍在，板不会变透明）；改动下次呼出生效</string>
+    <string name="fan_fog_summary">统一驱动板的混色、提亮与颗粒（0 = 板材质全关，只剩弧线与图标；若背景模糊来源已开启，模糊本身仍在，板不会变透明）；改动下次呼出生效</string>
     <string name="fan_dim_title">背景压暗</string>
     <string name="fan_dim_summary">呼出扇形时全屏压暗 24%，突出菜单；改动下次呼出生效</string>
     <string name="fan_blur_source_title">背景模糊来源</string>
@@ -87,6 +90,7 @@
     <string name="reset_confirm">确认</string>
     <string name="portrait_layout">竖屏布局</string>
     <string name="landscape_layout">横屏布局</string>
+    <string name="corner_layout">底角侧滑</string>
     <string name="layout_sheet_cancel">取消</string>
     <string name="layout_sheet_save">保存</string>
     <string name="layout_sheet_restore_default">恢复默认</string>
@@ -98,29 +102,19 @@
     <string name="outer_radius_max">外圈最大半径</string>
     <string name="outer_apps_count">外圈应用数</string>
     <string name="inner_apps_count">内圈应用数</string>
-    <string name="icon_size_summary">%1$d dp</string>
     <string name="icon_size_effective">当前 %1$d dp · 实际生效 %2$d dp</string>
     <string name="icon_size_limited">当前 %1$d dp · 实际生效 %2$d dp（图标过大或数量过多）</string>
-    <string name="inner_radius_summary">%1$d dp</string>
-    <string name="outer_radius_summary">%1$d dp</string>
-    <string name="outer_apps_summary">%1$d 个</string>
-    <string name="inner_apps_summary">%1$d 个</string>
 
     <string name="stick_sensitivity">摇杆灵敏度</string>
     <string name="stick_sensitivity_description">%1$d dp，数值越小越灵敏</string>
 
     <string name="landscape_icon_size">图标大小</string>
-    <string name="landscape_icon_size_summary">%1$d dp</string>
     <string name="landscape_icon_size_effective">当前 %1$d dp · 实际生效 %2$d dp</string>
     <string name="landscape_icon_size_limited">当前 %1$d dp · 实际生效 %2$d dp（图标过大或数量过多）</string>
     <string name="landscape_outer_apps_count">外圈应用数</string>
-    <string name="landscape_outer_apps_summary">%1$d 个</string>
     <string name="landscape_inner_apps_count">内圈应用数</string>
-    <string name="landscape_inner_apps_summary">%1$d 个</string>
     <string name="landscape_inner_radius">内圈半径</string>
-    <string name="landscape_inner_radius_summary">%1$d dp</string>
     <string name="landscape_outer_radius">外圈半径</string>
-    <string name="landscape_outer_radius_summary">%1$d dp</string>
 
     <string name="app_icon_content_desc">应用图标</string>
     <string name="about_info">应用信息</string>

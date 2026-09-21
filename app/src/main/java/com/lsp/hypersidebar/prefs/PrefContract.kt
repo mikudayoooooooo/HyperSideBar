@@ -27,6 +27,16 @@ object PrefKeys {
     const val TRIGGER_DWELL_MS = "triggerDwellMs"
     const val TRIGGER_MIN_DISTANCE = "triggerMinDistance"
 
+    /** 底角斜滑触发开关（N1，仅竖屏）：默认关（opt-in）。开=底部两角斜向内上滑呼出扇形。 */
+    const val CORNER_SWIPE_ENABLED = "cornerSwipeEnabled"
+
+    /** 底角斜滑扇形独立样式（N1，仅竖屏）：默认值=竖屏布局值，故开箱与竖屏效果一致、可独立微调。 */
+    const val CORNER_ICON_SIZE = "cornerIconSize"
+    const val CORNER_INNER_RADIUS = "cornerInnerRadius"
+    const val CORNER_OUTER_RADIUS = "cornerOuterRadius"
+    const val CORNER_MAX_APPS_OUTER = "cornerMaxAppsOuter"
+    const val CORNER_MAX_APPS_INNER = "cornerMaxAppsInner"
+
     /** 板材质浓度（0~0.70）：统一驱动 miuix 板材质的「主题混色 + Screen 提亮 + 噪点抖动」，
      *  0=只剩弧线与图标。键名沿用旧雾化键，保用户已调数值 */
     const val FAN_FOG_INTENSITY = "fanFogIntensity"
@@ -236,6 +246,17 @@ object LayoutDefaults {
     const val DEAD_ZONE = 12f
     const val TRIGGER_DWELL_MS = 250
 
+    /** 底角斜滑触发默认开关（N1）：默认关，用户显式开启后才接管底角手势。 */
+    const val CORNER_SWIPE_ENABLED = false
+
+    /** 底角斜滑扇形样式默认值：图标/数量沿用竖屏，半径独立放大（仿 Flyme 大半径四分之一弧，
+     *  双环 11 图标不再挤在 150dp 小弧上）。可在底角布局 sheet 独立微调。 */
+    const val CORNER_ICON_SIZE = ICON_SIZE
+    const val CORNER_INNER_RADIUS = 270f
+    const val CORNER_OUTER_RADIUS = 380f
+    const val CORNER_MAX_APPS_OUTER = MAX_APPS_OUTER
+    const val CORNER_MAX_APPS_INNER = MAX_APPS_INNER
+
     // ===== 滑条量程契约（0913 用户拍板：量程/步进与默认值同源定义，UI 禁止内联数字）=====
     /** 滑动距离滑条（dp）：min / max / 步进。默认值=上方 TRIGGER_MIN_DISTANCE_DP，须落在格点上 */
     const val TRIGGER_SWIPE_DISTANCE_MIN_DP = 10
@@ -345,6 +366,11 @@ object LayoutDefaults {
         PrefKeys.LANDSCAPE_MAX_APPS_INNER,
         PrefKeys.LANDSCAPE_INNER_RADIUS,
         PrefKeys.LANDSCAPE_OUTER_RADIUS,
+        PrefKeys.CORNER_ICON_SIZE,
+        PrefKeys.CORNER_INNER_RADIUS,
+        PrefKeys.CORNER_OUTER_RADIUS,
+        PrefKeys.CORNER_MAX_APPS_OUTER,
+        PrefKeys.CORNER_MAX_APPS_INNER,
         PrefKeys.FAN_FOG_INTENSITY,
         PrefKeys.FAN_DIM_ENABLED,
         PrefKeys.FAN_BLUR_SOURCE

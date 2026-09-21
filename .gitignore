@@ -19,3 +19,14 @@ local.properties
 keystore/
 keystore.properties
 .mimosa/
+
+# 代理 / 工具工作区与记忆文件（不入库；清单见 PROJECT_NOTES.md §6）
+.workbuddy/
+.zcode/
+.novel-studio/
+.mimocode/
+
+# 构建与工具残渣
+.kotlin/
+__pycache__/
+hs_err_pid*.log

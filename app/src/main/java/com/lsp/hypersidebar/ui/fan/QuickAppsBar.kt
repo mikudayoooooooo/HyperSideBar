@@ -105,8 +105,8 @@ fun QuickAppsBar(
                     )
                 }
                 .squircleClip(cornerRadius = (iconSizeDp / 2f + 4f).dp)
-                // 连体玻璃板（0914 定稿）：栏的底=FanBackground 磨砂板胶囊本身，此处不再
-                // 叠任何染色——深色主题下两层深色叠加曾让栏明显深于扇形（"连体感"破功）
+                // 栏的底由 FanBoard 的**胶囊独立模糊层**提供（与弧带同一套材质参数，故两者观感
+                // 一致），此处不再叠任何染色——自己铺平涂底会让胶囊与扇形板材质分叉（0920 反馈）
                 .padding(
                     horizontal = (iconSizeDp * 0.5f).dp,
                     vertical = (iconSizeDp * 0.25f).dp

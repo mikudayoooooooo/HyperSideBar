@@ -29,7 +29,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.theme.ThemeMode
@@ -39,10 +38,8 @@ import com.lsp.hypersidebar.util.ShortcutStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.ArrowPreference
@@ -179,10 +176,10 @@ internal fun SettingsPage(
 
         item { SmallTitle(text = stringResource(R.string.effect_preview)) }
         item {
-            LayoutPreviewCard(
+            // 三形态（竖/横/底角）一张卡：miuix TabRow 切换 + 铺满预览，点击进对应布局 sheet
+            FanPreviewTabsCard(
                 repo = effectiveRepo,
-                onPortraitClick = { openLayoutSheet(LayoutOrientation.PORTRAIT) },
-                onLandscapeClick = { openLayoutSheet(LayoutOrientation.LANDSCAPE) }
+                onEditLayout = { orientation -> openLayoutSheet(orientation) }
             )
         }
 
@@ -354,40 +351,6 @@ private fun SettingsList(
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         content = content
-    )
-}
-
-@Composable
-internal fun SettingsSliderItem(
-    title: String,
-    summary: String? = null,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    onValueChange: (Float) -> Unit,
-    onValueChangeFinished: () -> Unit,
-    steps: Int = 0,
-    sliderHorizontalPadding: Dp = 16.dp,
-    compact: Boolean = false,
-    /** 量程退化（min==max，如弦长上限压到几何下限）时置 false：无可调空间就别给可拖的假象 */
-    enabled: Boolean = true
-) {
-    BasicComponent(
-        title = title,
-        summary = summary,
-        insideMargin = if (compact) SheetSliderInsideMargin else BasicComponentDefaults.InsideMargin,
-        bottomAction = {
-            Slider(
-                value = value,
-                onValueChange = onValueChange,
-                onValueChangeFinished = onValueChangeFinished,
-                valueRange = valueRange,
-                steps = steps,
-                enabled = enabled,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = sliderHorizontalPadding)
-            )
-        }
     )
 }
 

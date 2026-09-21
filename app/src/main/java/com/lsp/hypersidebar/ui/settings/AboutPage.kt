@@ -410,7 +410,7 @@ internal fun AboutPage(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable(enabled = !hostRestartBusy, onClick = toggle)
+                        .sinkClickable(enabled = !hostRestartBusy, onClick = toggle)
                         .padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

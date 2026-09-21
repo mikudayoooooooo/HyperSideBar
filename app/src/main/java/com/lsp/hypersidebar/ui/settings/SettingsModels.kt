@@ -6,6 +6,7 @@ import android.content.SharedPreferences
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,8 +36,33 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.SinkFeedback
+import top.yukonga.miuix.kmp.utils.pressable
 
 internal enum class ModuleStatus { ACTIVE, INACTIVE }
+
+/**
+ * HyperOS 观感的点击目标：miuix 下沉按压反馈（SinkFeedback）替代默认 ripple，
+ * 消除"点了没反馈 / 灰圈生硬"的观感（与 AllApps 磁贴同一语系）。
+ */
+@Composable
+fun Modifier.sinkClickable(
+    enabled: Boolean = true,
+    onClick: () -> Unit
+): Modifier {
+    val interactionSource = remember { MutableInteractionSource() }
+    return this
+        .pressable(
+            interactionSource = interactionSource,
+            indication = SinkFeedback()
+        )
+        .clickable(
+            interactionSource = interactionSource,
+            indication = null,
+            enabled = enabled,
+            onClick = onClick
+        )
+}
 
 internal fun openLsposedManager(context: Context) {
     runCatching {
@@ -117,10 +143,12 @@ internal fun ModuleStatusComponent(
         }
     }
 
+    val retryModifier =
+        if (anyCircuit) Modifier.sinkClickable(onClick = onRetry) else Modifier
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (anyCircuit) Modifier.clickable { onRetry() } else Modifier),
+            .then(retryModifier),
         colors = CardDefaults.defaultColors(color = bg)
     ) {
         Column(

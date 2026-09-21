@@ -3,6 +3,8 @@ package com.lsp.hypersidebar.ui.fan
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -17,6 +19,7 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -35,7 +38,9 @@ import top.yukonga.miuix.kmp.blur.BlurColors
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
+import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.sin
 
 /**
@@ -72,7 +77,9 @@ internal enum class FanBackdropSource {
 /**
  * 板材质渲染器 —— 扇形与快捷栏共用的唯一板（0915 用户拍板「两者一体化呈现」）。
  *
- * 单条 miuix 管线：`textureBlur(backdrop, boardShape, blurRadius, noiseCoefficient, colors)`，
+ * 单条 miuix 管线：`textureBlur(backdrop, shape, blurRadius, noiseCoefficient, colors)`，
+ * 弧带（fillMaxSize 节点 + Generic path）与快捷栏胶囊（**胶囊尺寸节点 + 本地坐标 Rounded**）
+ * 各起一层，但共享同一 backdrop 与同一套材质参数（见方法内 ②-a / ②-b）。
  * backdrop 由 [source] 决定装什么：
  *
  * | 来源 | backdrop 内容 | 板底混色 | 观感 |
@@ -101,7 +108,8 @@ internal fun FanBoard(
     sweep: () -> Float,
     modifier: Modifier = Modifier
 ) {
-    val density = LocalDensity.current.density
+    val localDensity = LocalDensity.current
+    val density = localDensity.density
 
     // 板底混色：三档 —— 有背后真像素时「混色=玻璃罩」（把背后像素拉回主题色域），
     // 无来源时「混色=板底色本身」。采样壁纸这档必须够浓：亮壁纸配暗主题时，
@@ -169,28 +177,39 @@ internal fun FanBoard(
                 contrast = 1f,
                 saturation = LayoutDefaults.FAN_BOARD_SATURATION
             )
+            // ②-a 弧带：环扇形只能用 Generic path 表达、且坐标铺满整窗，故节点仍 fillMaxSize
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer { alpha = sweep() }
                     .textureBlur(
                         backdrop = backdrop,
-                        shape = remember(geometry, density) { boardShape(geometry, density) },
+                        shape = remember(geometry, density) { bandShape(geometry, density) },
                         blurRadius = blurRadiusDp,
                         noiseCoefficient = noise,
                         colors = blurColors
                     )
             )
-            if (geometry.quickApps.isNotEmpty()) {
+            // ②-b 快捷栏胶囊：节点尺寸**恰好等于胶囊**并整体偏移到位，形状用节点本地坐标
+            //（0,0→w,h）。miuix 的 shape 是按节点尺寸求值的（ShapeProvider → placeWithLayer 的
+            // clip），"整窗大节点 + 远离原点的绝对坐标形状"会让这层离屏缓冲仍是整窗、裁剪靠
+            // 绝对坐标掩膜——真机表现为胶囊外圈多出一块直角灰矩形（0921 复现）。改成尺寸自洽的
+            // 节点后缓冲就是胶囊本身，且与弧带共用同一 backdrop / 混色 / 提亮 / 噪点参数，
+            // 两者观感必然一致（用户 0920 定案"一体=材质一致，非几何并集"）。
+            quickCapsuleMetrics(geometry, density)?.let { capsule ->
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
+                        .offset {
+                            IntOffset(geometry.quickBarX.toInt(), geometry.quickBarY.toInt())
+                        }
+                        .size(
+                            with(localDensity) { capsule.width.toDp() },
+                            with(localDensity) { capsule.height.toDp() }
+                        )
                         .graphicsLayer { alpha = sweep() }
                         .textureBlur(
                             backdrop = backdrop,
-                            shape = remember(geometry, density) {
-                                capsuleShape(geometry, density)
-                            },
+                            shape = remember(geometry, density) { capsuleShape(geometry, density) },
                             blurRadius = blurRadiusDp,
                             noiseCoefficient = noise,
                             colors = blurColors
@@ -212,24 +231,26 @@ internal fun FanBoard(
             val bottomColor = if (colors.isDark) Color.White.copy(alpha = 0.06f)
             else colors.outline.copy(alpha = 0.10f)
             val (_, bandOuterR) = fanBandRadii(geometry, density)
-            val (minSin, maxSin, _, _) = sweepExtremes(geometry.startAngle, geometry.endAngle)
+            // 描边弧必须与裁剪弧同一范围（底角档=补满象限），否则外弧描边会停在磨砂区中间
+            val (bandStart, bandSpan) = bandArc(geometry)
+            val (minSin, maxSin, _, _) = sweepExtremes(bandStart, bandStart + bandSpan)
             val brush = Brush.linearGradient(
                 colors = listOf(topColor, bottomColor),
                 start = Offset(geometry.anchor.x, geometry.anchor.y + bandOuterR * minSin),
                 end = Offset(geometry.anchor.x, geometry.anchor.y + bandOuterR * maxSin)
             )
-            val swept = geometry.spanAngle * sweepP.coerceAtMost(1f)
+            val swept = bandSpan * sweepP.coerceAtMost(1f)
             val arcTopLeft = Offset(geometry.anchor.x - bandOuterR, geometry.anchor.y - bandOuterR)
             val arcSize = Size(bandOuterR * 2f, bandOuterR * 2f)
             // 极淡柔光弧（假 bloom）
             drawArc(
-                brush = brush, startAngle = geometry.startAngle, sweepAngle = swept,
+                brush = brush, startAngle = bandStart, sweepAngle = swept,
                 useCenter = false, topLeft = arcTopLeft, size = arcSize, alpha = 0.18f,
                 style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
             )
             // 最外层单条细弧
             drawArc(
-                brush = brush, startAngle = geometry.startAngle, sweepAngle = swept,
+                brush = brush, startAngle = bandStart, sweepAngle = swept,
                 useCenter = false, topLeft = arcTopLeft, size = arcSize,
                 style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
             )
@@ -251,8 +272,8 @@ internal fun FanBoard(
     }
 }
 
-/** 弧带 Shape（sweep=1 终态）——miuix textureBlur 的模糊区域之一。 */
-private fun boardShape(geometry: FanGeometry, density: Float) = object : Shape {
+/** 弧带 Shape（sweep=1 终态）——miuix textureBlur 的模糊区域之一。环扇形铺满整窗坐标，故配 fillMaxSize 节点。 */
+private fun bandShape(geometry: FanGeometry, density: Float) = object : Shape {
     override fun createOutline(
         size: androidx.compose.ui.geometry.Size,
         layoutDirection: LayoutDirection,
@@ -260,36 +281,94 @@ private fun boardShape(geometry: FanGeometry, density: Float) = object : Shape {
     ): Outline = Outline.Generic(bandPath(geometry, density.density, 1f))
 }
 
-/** 快捷栏胶囊 Shape——与弧带**独立成块但同材质**的另一层 textureBlur 区域。 */
-private fun capsuleShape(geometry: FanGeometry, density: Float) = object : Shape {
+/** 快捷栏最多并排展示的图标数（与 [QuickAppsBar] 的 `take(6)` 同源）。 */
+internal const val QUICK_BAR_MAX_ICONS = 6
+
+/** 图标间距 / 图标边长（与 [QuickAppsBar] Row 的 `spacedBy(0.35q)` + 每侧 0.5q 内边距同源）。 */
+internal const val QUICK_BAR_GAP_RATIO = 0.35f
+
+/** 胶囊内边距（相对图标边长）：左右各 0.5q、上下各 0.25q —— 与 [QuickAppsBar] Row 的 padding 同源。 */
+internal const val QUICK_BAR_SIDE_PAD_RATIO = 0.5f
+internal const val QUICK_BAR_VERTICAL_PAD_RATIO = 0.25f
+
+/** 胶囊几何（px）：宽 = n 图标 + 间距 + 左右各半格内边距；高 = 图标 + 上下各 0.25q = 1.5q。 */
+internal data class CapsuleMetrics(val width: Float, val height: Float, val corner: Float)
+
+/**
+ * 胶囊圆角（dp）——[quickCapsuleMetrics] 的 `corner` 与设置页示意图盒子共用同一口径
+ * （px = 本值 × density），避免预览/真机各抄一份 10dp 之类的数字。
+ */
+internal fun quickCapsuleCornerDp(quickIconSizeDp: Float): Float = quickIconSizeDp / 2f + 4f
+
+/**
+ * 胶囊尺寸唯一来源——模糊裁剪节点的**节点尺寸**与 ③ 描边框线共用。
+ * 与 [QuickAppsBar] 的 Row 实际尺寸、`computeQuickAppCenter` 的步进必须同源，改一处即三处。
+ */
+internal fun quickCapsuleMetrics(geometry: FanGeometry, density: Float): CapsuleMetrics? {
+    val n = minOf(QUICK_BAR_MAX_ICONS, geometry.quickApps.size)
+    if (n <= 0) return null
+    val q = geometry.quickIconSize * density
+    return CapsuleMetrics(
+        width = n * q + (n - 1) * q * QUICK_BAR_GAP_RATIO + 2f * q * QUICK_BAR_SIDE_PAD_RATIO,
+        height = q + 2f * q * QUICK_BAR_VERTICAL_PAD_RATIO,
+        corner = quickCapsuleCornerDp(geometry.quickIconSize) * density
+    )
+}
+
+/**
+ * 快捷栏胶囊 Shape —— 与弧带**独立成块但同材质**的另一层 textureBlur 区域。
+ *
+ * 坐标是**节点本地系**（0,0 → w,h）：miuix 的 shape 经 `ShapeProvider` 按节点尺寸求值后交给
+ * `placeWithLayer(clip=true, shape=…)`，因此本 Shape 必须配「节点尺寸 == 胶囊尺寸」的节点使用
+ * （见 FanBoard ②-b）。历史教训：节点 fillMaxSize + 绝对坐标 RoundRect 会让这层离屏缓冲仍是整窗、
+ * 裁剪退化成绝对坐标掩膜，真机在胶囊外圈多出一块直角灰矩形（0921 复现，与 Outline 是
+ * Generic 还是 Rounded **无关**——弧带一直是 Generic 却裁剪正常）。
+ */
+internal fun capsuleShape(geometry: FanGeometry, density: Float) = object : Shape {
     override fun createOutline(
         size: androidx.compose.ui.geometry.Size,
         layoutDirection: LayoutDirection,
         density: Density
-    ): Outline = Outline.Generic(
-        quickCapsulePath(geometry, density.density) ?: Path()
-    )
+    ): Outline {
+        val corner = (geometry.quickIconSize / 2f + 4f) * density.density
+        return Outline.Rounded(RoundRect(0f, 0f, size.width, size.height, CornerRadius(corner, corner)))
+    }
 }
 
-/** 快捷栏胶囊轮廓（无快捷项时 null）。尺寸公式与 computeQuickAppCenter / QuickAppsBar Row 同源。 */
-private fun quickCapsulePath(geometry: FanGeometry, density: Float): Path? {
-    val n = minOf(6, geometry.quickApps.size)
-    if (n <= 0) return null
-    val q = geometry.quickIconSize * density
-    return Path().apply {
-        addRoundRect(
-            RoundRect(
-                geometry.quickBarX, geometry.quickBarY,
-                geometry.quickBarX + n * q + (n - 1) * q * 0.35f + q,
-                // 板高 = Row 真实高度（icon + 上下各 0.25q）= 1.5q
-                geometry.quickBarY + q * 1.5f,
-                CornerRadius(
-                    (geometry.quickIconSize / 2f + 4f) * density,
-                    (geometry.quickIconSize / 2f + 4f) * density
-                )
-            )
+/** ③ 描边层用的胶囊轮廓（**窗口绝对坐标**，与 [quickCapsuleMetrics] 同源）；无快捷项时 null。 */
+private fun quickCapsuleRoundRect(geometry: FanGeometry, density: Float): RoundRect? =
+    quickCapsuleMetrics(geometry, density)?.let { m ->
+        RoundRect(
+            geometry.quickBarX, geometry.quickBarY,
+            geometry.quickBarX + m.width, geometry.quickBarY + m.height,
+            CornerRadius(m.corner, m.corner)
         )
     }
+
+private fun quickCapsulePath(geometry: FanGeometry, density: Float): Path? =
+    quickCapsuleRoundRect(geometry, density)?.let { Path().apply { addRoundRect(it) } }
+
+/**
+ * 弧带径向边越过坐标轴方向的角度：让直边真的穿出窗口、再由窗口裁齐。
+ * 按弧带外缘 ~900px 计，10° 的横向外飘 ≈156px，够覆盖锚点距屏幕边 0~150px 的内缩。
+ */
+private const val BAND_AXIS_OVERSHOOT_DEG = 10f
+
+/**
+ * 弧带真正参与裁剪/描边的弧范围（start, span）——0921 用户定案"保外弧、不要径向边，
+ * 屏幕边缘可作为径向边"，两种呼出档同一口径：
+ *
+ * 把楔形的起边**向下取整到 90° 轴**、止边**向上取整到 90° 轴**，再各越 [BAND_AXIS_OVERSHOOT_DEG]，
+ * 最后由 [bandPath] 按窗口矩形裁一次。于是两条径向边必然与屏幕边重合、屏内不再留直边切口，
+ * 双环图标必在板内。底角档（锚点在角上）得到 90° 象限；边沿档（锚点在边中段）得到 180° 半环
+ * ——磨砂区明显变大，是用户看过口径后选的。
+ *
+ * 图标布局的 6°/12° 避让留白（CORNER_TOP/BOTTOM_GAP_DEG）不受影响：这里只放宽材质弧。
+ */
+internal fun bandArc(geometry: FanGeometry): Pair<Float, Float> {
+    val start = floor(geometry.startAngle / 90f) * 90f - BAND_AXIS_OVERSHOOT_DEG
+    val end = ceil(geometry.endAngle / 90f) * 90f + BAND_AXIS_OVERSHOOT_DEG
+    return start to (end - start)
 }
 
 /**
@@ -300,10 +379,10 @@ private fun quickCapsulePath(geometry: FanGeometry, density: Float): Path? {
 private fun bandPath(geometry: FanGeometry, density: Float, sweepP: Float): Path {
     val anchor = geometry.anchor
     val (bandInnerR, bandOuterR) = fanBandRadii(geometry, density)
-    val start = geometry.startAngle
-    val swept = geometry.spanAngle * sweepP.coerceAtMost(1f)
+    val (start, span) = bandArc(geometry)
+    val swept = span * sweepP.coerceAtMost(1f)
     val end = start + swept
-    return Path().apply {
+    val sector = Path().apply {
         val outerOval = Rect(anchor.x - bandOuterR, anchor.y - bandOuterR, anchor.x + bandOuterR, anchor.y + bandOuterR)
         val innerOval = Rect(anchor.x - bandInnerR, anchor.y - bandInnerR, anchor.x + bandInnerR, anchor.y + bandInnerR)
         val startRad = Math.toRadians(start.toDouble())
@@ -315,6 +394,11 @@ private fun bandPath(geometry: FanGeometry, density: Float, sweepP: Float): Path
         arcTo(innerOval, end, -swept, false)
         close()
     }
+    // 越过坐标轴的那部分（含锚点内缩造成的贴屏直切口）交给窗口裁掉，直边才真正落在屏幕边上
+    val window = Path().apply {
+        addRect(Rect(0f, 0f, geometry.windowSize.width.toFloat(), geometry.windowSize.height.toFloat()))
+    }
+    return Path().apply { op(sector, window, PathOperation.Intersect) }
 }
 
 /**

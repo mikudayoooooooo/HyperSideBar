@@ -204,20 +204,20 @@ internal fun FanBoard(
         Canvas(modifier = Modifier.fillMaxSize()) {
             val sweepP = sweep()
             if (sweepP <= 0.01f) return@Canvas
-            // 竖向渐变：亮端在扇顶、暗端在快捷栏底（玻璃受顶光）。浅主题白描边不可见，改用 outline
+            // 竖向渐变：亮端在弧带真实顶端、暗端在弧带真实底端（玻璃受顶光）。端点必须按
+            // 扫描极值算而非 anchor±outerRadius 的名义范围——底角档弧带只占上半象限，用名义
+            // 范围会把绝大部分内容 clamp 到单一端色，渐变等于失效（浅主题白描边不可见，改用 outline）
             val topColor = if (colors.isDark) Color.White.copy(alpha = 0.50f)
             else colors.outline.copy(alpha = 0.45f)
             val bottomColor = if (colors.isDark) Color.White.copy(alpha = 0.06f)
             else colors.outline.copy(alpha = 0.10f)
+            val (_, bandOuterR) = fanBandRadii(geometry, density)
+            val (minSin, maxSin, _, _) = sweepExtremes(geometry.startAngle, geometry.endAngle)
             val brush = Brush.linearGradient(
                 colors = listOf(topColor, bottomColor),
-                start = Offset(geometry.anchor.x, geometry.anchor.y - geometry.outerRadius),
-                end = Offset(
-                    geometry.anchor.x,
-                    geometry.quickBarY + geometry.quickIconSize * density * 1.5f
-                )
+                start = Offset(geometry.anchor.x, geometry.anchor.y + bandOuterR * minSin),
+                end = Offset(geometry.anchor.x, geometry.anchor.y + bandOuterR * maxSin)
             )
-            val (_, bandOuterR) = fanBandRadii(geometry, density)
             val swept = geometry.spanAngle * sweepP.coerceAtMost(1f)
             val arcTopLeft = Offset(geometry.anchor.x - bandOuterR, geometry.anchor.y - bandOuterR)
             val arcSize = Size(bandOuterR * 2f, bandOuterR * 2f)
@@ -233,10 +233,13 @@ internal fun FanBoard(
                 useCenter = false, topLeft = arcTopLeft, size = arcSize,
                 style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
             )
-            // 快捷栏胶囊框线：与弧带同一支渐变笔，独立成块（透明档下只剩这层描边，胶囊仍可见）
+            // 快捷栏胶囊框线：用**恒定可见色**，不蹭弧带那支竖向渐变——底角档胶囊在扇形上缘
+            // 之上、落在渐变区间外会被 clamp 到最暗端而"看不见"（0920 反馈框线又没了）
+            val capsuleColor = if (colors.isDark) Color.White.copy(alpha = 0.35f)
+            else colors.outline.copy(alpha = 0.55f)
             quickCapsulePath(geometry, density)?.let { capsule ->
                 drawPath(
-                    path = capsule, brush = brush,
+                    path = capsule, color = capsuleColor,
                     style = Stroke(
                         width = 1.25.dp.toPx(),
                         cap = StrokeCap.Round,

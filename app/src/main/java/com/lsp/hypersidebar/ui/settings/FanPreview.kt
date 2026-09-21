@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.ui.fan.FanAppInfo
+import com.lsp.hypersidebar.ui.fan.FanVisuals
 import com.lsp.hypersidebar.ui.fan.FanConfig
 import com.lsp.hypersidebar.ui.fan.FanGeometry
 import com.lsp.hypersidebar.ui.fan.FanThemeColors
@@ -61,7 +62,7 @@ import top.yukonga.miuix.kmp.squircle.squircleBorder
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-private const val PREVIEW_DENSITY = 0.5f
+private val PREVIEW_DENSITY = FanVisuals.PREVIEW_DENSITY
 private const val PORTRAIT_WIDTH = 360f
 private const val PORTRAIT_HEIGHT = 720f
 private const val LANDSCAPE_WIDTH = 720f
@@ -309,12 +310,12 @@ private fun StaticFanPreview(
         modifier = modifier
             .squircleSurface(
                 color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                cornerRadius = 12.dp
+                cornerRadius = FanVisuals.PREVIEW_FRAME_CORNER
             )
             .squircleBorder(
-                width = 1.dp,
-                color = colors.outline.copy(alpha = 0.35f),
-                cornerRadius = 12.dp
+                width = FanVisuals.PREVIEW_FRAME_BORDER_WIDTH,
+                color = colors.outline.copy(alpha = FanVisuals.PREVIEW_FRAME_BORDER_ALPHA),
+                cornerRadius = FanVisuals.PREVIEW_FRAME_CORNER
             )
     ) {
         val widthPx = with(density) { maxWidth.toPx() }
@@ -337,7 +338,7 @@ private fun StaticFanPreview(
             val outerPx = bandOuterR * scale
             // 磨砂弧带剪影：抽象平涂（粗描边弧 = 圆角端扇环），替代旧填充饼 + 双轨道
             drawArc(
-                color = colors.surfaceContainer.copy(alpha = 0.92f),
+                color = colors.surfaceContainer.copy(alpha = FanVisuals.PREVIEW_BAND_FILL_ALPHA),
                 startAngle = geometry.startAngle,
                 sweepAngle = geometry.spanAngle,
                 useCenter = false,
@@ -347,13 +348,13 @@ private fun StaticFanPreview(
             )
             // 最外层单条弧线（与真机 FanBoard ③ 层同口径）
             drawArc(
-                color = colors.outline.copy(alpha = 0.45f),
+                color = colors.outline.copy(alpha = FanVisuals.BAND_STROKE_TOP_ALPHA_LIGHT),
                 startAngle = geometry.startAngle,
                 sweepAngle = geometry.spanAngle,
                 useCenter = false,
                 topLeft = Offset(anchor.x - outerPx, anchor.y - outerPx),
                 size = Size(outerPx * 2f, outerPx * 2f),
-                style = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Round)
+                style = Stroke(width = FanVisuals.BAND_STROKE_WIDTH.toPx(), cap = StrokeCap.Round)
             )
         }
 
@@ -424,7 +425,7 @@ private fun previewViewport(geometry: FanGeometry): PreviewViewport {
         geometry.quickBarY + quickHeight,
         bandBottom
     )
-    val padding = iconSize * 0.55f
+    val padding = iconSize * FanVisuals.PREVIEW_VIEWPORT_PAD_RATIO
     return PreviewViewport(
         left = contentLeft - padding,
         top = contentTop - padding,
@@ -445,13 +446,13 @@ private fun PreviewIcon(
             .size(size.dp)
             .squircleSurface(
                 color = placeholderColor(colors),
-                cornerRadius = (size * 0.24f).dp
+                cornerRadius = (size * FanVisuals.ICON_CORNER_RATIO).dp
             )
     )
 }
 
 private fun placeholderColor(colors: FanThemeColors): Color =
-    colors.primaryContainer.copy(alpha = 0.55f)
+    colors.primaryContainer.copy(alpha = FanVisuals.PREVIEW_PLACEHOLDER_ALPHA)
 
 @Composable
 private fun PreviewQuickBar(
@@ -477,12 +478,12 @@ private fun PreviewQuickBar(
                 )
             }
             .squircleSurface(
-                color = colors.surfaceContainer.copy(alpha = 0.94f),
+                color = colors.surfaceContainer.copy(alpha = FanVisuals.PREVIEW_CAPSULE_FILL_ALPHA),
                 cornerRadius = capsuleCorner
             )
             .squircleBorder(
                 width = 1.dp,
-                color = colors.outline.copy(alpha = 0.3f),
+                color = colors.outline.copy(alpha = FanVisuals.PREVIEW_CAPSULE_BORDER_ALPHA),
                 cornerRadius = capsuleCorner
             )
             .padding(

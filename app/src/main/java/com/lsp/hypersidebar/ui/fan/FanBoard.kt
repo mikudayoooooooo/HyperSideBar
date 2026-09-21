@@ -233,14 +233,14 @@ internal fun FanBoard(
         // 磨砂弧带的填充模糊区仍在（bandPath 供 textureBlur 裁剪），只是不再勾整圈轮廓
         Canvas(modifier = Modifier.fillMaxSize()) {
             val sweepP = sweep()
-            if (sweepP <= 0.01f) return@Canvas
+            if (sweepP <= FanVisuals.SWEEP_VISIBLE_EPSILON) return@Canvas
             // 竖向渐变：亮端在弧带真实顶端、暗端在弧带真实底端（玻璃受顶光）。端点必须按
             // 扫描极值算而非 anchor±outerRadius 的名义范围——底角档弧带只占上半象限，用名义
             // 范围会把绝大部分内容 clamp 到单一端色，渐变等于失效（浅主题白描边不可见，改用 outline）
-            val topColor = if (colors.isDark) Color.White.copy(alpha = 0.50f)
-            else colors.outline.copy(alpha = 0.45f)
-            val bottomColor = if (colors.isDark) Color.White.copy(alpha = 0.06f)
-            else colors.outline.copy(alpha = 0.10f)
+            val topColor = if (colors.isDark) Color.White.copy(alpha = FanVisuals.BAND_STROKE_TOP_ALPHA_DARK)
+            else colors.outline.copy(alpha = FanVisuals.BAND_STROKE_TOP_ALPHA_LIGHT)
+            val bottomColor = if (colors.isDark) Color.White.copy(alpha = FanVisuals.BAND_STROKE_BOTTOM_ALPHA_DARK)
+            else colors.outline.copy(alpha = FanVisuals.BAND_STROKE_BOTTOM_ALPHA_LIGHT)
             val (_, bandOuterR) = fanBandRadii(geometry, density)
             // 描边弧必须与裁剪弧同一范围（底角档=补满象限），否则外弧描边会停在磨砂区中间
             val (bandStart, bandSpan) = bandArc(geometry)
@@ -256,29 +256,29 @@ internal fun FanBoard(
             // 极淡柔光弧（假 bloom）
             drawArc(
                 brush = brush, startAngle = bandStart, sweepAngle = swept,
-                useCenter = false, topLeft = arcTopLeft, size = arcSize, alpha = 0.18f,
-                style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
+                useCenter = false, topLeft = arcTopLeft, size = arcSize, alpha = FanVisuals.BAND_BLOOM_ALPHA,
+                style = Stroke(width = FanVisuals.BAND_BLOOM_STROKE_WIDTH.toPx(), cap = StrokeCap.Round)
             )
             // 最外层单条细弧
             drawArc(
                 brush = brush, startAngle = bandStart, sweepAngle = swept,
                 useCenter = false, topLeft = arcTopLeft, size = arcSize,
-                style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
+                style = Stroke(width = FanVisuals.BAND_STROKE_WIDTH.toPx(), cap = StrokeCap.Round)
             )
             // 快捷栏胶囊框线：用**恒定可见色**，不蹭弧带那支竖向渐变——底角档胶囊在扇形上缘
             // 之上、落在渐变区间外会被 clamp 到最暗端而"看不见"（0920 反馈框线又没了）。
             // 走 DrawScope.drawRoundRect（Skia 原生圆角矩形光栅化）而**不是** Path.addRoundRect：
             // 真机曾出现"与胶囊框线完全重合的一圈直角边"（0921 用户截图），Path 的圆角表达
             // 不再参与这条链，退化成直角矩形也不可能再发生
-            val capsuleColor = if (colors.isDark) Color.White.copy(alpha = 0.35f)
-            else colors.outline.copy(alpha = 0.55f)
+            val capsuleColor = if (colors.isDark) Color.White.copy(alpha = FanVisuals.CAPSULE_STROKE_ALPHA_DARK)
+            else colors.outline.copy(alpha = FanVisuals.CAPSULE_STROKE_ALPHA_LIGHT)
             quickCapsuleRoundRect(geometry, density)?.let { rr ->
                 drawRoundRect(
                     color = capsuleColor,
                     topLeft = Offset(rr.left, rr.top),
                     size = Size(rr.width, rr.height),
                     cornerRadius = rr.topLeftCornerRadius,
-                    style = Stroke(width = 1.25.dp.toPx())
+                    style = Stroke(width = FanVisuals.CAPSULE_STROKE_WIDTH.toPx())
                 )
             }
         }
@@ -418,13 +418,14 @@ private fun bandPath(geometry: FanGeometry, density: Float, sweepP: Float): Path
  */
 internal fun fanBandRadii(geometry: FanGeometry, density: Float): Pair<Float, Float> {
     val iconHalf = geometry.iconSize * density / 2f
-    val pad = 12f * density
+    val pad = FanVisuals.BAND_EDGE_PAD_DP * density
+    val minInner = FanVisuals.BAND_MIN_INNER_RADIUS_DP * density
     if (geometry.items.isEmpty()) {
-        return geometry.innerRadius.coerceAtLeast(24f * density) to geometry.outerRadius
+        return geometry.innerRadius.coerceAtLeast(minInner) to geometry.outerRadius
     }
     val maxR = geometry.items.maxOf { it.radius }
     val minR = geometry.items.minOf { it.radius }
     val outerEdge = maxR + iconHalf + pad
-    val innerEdge = (minR - iconHalf - pad).coerceAtLeast(24f * density)
+    val innerEdge = (minR - iconHalf - pad).coerceAtLeast(minInner)
     return innerEdge to outerEdge
 }

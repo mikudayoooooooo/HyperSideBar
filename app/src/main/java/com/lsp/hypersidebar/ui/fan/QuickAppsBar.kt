@@ -70,8 +70,8 @@ fun QuickAppsBar(
                     .offset {
                         IntOffset(
                             (cx - labelSize.width / 2f).toInt(),
-                            (cy - iconPx * SELECTED_ICON_SCALE / 2f -
-                                labelSize.height - 10.dp.roundToPx()).toInt()
+                            (cy - iconPx * FanVisuals.SELECTED_ICON_SCALE / 2f -
+                                labelSize.height - FanVisuals.LABEL_GAP.toPx()).toInt()
                         )
                     }
                     .alpha(if (labelSize == IntSize.Zero) 0f else 1f)
@@ -80,15 +80,15 @@ fun QuickAppsBar(
                     // 标签融进板里（真机 0914 "看不到框选效果"）。squircle：surface 外层
                     // 填充+裁剪，border 内层描边（绘于填充之上）
                     .squircleSurface(
-                        color = colors.surfaceContainerHigh.copy(alpha = 0.95f),
-                        cornerRadius = 12.dp
+                        color = colors.surfaceContainerHigh.copy(alpha = FanVisuals.LABEL_FILL_ALPHA),
+                        cornerRadius = FanVisuals.LABEL_CORNER
                     )
                     .squircleBorder(
-                        width = 1.dp,
-                        color = colors.outline.copy(alpha = 0.65f),
-                        cornerRadius = 12.dp
+                        width = FanVisuals.LABEL_BORDER_WIDTH,
+                        color = colors.outline.copy(alpha = FanVisuals.LABEL_BORDER_ALPHA),
+                        cornerRadius = FanVisuals.LABEL_CORNER
                     )
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                    .padding(horizontal = FanVisuals.LABEL_PADDING_H, vertical = FanVisuals.LABEL_PADDING_V),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -141,7 +141,7 @@ private fun QuickAppIcon(
 ) {
     val (bitmap, fallbackColor) = rememberAppIcon(context, app)
     // 同 FanAppIcon：不靠降低透明度做未选中态（真机反馈可读性差），选中由放大+高亮板+描边表达
-    val targetScale = if (isSelected) SELECTED_ICON_SCALE else 1f
+    val targetScale = if (isSelected) FanVisuals.SELECTED_ICON_SCALE else 1f
     val iconScale by animateFloatAsState(targetValue = targetScale, animationSpec = tween(100))
 
     Box(
@@ -159,8 +159,8 @@ private fun QuickAppIcon(
                 modifier = Modifier
                     .fillMaxSize()
                     .squircleSurface(
-                        color = colors.primaryContainer.copy(alpha = 0.9f),
-                        cornerRadius = (iconSize * 0.25f).dp
+                        color = colors.primaryContainer.copy(alpha = FanVisuals.SELECTION_PLATE_ALPHA),
+                        cornerRadius = (iconSize * FanVisuals.ICON_CORNER_RATIO).dp
                     )
             )
         }
@@ -169,9 +169,9 @@ private fun QuickAppIcon(
             bitmap = bitmap,
             fallbackColor = fallbackColor,
             appName = app.appName,
-            // 与 FanAppIcon 同口径 0.92（图标几乎占满格子、留 8% 呼吸）。旧值 1.0 让同尺寸下的
-            // 快捷栏图标肉眼比扇形图标更大，是"两者不一致"的另一处来源
-            size = iconSize * 0.92f,
+            // 与 FanAppIcon 同口径 ICON_FILL_RATIO（图标几乎占满格子、留 8% 呼吸）。旧值 1.0 让
+            // 同尺寸下的快捷栏图标肉眼比扇形图标更大，是"两者不一致"的另一处来源
+            size = iconSize * FanVisuals.ICON_FILL_RATIO,
             colors = colors
         )
 
@@ -181,9 +181,9 @@ private fun QuickAppIcon(
                 modifier = Modifier
                     .fillMaxSize()
                     .squircleBorder(
-                        width = 2.dp,
+                        width = FanVisuals.SELECTION_BORDER_WIDTH,
                         color = colors.primary,
-                        cornerRadius = (iconSize * 0.25f).dp
+                        cornerRadius = (iconSize * FanVisuals.ICON_CORNER_RATIO).dp
                     )
             )
         }
@@ -222,7 +222,7 @@ private fun FallbackIcon(
         modifier = Modifier
             .size(size.dp)
             // B1：兜底头像与全线图标 mask 统一（圆角方）→ squircle
-            .squircleSurface(color = Color(fallbackColor), cornerRadius = (size * 0.25f).dp),
+            .squircleSurface(color = Color(fallbackColor), cornerRadius = (size * FanVisuals.ICON_CORNER_RATIO).dp),
         contentAlignment = Alignment.Center
     ) {
         Text(

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -22,7 +23,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -178,13 +178,18 @@ internal fun FanBoard(
                 saturation = LayoutDefaults.FAN_BOARD_SATURATION
             )
             // ②-a 弧带：环扇形只能用 Generic path 表达、且坐标铺满整窗，故节点仍 fillMaxSize
+            val bandOutline = remember(geometry, density) { bandShape(geometry, density) }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer { alpha = sweep() }
+                    // 外层再显式裁一次：miuix 自己那次 clip 走 placeWithLayer 的内部 layerBlock，
+                    // 真机上未必作用到「节点自己 draw 出来的模糊」上。没有这层兜底，模糊缓冲会按
+                    // 节点包围盒出图 —— 一圈直角边（0921 用户真机：矩形与胶囊框线完全重合）
+                    .clip(bandOutline)
                     .textureBlur(
                         backdrop = backdrop,
-                        shape = remember(geometry, density) { bandShape(geometry, density) },
+                        shape = bandOutline,
                         blurRadius = blurRadiusDp,
                         noiseCoefficient = noise,
                         colors = blurColors
@@ -196,7 +201,12 @@ internal fun FanBoard(
             // 绝对坐标掩膜——真机表现为胶囊外圈多出一块直角灰矩形（0921 复现）。改成尺寸自洽的
             // 节点后缓冲就是胶囊本身，且与弧带共用同一 backdrop / 混色 / 提亮 / 噪点参数，
             // 两者观感必然一致（用户 0920 定案"一体=材质一致，非几何并集"）。
+            //
+            // 另外**两端都加显式 clip**：miuix 的裁剪链在真机上不可靠（同一份代码弧带正常、
+            // 胶囊出直角矩形），所以不把"材质只出现在形状内"这件事交给它——外层 clip 由 Compose
+            // 直接作用于本节点draw 的全部输出，与 miuix 内部是否生效无关。
             quickCapsuleMetrics(geometry, density)?.let { capsule ->
+                val capsuleOutline = remember(geometry, density) { capsuleShape(geometry, density) }
                 Box(
                     modifier = Modifier
                         .offset {
@@ -207,9 +217,10 @@ internal fun FanBoard(
                             with(localDensity) { capsule.height.toDp() }
                         )
                         .graphicsLayer { alpha = sweep() }
+                        .clip(capsuleOutline)
                         .textureBlur(
                             backdrop = backdrop,
-                            shape = remember(geometry, density) { capsuleShape(geometry, density) },
+                            shape = capsuleOutline,
                             blurRadius = blurRadiusDp,
                             noiseCoefficient = noise,
                             colors = blurColors
@@ -255,17 +266,19 @@ internal fun FanBoard(
                 style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
             )
             // 快捷栏胶囊框线：用**恒定可见色**，不蹭弧带那支竖向渐变——底角档胶囊在扇形上缘
-            // 之上、落在渐变区间外会被 clamp 到最暗端而"看不见"（0920 反馈框线又没了）
+            // 之上、落在渐变区间外会被 clamp 到最暗端而"看不见"（0920 反馈框线又没了）。
+            // 走 DrawScope.drawRoundRect（Skia 原生圆角矩形光栅化）而**不是** Path.addRoundRect：
+            // 真机曾出现"与胶囊框线完全重合的一圈直角边"（0921 用户截图），Path 的圆角表达
+            // 不再参与这条链，退化成直角矩形也不可能再发生
             val capsuleColor = if (colors.isDark) Color.White.copy(alpha = 0.35f)
             else colors.outline.copy(alpha = 0.55f)
-            quickCapsulePath(geometry, density)?.let { capsule ->
-                drawPath(
-                    path = capsule, color = capsuleColor,
-                    style = Stroke(
-                        width = 1.25.dp.toPx(),
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round
-                    )
+            quickCapsuleRoundRect(geometry, density)?.let { rr ->
+                drawRoundRect(
+                    color = capsuleColor,
+                    topLeft = Offset(rr.left, rr.top),
+                    size = Size(rr.width, rr.height),
+                    cornerRadius = rr.topLeftCornerRadius,
+                    style = Stroke(width = 1.25.dp.toPx())
                 )
             }
         }
@@ -344,9 +357,6 @@ private fun quickCapsuleRoundRect(geometry: FanGeometry, density: Float): RoundR
             CornerRadius(m.corner, m.corner)
         )
     }
-
-private fun quickCapsulePath(geometry: FanGeometry, density: Float): Path? =
-    quickCapsuleRoundRect(geometry, density)?.let { Path().apply { addRoundRect(it) } }
 
 /**
  * 弧带径向边越过坐标轴方向的角度：让直边真的穿出窗口、再由窗口裁齐。

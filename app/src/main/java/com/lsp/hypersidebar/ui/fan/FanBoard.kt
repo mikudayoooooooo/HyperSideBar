@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -17,6 +19,7 @@ import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -144,9 +147,28 @@ internal fun FanBoard(
             }
             // ① 采集层（窗口尺寸空 Box）——把「背后内容」录进 backdrop 图层，自身不上屏
             Box(modifier = Modifier.fillMaxSize().layerBackdrop(backdrop))
-            // ② 板：miuix textureBlur，按板形裁剪 + 主题混色 + 噪点抖动。
+            // ② 板：miuix textureBlur，按形状裁剪 + 主题混色 + 噪点抖动。
             // 入场随 sweep 渐显：只在 draw-time 改 alpha（GPU 合成），不把 sweep 喂进 shape——
             // 否则每帧重建模糊几何/重跑高斯，首呼出必卡
+            //
+            // 弧带与快捷栏胶囊是**两个独立形状、同一套材质参数**（共享 backdrop/混色/提亮/
+            // 噪点/半径）：用户 0920 指出"一体"指的是两者显示效果基本一致，而非几何并集。
+            // 早期把两者 Path 并成一个模糊区，胶囊轮廓会被弧带吞掉；各自一层则既独立又同质。
+            val blurRadiusDp = LayoutDefaults.FAN_BOARD_BLUR_RADIUS_PX / density
+            val blurColors = BlurColors(
+                blendColors = listOf(
+                    // Screen 提亮（滤色不压灰，比 SrcOver 更接近玻璃质感）
+                    BlendColorEntry(Color.White.copy(alpha = sheen), BlurBlendMode.Screen)
+                ),
+                // 亮度补偿只给无来源的板：自绘底色需要按主题微调。有背后真像素时
+                // 不额外提亮/压暗 —— 亮壁纸会被 +0.04 推得更亮，正是真机反馈的问题
+                brightness = if (source == FanBackdropSource.NONE) {
+                    if (colors.isDark) LayoutDefaults.FAN_BOARD_BRIGHTNESS_DARK
+                    else LayoutDefaults.FAN_BOARD_BRIGHTNESS_LIGHT
+                } else 0f,
+                contrast = 1f,
+                saturation = LayoutDefaults.FAN_BOARD_SATURATION
+            )
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -154,24 +176,27 @@ internal fun FanBoard(
                     .textureBlur(
                         backdrop = backdrop,
                         shape = remember(geometry, density) { boardShape(geometry, density) },
-                        blurRadius = LayoutDefaults.FAN_BOARD_BLUR_RADIUS_PX / density,
+                        blurRadius = blurRadiusDp,
                         noiseCoefficient = noise,
-                        colors = BlurColors(
-                            blendColors = listOf(
-                                // Screen 提亮（滤色不压灰，比 SrcOver 更接近玻璃质感）
-                                BlendColorEntry(Color.White.copy(alpha = sheen), BlurBlendMode.Screen)
-                            ),
-                            // 亮度补偿只给无来源的板：自绘底色需要按主题微调。有背后真像素时
-                            // 不额外提亮/压暗 —— 亮壁纸会被 +0.04 推得更亮，正是真机反馈的问题
-                            brightness = if (source == FanBackdropSource.NONE) {
-                                if (colors.isDark) LayoutDefaults.FAN_BOARD_BRIGHTNESS_DARK
-                                else LayoutDefaults.FAN_BOARD_BRIGHTNESS_LIGHT
-                            } else 0f,
-                            contrast = 1f,
-                            saturation = LayoutDefaults.FAN_BOARD_SATURATION
-                        )
+                        colors = blurColors
                     )
             )
+            if (geometry.quickApps.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { alpha = sweep() }
+                        .textureBlur(
+                            backdrop = backdrop,
+                            shape = remember(geometry, density) {
+                                capsuleShape(geometry, density)
+                            },
+                            blurRadius = blurRadiusDp,
+                            noiseCoefficient = noise,
+                            colors = blurColors
+                        )
+                )
+            }
         }
         // ③ 玻璃描边：不参与模糊、始终清晰。用户 2026-09-20 定稿——扇形只描**最外层一条圆弧**
         //（柔光 + 细线，round 收尾），不再描内缘/径向线、也不用半圆端帽包起来；快捷栏单独描胶囊框。
@@ -208,18 +233,60 @@ internal fun FanBoard(
                 useCenter = false, topLeft = arcTopLeft, size = arcSize,
                 style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round)
             )
+            // 快捷栏胶囊框线：与弧带同一支渐变笔，独立成块（透明档下只剩这层描边，胶囊仍可见）
+            quickCapsulePath(geometry, density)?.let { capsule ->
+                drawPath(
+                    path = capsule, brush = brush,
+                    style = Stroke(
+                        width = 1.25.dp.toPx(),
+                        cap = StrokeCap.Round,
+                        join = StrokeJoin.Round
+                    )
+                )
+            }
         }
     }
 }
 
-/** 板形 Shape（磨砂弧带，sweep=1 终态）——miuix textureBlur 的模糊区域。
- *  快捷栏胶囊**不在其中**：它自带底（见 QuickAppsBar），与扇形板各自独立成块。 */
+/** 弧带 Shape（sweep=1 终态）——miuix textureBlur 的模糊区域之一。 */
 private fun boardShape(geometry: FanGeometry, density: Float) = object : Shape {
     override fun createOutline(
         size: androidx.compose.ui.geometry.Size,
         layoutDirection: LayoutDirection,
         density: Density
     ): Outline = Outline.Generic(bandPath(geometry, density.density, 1f))
+}
+
+/** 快捷栏胶囊 Shape——与弧带**独立成块但同材质**的另一层 textureBlur 区域。 */
+private fun capsuleShape(geometry: FanGeometry, density: Float) = object : Shape {
+    override fun createOutline(
+        size: androidx.compose.ui.geometry.Size,
+        layoutDirection: LayoutDirection,
+        density: Density
+    ): Outline = Outline.Generic(
+        quickCapsulePath(geometry, density.density) ?: Path()
+    )
+}
+
+/** 快捷栏胶囊轮廓（无快捷项时 null）。尺寸公式与 computeQuickAppCenter / QuickAppsBar Row 同源。 */
+private fun quickCapsulePath(geometry: FanGeometry, density: Float): Path? {
+    val n = minOf(6, geometry.quickApps.size)
+    if (n <= 0) return null
+    val q = geometry.quickIconSize * density
+    return Path().apply {
+        addRoundRect(
+            RoundRect(
+                geometry.quickBarX, geometry.quickBarY,
+                geometry.quickBarX + n * q + (n - 1) * q * 0.35f + q,
+                // 板高 = Row 真实高度（icon + 上下各 0.25q）= 1.5q
+                geometry.quickBarY + q * 1.5f,
+                CornerRadius(
+                    (geometry.quickIconSize / 2f + 4f) * density,
+                    (geometry.quickIconSize / 2f + 4f) * density
+                )
+            )
+        )
+    }
 }
 
 /**

@@ -224,7 +224,6 @@ internal fun FanMenuCompose(
                     geometry = geometry,
                     selectedIndex = selectedQuickIndex,
                     colors = colors,
-                    fogIntensity = fogIntensity,
                     onQuickAppSelected = onQuickAppSelected
                 )
             }

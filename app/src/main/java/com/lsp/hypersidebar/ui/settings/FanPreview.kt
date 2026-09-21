@@ -7,6 +7,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -19,7 +20,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -44,7 +44,12 @@ import com.lsp.hypersidebar.ui.fan.FanConfig
 import com.lsp.hypersidebar.ui.fan.FanGeometry
 import com.lsp.hypersidebar.ui.fan.FanThemeColors
 import com.lsp.hypersidebar.ui.fan.computeFanGeometry
+import com.lsp.hypersidebar.ui.fan.QUICK_BAR_GAP_RATIO
+import com.lsp.hypersidebar.ui.fan.QUICK_BAR_MAX_ICONS
+import com.lsp.hypersidebar.ui.fan.QUICK_BAR_SIDE_PAD_RATIO
+import com.lsp.hypersidebar.ui.fan.QUICK_BAR_VERTICAL_PAD_RATIO
 import com.lsp.hypersidebar.ui.fan.fanBandRadii
+import com.lsp.hypersidebar.ui.fan.quickCapsuleCornerDp
 import com.lsp.hypersidebar.ui.fan.sweepExtremes
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
@@ -65,35 +70,19 @@ private data class PreviewViewport(
     val height: Float
 )
 
-private val previewApps = listOf(
-    FanAppInfo("com.android.browser", "浏览器"),
-    FanAppInfo("com.miui.gallery", "相册"),
-    FanAppInfo("com.android.camera", "相机"),
-    FanAppInfo("com.miui.notes", "笔记"),
-    FanAppInfo("com.android.settings", "设置"),
-    FanAppInfo("com.miui.calculator", "计算器"),
-    FanAppInfo("com.miui.securitycenter", "手机管家"),
-    FanAppInfo("com.android.contacts", "联系人"),
-    FanAppInfo("com.android.calendar", "日历"),
-    FanAppInfo("com.android.fileexplorer", "文件管理"),
-    FanAppInfo("com.android.deskclock", "时钟"),
-    FanAppInfo("com.miui.player", "音乐"),
-    FanAppInfo("com.miui.weather2", "天气"),
-    FanAppInfo("com.android.mms", "短信"),
-    FanAppInfo("com.android.incallui", "电话"),
-    FanAppInfo("com.android.email", "邮件"),
-    FanAppInfo("com.android.providers.downloads.ui", "下载"),
-    FanAppInfo("com.miui.compass", "指南针"),
-    FanAppInfo("com.android.soundrecorder", "录音机"),
-    FanAppInfo("com.xiaomi.scanner", "扫一扫")
-)
+/**
+ * 抽象预览的占位项（0921 收口）：预览画的是**占位圆角方块**（[PreviewIcon]）与抽象弧带剪影，
+ * 不描摹任何真实应用，所以几何只需要「数量」——`computeFanGeometry` 按 appCount / quickList.size
+ * 收缩（数量到顶 = 最坏收缩，正是要预览的东西）。
+ *
+ * 此前这里挂着两份真机应用名清单（`previewApps` 20 条 + `previewQuickApps` 4 条）——既不显示、
+ * 又在应用改名/换包时误导维护者，属于"抽象化"改造的残留。
+ */
+private const val PREVIEW_APP_COUNT = 20
+private const val PREVIEW_QUICK_COUNT = 4
 
-private val previewQuickApps = listOf(
-    FanAppInfo("com.android.camera", "相机"),
-    FanAppInfo("com.miui.notes", "笔记"),
-    FanAppInfo("com.miui.calculator", "计算器"),
-    FanAppInfo("com.android.settings", "设置")
-)
+private fun previewPlaceholderApps(count: Int): List<FanAppInfo> =
+    List(count) { FanAppInfo(packageName = "preview.app.$it") }
 
 /**
  * 效果预览分区唯一卡片：miuix TabRow（竖屏/横屏/底角侧滑）+ 一块铺满的抽象扇形预览。
@@ -234,7 +223,7 @@ internal fun FanStaticPreview(
             height = if (isLandscape) LANDSCAPE_HEIGHT else PORTRAIT_HEIGHT,
             isLandscape = isLandscape,
             corner = corner,
-            quickApps = if (includeQuickBar) previewQuickApps else emptyList()
+            quickApps = if (includeQuickBar) previewPlaceholderApps(PREVIEW_QUICK_COUNT) else emptyList()
         )
     }
     // 固定宽高比预览框（竖屏 3:4 / 横屏 4:3 / 底角近方形）：框形稳定不抖，扇形按内容适配缩放居中
@@ -258,7 +247,7 @@ private fun previewGeometry(
     height: Float,
     isLandscape: Boolean,
     corner: Boolean = false,
-    quickApps: List<FanAppInfo> = previewQuickApps
+    quickApps: List<FanAppInfo> = previewPlaceholderApps(PREVIEW_QUICK_COUNT)
 ): FanGeometry {
     val appLimit = when {
         corner -> config.cornerMaxAppsOuter + config.cornerMaxAppsInner
@@ -269,7 +258,7 @@ private fun previewGeometry(
         // 底角预览：锚点=精确底角 (0,H)，与实机 postShowFanCorner 同源
         anchor = if (corner) Offset(0f, height) else Offset(0f, height / 2f),
         screenSize = IntSize(width.toInt(), height.toInt()),
-        apps = previewApps.take(appLimit.coerceIn(1, previewApps.size)),
+        apps = previewPlaceholderApps(appLimit.coerceIn(1, PREVIEW_APP_COUNT)),
         quickApps = quickApps,
         config = config,
         density = PREVIEW_DENSITY,
@@ -369,13 +358,14 @@ private fun StaticFanPreview(
 private fun previewViewport(geometry: FanGeometry): PreviewViewport {
     val iconSize = geometry.iconSize * PREVIEW_DENSITY
     val quickIconSize = geometry.quickIconSize * PREVIEW_DENSITY
-    val quickSpacing = quickIconSize * 0.35f
-    val quickPadding = quickIconSize * 0.5f
-    val quickCount = geometry.quickApps.take(4).size
+    // 与实机同源：间距/内边距/数量上限全部走 FanBoard 导出的 QUICK_BAR_* 常量（旧值手抄
+    // 0.35/0.5 一份、且数量按 take(4) 估宽 ⇒ 预览包围盒比实机窄、整幅缩放略偏大）
+    val quickCount = geometry.quickApps.take(QUICK_BAR_MAX_ICONS).size
     val quickWidth = if (quickCount == 0) 0f else {
-        quickCount * quickIconSize + (quickCount - 1) * quickSpacing + quickPadding * 2f
+        quickCount * quickIconSize + (quickCount - 1) * quickIconSize * QUICK_BAR_GAP_RATIO +
+            2f * quickIconSize * QUICK_BAR_SIDE_PAD_RATIO
     }
-    val quickHeight = quickIconSize + quickPadding * 2f
+    val quickHeight = quickIconSize + 2f * quickIconSize * QUICK_BAR_VERTICAL_PAD_RATIO
     val centers = geometry.items.map { Offset(it.centerX, it.centerY) }
     // 弧带外缘纳入包围盒（预览画的是弧带剪影，不能只按图标中心裁，否则带边被切）
     val (_, bandOuterR) = fanBandRadii(geometry, PREVIEW_DENSITY)
@@ -445,6 +435,9 @@ private fun PreviewQuickBar(
     val colors = currentFanThemeColors()
     val iconSizePx = geometry.quickIconSize * PREVIEW_DENSITY * scale
     val iconSizeDp = with(density) { iconSizePx.toDp() }
+    // 示意盒子也和实机同源：圆角取 capsule 圆角口径（px = dp × density），内边距/间距取
+    // QUICK_BAR_* 比例。旧值 10.dp / 5.dp / 4.dp / 2.dp 是手抄的另一套数字，滑条一动就对不上
+    val capsuleCorner = quickCapsuleCornerDp(geometry.quickIconSize).dp
 
     Row(
         modifier = Modifier
@@ -456,31 +449,29 @@ private fun PreviewQuickBar(
             }
             .squircleSurface(
                 color = colors.surfaceContainer.copy(alpha = 0.94f),
-                cornerRadius = 10.dp
+                cornerRadius = capsuleCorner
             )
             .squircleBorder(
                 width = 1.dp,
                 color = colors.outline.copy(alpha = 0.3f),
-                cornerRadius = 10.dp
+                cornerRadius = capsuleCorner
             )
-            .padding(horizontal = 5.dp, vertical = 4.dp)
+            .padding(
+                horizontal = (iconSizeDp.value * QUICK_BAR_SIDE_PAD_RATIO).dp,
+                vertical = (iconSizeDp.value * QUICK_BAR_VERTICAL_PAD_RATIO).dp
+            ),
+        horizontalArrangement = Arrangement.spacedBy((iconSizeDp.value * QUICK_BAR_GAP_RATIO).dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        geometry.quickApps.take(4).forEach { _ ->
+        geometry.quickApps.take(QUICK_BAR_MAX_ICONS).forEach { _ ->
             Box(
                 modifier = Modifier
-                    .widthIn(min = (iconSizeDp.value + 4f).dp)
-                    .padding(horizontal = 2.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(iconSizeDp.value.dp)
-                        .squircleSurface(
-                            color = placeholderColor(colors),
-                            cornerRadius = (iconSizeDp.value * 0.25f).dp
-                        )
-                )
-            }
+                    .size(iconSizeDp.value.dp)
+                    .squircleSurface(
+                        color = placeholderColor(colors),
+                        cornerRadius = (iconSizeDp.value * 0.25f).dp
+                    )
+            )
         }
     }
 }

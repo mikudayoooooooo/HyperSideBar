@@ -315,6 +315,7 @@ private fun LayoutSheetContent(
             FanStaticPreview(
                 config = config,
                 isLandscape = isLandscape,
+                prefs = repo.prefs,
                 corner = isCorner,
                 includeQuickBar = true,
                 modifier = Modifier

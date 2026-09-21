@@ -1,5 +1,6 @@
 package com.lsp.hypersidebar.ui.settings
 
+import android.content.SharedPreferences
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import androidx.compose.animation.Crossfade
@@ -33,6 +34,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
@@ -51,6 +53,8 @@ import com.lsp.hypersidebar.ui.fan.QUICK_BAR_VERTICAL_PAD_RATIO
 import com.lsp.hypersidebar.ui.fan.fanBandRadii
 import com.lsp.hypersidebar.ui.fan.quickCapsuleCornerDp
 import com.lsp.hypersidebar.ui.fan.sweepExtremes
+import com.lsp.hypersidebar.util.RemotePrefsBridge
+import com.lsp.hypersidebar.util.ShortcutStore
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.squircle.squircleBorder
@@ -75,14 +79,33 @@ private data class PreviewViewport(
  * 不描摹任何真实应用，所以几何只需要「数量」——`computeFanGeometry` 按 appCount / quickList.size
  * 收缩（数量到顶 = 最坏收缩，正是要预览的东西）。
  *
- * 此前这里挂着两份真机应用名清单（`previewApps` 20 条 + `previewQuickApps` 4 条）——既不显示、
- * 又在应用改名/换包时误导维护者，属于"抽象化"改造的残留。
+ * 两处数量**都取自实际配置，没有占位常数**：
+ *  · 扇形项数 = 该方向的 `maxOuter + maxInner`（真机末位"全部应用"哨兵已计入该值）；
+ *  · 快捷栏项数 = 真机运行时列表项数（[rememberRuntimeQuickCount]）。
+ * 原先这里挂着两份真机应用名清单（20 条 + 4 条）——既不显示、又会在改名/换包时误导维护者；0921 删除。
  */
-private const val PREVIEW_APP_COUNT = 20
-private const val PREVIEW_QUICK_COUNT = 4
-
 private fun previewPlaceholderApps(count: Int): List<FanAppInfo> =
     List(count) { FanAppInfo(packageName = "preview.app.$it") }
+
+/**
+ * 预览要画的快捷栏项数 = **真机运行时列表的项数**：条件性面板占位 + 已启用用户项，
+ * 上限 [ShortcutStore.MAX_USER_SHORTCUTS] 含占位。与真机走同一个函数，不再各写一份数量。
+ *
+ * 读「生效存储」：真机侧读的是遥控侧那一份，故优先 [RemotePrefsBridge.prefs]，
+ * 未接上时退回本进程存储（设置页写入的源）。
+ */
+@Composable
+private fun rememberRuntimeQuickCount(prefs: SharedPreferences): Int {
+    val context = LocalContext.current
+    val effectivePrefs = RemotePrefsBridge.prefs ?: prefs
+    return remember(effectivePrefs, context) {
+        ShortcutStore.buildRuntimeQuickList(
+            effectivePrefs,
+            ShortcutStore.isToolboxAvailable(context),
+            ShortcutStore.getToolboxLabel(context)
+        ).size
+    }
+}
 
 /**
  * 效果预览分区唯一卡片：miuix TabRow（竖屏/横屏/底角侧滑）+ 一块铺满的抽象扇形预览。
@@ -133,6 +156,7 @@ internal fun FanPreviewTabsCard(
                     FanStaticPreview(
                         config = config,
                         isLandscape = tab == LayoutOrientation.LANDSCAPE,
+                        prefs = repo.prefs,
                         corner = tab == LayoutOrientation.CORNER,
                         includeQuickBar = true,
                         modifier = Modifier.fillMaxSize()
@@ -210,20 +234,23 @@ private fun animatedPreviewConfig(
 internal fun FanStaticPreview(
     config: FanConfig,
     isLandscape: Boolean,
+    /** 生效存储：[rememberRuntimeQuickCount] 从中实读快捷栏项数，故预览数量恒与真机一致。 */
+    prefs: SharedPreferences,
     modifier: Modifier = Modifier,
     includeQuickBar: Boolean = true,
     /** 底角预览：锚点=精确底角、弧占向上象限（与竖/横屏同构的第三种形态）。 */
     corner: Boolean = false
 ) {
+    val quickCount = rememberRuntimeQuickCount(prefs)
     val animatedConfig = animatedPreviewConfig(config, isLandscape, corner)
-    val geometry = remember(animatedConfig, isLandscape, corner) {
+    val geometry = remember(animatedConfig, isLandscape, corner, quickCount, includeQuickBar) {
         previewGeometry(
             config = animatedConfig,
             width = if (isLandscape) LANDSCAPE_WIDTH else PORTRAIT_WIDTH,
             height = if (isLandscape) LANDSCAPE_HEIGHT else PORTRAIT_HEIGHT,
             isLandscape = isLandscape,
             corner = corner,
-            quickApps = if (includeQuickBar) previewPlaceholderApps(PREVIEW_QUICK_COUNT) else emptyList()
+            quickApps = if (includeQuickBar) previewPlaceholderApps(quickCount) else emptyList()
         )
     }
     // 固定宽高比预览框（竖屏 3:4 / 横屏 4:3 / 底角近方形）：框形稳定不抖，扇形按内容适配缩放居中
@@ -247,7 +274,7 @@ private fun previewGeometry(
     height: Float,
     isLandscape: Boolean,
     corner: Boolean = false,
-    quickApps: List<FanAppInfo> = previewPlaceholderApps(PREVIEW_QUICK_COUNT)
+    quickApps: List<FanAppInfo>
 ): FanGeometry {
     val appLimit = when {
         corner -> config.cornerMaxAppsOuter + config.cornerMaxAppsInner
@@ -258,7 +285,9 @@ private fun previewGeometry(
         // 底角预览：锚点=精确底角 (0,H)，与实机 postShowFanCorner 同源
         anchor = if (corner) Offset(0f, height) else Offset(0f, height / 2f),
         screenSize = IntSize(width.toInt(), height.toInt()),
-        apps = previewPlaceholderApps(appLimit.coerceIn(1, PREVIEW_APP_COUNT)),
+        // 项数 = 该方向配置上限（含真机末位"全部应用"哨兵），不再截到人为常数：
+        // 数量直接决定环上图标收缩，预览必须与真机同数。下限 1 = 真机配置为 0 时只剩哨兵项
+        apps = previewPlaceholderApps(appLimit.coerceAtLeast(1)),
         quickApps = quickApps,
         config = config,
         density = PREVIEW_DENSITY,

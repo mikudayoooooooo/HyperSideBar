@@ -18,7 +18,7 @@ import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.core.graphics.drawable.toBitmap
+import com.lsp.hypersidebar.util.AppIconCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Text
@@ -29,8 +29,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 // 见 Screen.kt 与 MainScreen.kt 的 entryProvider。本文件只承载跨文件共享的图标组件。
 
 /**
- * 设置页专用的应用图标组件。
- * 经 IconLoader 异步加载（LruCache + IO 线程），不在组合期做 PackageManager IPC。
+ * 设置页专用的应用图标组件。与扇形/AllApps 共用进程级 [AppIconCache]（pkg → 128px Bitmap）：
+ * 首帧主线程只查缓存（无 binder），miss 才去 IO 线程加载，回滑零成本。
  */
 @Composable
 internal fun SettingsAppIcon(
@@ -39,13 +39,10 @@ internal fun SettingsAppIcon(
     size: Float
 ) {
     val context = LocalContext.current
-    var bitmap by remember(packageName) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var bitmap by remember(packageName) { mutableStateOf(AppIconCache.peek(packageName)) }
     LaunchedEffect(packageName) {
-        bitmap = withContext(Dispatchers.IO) {
-            runCatching {
-                context.packageManager.getApplicationIcon(packageName)
-                    .toBitmap(width = 128, height = 128)
-            }.getOrNull()
+        if (bitmap == null) {
+            bitmap = withContext(Dispatchers.IO) { AppIconCache.load(context, packageName) }
         }
     }
     val bmp = bitmap

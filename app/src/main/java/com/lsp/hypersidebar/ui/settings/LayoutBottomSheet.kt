@@ -24,6 +24,7 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.ui.fan.CORNER_SPAN_DEG
+import com.lsp.hypersidebar.ui.fan.FanVisuals
 import com.lsp.hypersidebar.ui.fan.effectiveIconSizeDp
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
@@ -315,11 +316,12 @@ private fun LayoutSheetContent(
             FanStaticPreview(
                 config = config,
                 isLandscape = isLandscape,
+                prefs = repo.prefs,
                 corner = isCorner,
                 includeQuickBar = true,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(150.dp)
+                    .height(FanVisuals.PREVIEW_SHEET_HEIGHT)
             )
         }
 

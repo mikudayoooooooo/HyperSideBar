@@ -33,7 +33,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.squircle.squircleBorder
-import top.yukonga.miuix.kmp.squircle.squircleClip
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 
 @Composable
@@ -44,14 +43,13 @@ fun QuickAppsBar(
     onQuickAppSelected: (FanAppInfo) -> Unit
 ) {
     val context = LocalContext.current
-    val quickApps = geometry.quickApps.take(6)
+    val quickApps = geometry.quickApps.take(QUICK_BAR_MAX_ICONS)
     if (quickApps.isEmpty()) return
 
     val iconSizeDp = geometry.quickIconSize
     val density = LocalDensity.current.density
     val pxIconSize = iconSizeDp * density
-    val pxSpacing = pxIconSize * 0.35f
-    val barPadding = pxIconSize * 0.5f
+    val barPadding = pxIconSize * QUICK_BAR_SIDE_PAD_RATIO
 
     Box(
         modifier = Modifier.fillMaxSize()
@@ -61,15 +59,19 @@ fun QuickAppsBar(
             val app = quickApps[selectedIndex]
             val iconPx = pxIconSize
             val pad = barPadding
-            val step = iconPx * 1.35f
+            val step = iconPx * (1f + QUICK_BAR_GAP_RATIO)
             val cx = geometry.quickBarX + pad + selectedIndex * step + iconPx / 2f
+            // 图标中心 Y = 板上边 + 0.25q 上内边距 + 半格图标（板高 1.5q，见 quickCapsuleMetrics）。
+            // 与扇形 SelectedLabel 同一套避让式：图标中心 − 放大后半高 − 标签高 − 10dp
+            val cy = geometry.quickBarY + iconPx * (QUICK_BAR_VERTICAL_PAD_RATIO + 0.5f)
             var labelSize by remember { mutableStateOf(IntSize.Zero) }
             Box(
                 modifier = Modifier
                     .offset {
                         IntOffset(
                             (cx - labelSize.width / 2f).toInt(),
-                            (geometry.quickBarY - labelSize.height - 8.dp.roundToPx()).toInt()
+                            (cy - iconPx * FanVisuals.SELECTED_ICON_SCALE / 2f -
+                                labelSize.height - FanVisuals.LABEL_GAP.toPx()).toInt()
                         )
                     }
                     .alpha(if (labelSize == IntSize.Zero) 0f else 1f)
@@ -78,15 +80,15 @@ fun QuickAppsBar(
                     // 标签融进板里（真机 0914 "看不到框选效果"）。squircle：surface 外层
                     // 填充+裁剪，border 内层描边（绘于填充之上）
                     .squircleSurface(
-                        color = colors.surfaceContainerHigh.copy(alpha = 0.95f),
-                        cornerRadius = 12.dp
+                        color = colors.surfaceContainerHigh.copy(alpha = FanVisuals.LABEL_FILL_ALPHA),
+                        cornerRadius = FanVisuals.LABEL_CORNER
                     )
                     .squircleBorder(
-                        width = 1.dp,
-                        color = colors.outline.copy(alpha = 0.65f),
-                        cornerRadius = 12.dp
+                        width = FanVisuals.LABEL_BORDER_WIDTH,
+                        color = colors.outline.copy(alpha = FanVisuals.LABEL_BORDER_ALPHA),
+                        cornerRadius = FanVisuals.LABEL_CORNER
                     )
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                    .padding(horizontal = FanVisuals.LABEL_PADDING_H, vertical = FanVisuals.LABEL_PADDING_V),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -104,14 +106,14 @@ fun QuickAppsBar(
                         geometry.quickBarY.toInt()
                     )
                 }
-                .squircleClip(cornerRadius = (iconSizeDp / 2f + 4f).dp)
-                // 栏的底由 FanBoard 的**胶囊独立模糊层**提供（与弧带同一套材质参数，故两者观感
-                // 一致），此处不再叠任何染色——自己铺平涂底会让胶囊与扇形板材质分叉（0920 反馈）
+                // 栏的底由 FanBoard 的**胶囊独立模糊层**提供（与弧带同一 backdrop/混色/提亮/
+                // 噪点参数，故两者材质观感一致），此处不叠任何染色、也不套 clip——自己铺平涂底
+                // 会让胶囊与扇形板材质分叉（0920 反馈），而套 clip 等于给整条栏再插一层离屏缓冲
                 .padding(
-                    horizontal = (iconSizeDp * 0.5f).dp,
-                    vertical = (iconSizeDp * 0.25f).dp
+                    horizontal = (iconSizeDp * QUICK_BAR_SIDE_PAD_RATIO).dp,
+                    vertical = (iconSizeDp * QUICK_BAR_VERTICAL_PAD_RATIO).dp
                 ),
-            horizontalArrangement = Arrangement.spacedBy((iconSizeDp * 0.35f).dp),
+            horizontalArrangement = Arrangement.spacedBy((iconSizeDp * QUICK_BAR_GAP_RATIO).dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             quickApps.forEachIndexed { index, app ->
@@ -139,27 +141,37 @@ private fun QuickAppIcon(
 ) {
     val (bitmap, fallbackColor) = rememberAppIcon(context, app)
     // 同 FanAppIcon：不靠降低透明度做未选中态（真机反馈可读性差），选中由放大+高亮板+描边表达
-    val targetScale = if (isSelected) SELECTED_ICON_SCALE else 1f
+    val targetScale = if (isSelected) FanVisuals.SELECTED_ICON_SCALE else 1f
     val iconScale by animateFloatAsState(targetValue = targetScale, animationSpec = tween(100))
 
     Box(
         modifier = Modifier
             .size(iconSize.dp)
             .scale(iconScale)
-            // B1 圆角 mask 统一：CircleShape → 圆角方（与扇形图标一致）→ squircle
-            .squircleSurface(
-                color = if (isSelected) colors.primaryContainer.copy(alpha = 0.9f)
-                else colors.surfaceContainerHigh.copy(alpha = 0.35f),
-                cornerRadius = (iconSize * 0.25f).dp
-            )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
+        // 选中高亮板仅在选中态绘制（与 FanAppIcon 逐行同构）：常态**不留底框**。
+        // 曾恒铺一层 surfaceContainerHigh@0.35 的圆角底，等于给整条栏换了套材质——快捷栏图标
+        // 像各自坐在灰底子上，而扇形图标是直接坐在板上（0921 用户反馈"快捷栏材质/背景与扇形不一致"）
+        if (isSelected) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .squircleSurface(
+                        color = colors.primaryContainer.copy(alpha = FanVisuals.SELECTION_PLATE_ALPHA),
+                        cornerRadius = (iconSize * FanVisuals.ICON_CORNER_RATIO).dp
+                    )
+            )
+        }
+
         AppIconImage(
             bitmap = bitmap,
             fallbackColor = fallbackColor,
             appName = app.appName,
-            size = iconSize,
+            // 与 FanAppIcon 同口径 ICON_FILL_RATIO（图标几乎占满格子、留 8% 呼吸）。旧值 1.0 让
+            // 同尺寸下的快捷栏图标肉眼比扇形图标更大，是"两者不一致"的另一处来源
+            size = iconSize * FanVisuals.ICON_FILL_RATIO,
             colors = colors
         )
 
@@ -169,9 +181,9 @@ private fun QuickAppIcon(
                 modifier = Modifier
                     .fillMaxSize()
                     .squircleBorder(
-                        width = 2.dp,
+                        width = FanVisuals.SELECTION_BORDER_WIDTH,
                         color = colors.primary,
-                        cornerRadius = (iconSize * 0.25f).dp
+                        cornerRadius = (iconSize * FanVisuals.ICON_CORNER_RATIO).dp
                     )
             )
         }
@@ -210,7 +222,7 @@ private fun FallbackIcon(
         modifier = Modifier
             .size(size.dp)
             // B1：兜底头像与全线图标 mask 统一（圆角方）→ squircle
-            .squircleSurface(color = Color(fallbackColor), cornerRadius = (size * 0.25f).dp),
+            .squircleSurface(color = Color(fallbackColor), cornerRadius = (size * FanVisuals.ICON_CORNER_RATIO).dp),
         contentAlignment = Alignment.Center
     ) {
         Text(

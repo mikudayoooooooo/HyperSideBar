@@ -47,9 +47,6 @@ import top.yukonga.miuix.kmp.squircle.squircleBorder
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-/** 选中态图标放大倍数（PRD §7.3.2"图标放大1.25倍"）；SelectedLabel 避让计算同源。 */
-internal const val SELECTED_ICON_SCALE = 1.25f
-
 // ===== 入场=折扇展开（2026-09-13 用户拍板，替代"整体刚性绽放"）=====
 // 三通道分层进场：①弧线/雾化沿角度扫开 ②图标按角度次序逐枚从锚点沿半径飞出
 // （各自过冲弹簧+级联延迟）③快捷栏弧开后上滑淡入。命中测试始终用终位（几何与
@@ -92,6 +89,8 @@ internal fun FanMenuCompose(
     source: FanBackdropSource,
     wallpaper: android.graphics.Bitmap?,
     wallpaperOffset: IntOffset,
+    /** 屏幕像素尺寸：采样壁纸按窗口原点 + 屏幕尺寸还原到窗口本地系（与桌面真实壁纸对齐）。 */
+    wallpaperDisplay: IntSize,
     exitTick: Int,
     onExitFinished: () -> Unit,
     onAppSelected: (FanAppInfo) -> Unit,
@@ -188,6 +187,7 @@ internal fun FanMenuCompose(
                 fogIntensity = fogIntensity,
                 wallpaper = wallpaperImage,
                 wallpaperOffset = wallpaperOffset,
+                wallpaperDisplay = wallpaperDisplay,
                 sweep = { arcSweep.value }
             )
 
@@ -247,7 +247,7 @@ private fun FanAppIcon(
     val pxIconSize = iconSize * density
     // 选中只放大、不降未选中的透明度：图标本身的可读性优先于"选中更亮"的层级感
     // （真机反馈 0.75 透明度在亮背景上认不出图标）。选中另有高亮板+描边+应用名标签三重提示
-    val targetScale = if (isSelected) SELECTED_ICON_SCALE else 1f
+    val targetScale = if (isSelected) FanVisuals.SELECTED_ICON_SCALE else 1f
     val iconScale by animateFloatAsState(targetValue = targetScale, animationSpec = tween(100))
 
     // 折扇展开：本枚图标从锚点沿半径飞向终位（spring 过冲）+ 按角度次序级联起飞。
@@ -275,7 +275,7 @@ private fun FanAppIcon(
                 val p = flyP.value
                 translationX = (item.centerX - anchor.x) * (p - 1f)
                 translationY = (item.centerY - anchor.y) * (p - 1f)
-                val s = 0.4f + 0.6f * p
+                val s = FanVisuals.ICON_FLY_START_SCALE + FanVisuals.ICON_FLY_SCALE_SPAN * p
                 scaleX = s
                 scaleY = s
                 alpha = flyA.value
@@ -290,8 +290,8 @@ private fun FanAppIcon(
                 modifier = Modifier
                     .fillMaxSize()
                     .squircleSurface(
-                        color = colors.primaryContainer.copy(alpha = 0.9f),
-                        cornerRadius = (iconSize * 0.25f).dp
+                        color = colors.primaryContainer.copy(alpha = FanVisuals.SELECTION_PLATE_ALPHA),
+                        cornerRadius = (iconSize * FanVisuals.ICON_CORNER_RATIO).dp
                     )
             )
         }
@@ -299,8 +299,7 @@ private fun FanAppIcon(
             bitmap = bitmap,
             fallbackColor = fallbackColor,
             appName = item.app.appName,
-            // 0.7（圆形托底时代遗留）→ 0.92：图标几乎占满，与 AllApps 去托底一致
-            size = iconSize * 0.92f,
+            size = iconSize * FanVisuals.ICON_FILL_RATIO,
             colors = colors
         )
 
@@ -310,9 +309,9 @@ private fun FanAppIcon(
                 modifier = Modifier
                     .fillMaxSize()
                     .squircleBorder(
-                        width = 2.dp,
+                        width = FanVisuals.SELECTION_BORDER_WIDTH,
                         color = colors.primary,
-                        cornerRadius = (iconSize * 0.25f).dp
+                        cornerRadius = (iconSize * FanVisuals.ICON_CORNER_RATIO).dp
                     )
             )
         }
@@ -336,8 +335,8 @@ private fun SelectedLabel(
             .offset {
                 IntOffset(
                     (item.centerX - labelSize.width / 2f).toInt(),
-                    (item.centerY - pxIconSize * SELECTED_ICON_SCALE / 2f -
-                        labelSize.height - 10.dp.roundToPx()).toInt()
+                    (item.centerY - pxIconSize * FanVisuals.SELECTED_ICON_SCALE / 2f -
+                        labelSize.height - FanVisuals.LABEL_GAP.toPx()).toInt()
                 )
             }
             .alpha(if (labelSize == IntSize.Zero) 0f else 1f)
@@ -345,15 +344,15 @@ private fun SelectedLabel(
             // 描边防隐身：板材质与标签同色系，无边框时标签融进板里（0914 真机反馈）。
             // squircle：surface 外层填充+裁剪，border 内层描边（绘于填充之上）
             .squircleSurface(
-                color = colors.surfaceContainerHigh.copy(alpha = 0.95f),
-                cornerRadius = 12.dp
+                color = colors.surfaceContainerHigh.copy(alpha = FanVisuals.LABEL_FILL_ALPHA),
+                cornerRadius = FanVisuals.LABEL_CORNER
             )
             .squircleBorder(
-                width = 1.dp,
-                color = colors.outline.copy(alpha = 0.65f),
-                cornerRadius = 12.dp
+                width = FanVisuals.LABEL_BORDER_WIDTH,
+                color = colors.outline.copy(alpha = FanVisuals.LABEL_BORDER_ALPHA),
+                cornerRadius = FanVisuals.LABEL_CORNER
             )
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            .padding(horizontal = FanVisuals.LABEL_PADDING_H, vertical = FanVisuals.LABEL_PADDING_V),
         contentAlignment = Alignment.Center
     ) {
         Text(

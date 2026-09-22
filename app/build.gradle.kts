@@ -87,8 +87,10 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        // miuix 0.9.4 起以 JVM 21 目标发布，其中 inline API（miuix-nav 的 entry DSL）要求
+        // 调用方同为 21，否则报 "Cannot inline bytecode built with JVM target 21"
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     packaging {
@@ -109,8 +111,6 @@ tasks.named("preBuild").configure {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.material)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -122,9 +122,9 @@ dependencies {
     implementation(libs.miuix.squircle)
     // 毛玻璃（0913 用户拍板路线③）：窗口内组件 backdrop 模糊（AGSL RuntimeShader，API 33+=minSdk）
     implementation(libs.miuix.blur)
-    implementation(libs.miuix.navigation3.ui)
-    // miuix-navigation3-ui 只内嵌 ui/scene 包，runtime（NavKey/NavBackStack/NavEntry）需显式引入
-    implementation(libs.androidx.navigation3.runtime)
+    // 0.9.4 起 miuix-navigation3-ui（实为 androidx.navigation3 ui/scene 的内嵌拷贝）停止发布，
+    // 由 miuix-nav 引擎取代：自带 NavDisplay/NavBackStack/NavKey + HyperOS 转场（滑动+圆角裁切+遮罩）
+    implementation(libs.miuix.nav)
 
     // Xposed/LSPosed
     compileOnly(libs.libxposed.api)
@@ -138,4 +138,7 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.foundation)
     implementation(libs.compose.activity)
+
+    // 列表拖动重排（快捷方式 / 扇形应用固定顺序）
+    implementation(libs.reorderable)
 }

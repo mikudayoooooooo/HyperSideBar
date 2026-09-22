@@ -1,5 +1,6 @@
 package com.lsp.hypersidebar.ui.settings
 
+import android.content.SharedPreferences
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import androidx.compose.animation.Crossfade
@@ -7,6 +8,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -19,7 +21,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -33,6 +34,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
@@ -40,19 +42,27 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.ui.fan.FanAppInfo
+import com.lsp.hypersidebar.ui.fan.FanVisuals
 import com.lsp.hypersidebar.ui.fan.FanConfig
 import com.lsp.hypersidebar.ui.fan.FanGeometry
 import com.lsp.hypersidebar.ui.fan.FanThemeColors
 import com.lsp.hypersidebar.ui.fan.computeFanGeometry
+import com.lsp.hypersidebar.ui.fan.QUICK_BAR_GAP_RATIO
+import com.lsp.hypersidebar.ui.fan.QUICK_BAR_MAX_ICONS
+import com.lsp.hypersidebar.ui.fan.QUICK_BAR_SIDE_PAD_RATIO
+import com.lsp.hypersidebar.ui.fan.QUICK_BAR_VERTICAL_PAD_RATIO
 import com.lsp.hypersidebar.ui.fan.fanBandRadii
+import com.lsp.hypersidebar.ui.fan.quickCapsuleCornerDp
 import com.lsp.hypersidebar.ui.fan.sweepExtremes
+import com.lsp.hypersidebar.util.RemotePrefsBridge
+import com.lsp.hypersidebar.util.ShortcutStore
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.squircle.squircleBorder
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
-private const val PREVIEW_DENSITY = 0.5f
+private val PREVIEW_DENSITY = FanVisuals.PREVIEW_DENSITY
 private const val PORTRAIT_WIDTH = 360f
 private const val PORTRAIT_HEIGHT = 720f
 private const val LANDSCAPE_WIDTH = 720f
@@ -65,35 +75,38 @@ private data class PreviewViewport(
     val height: Float
 )
 
-private val previewApps = listOf(
-    FanAppInfo("com.android.browser", "浏览器"),
-    FanAppInfo("com.miui.gallery", "相册"),
-    FanAppInfo("com.android.camera", "相机"),
-    FanAppInfo("com.miui.notes", "笔记"),
-    FanAppInfo("com.android.settings", "设置"),
-    FanAppInfo("com.miui.calculator", "计算器"),
-    FanAppInfo("com.miui.securitycenter", "手机管家"),
-    FanAppInfo("com.android.contacts", "联系人"),
-    FanAppInfo("com.android.calendar", "日历"),
-    FanAppInfo("com.android.fileexplorer", "文件管理"),
-    FanAppInfo("com.android.deskclock", "时钟"),
-    FanAppInfo("com.miui.player", "音乐"),
-    FanAppInfo("com.miui.weather2", "天气"),
-    FanAppInfo("com.android.mms", "短信"),
-    FanAppInfo("com.android.incallui", "电话"),
-    FanAppInfo("com.android.email", "邮件"),
-    FanAppInfo("com.android.providers.downloads.ui", "下载"),
-    FanAppInfo("com.miui.compass", "指南针"),
-    FanAppInfo("com.android.soundrecorder", "录音机"),
-    FanAppInfo("com.xiaomi.scanner", "扫一扫")
-)
+/**
+ * 抽象预览的占位项（0921 收口）：预览画的是**占位圆角方块**（[PreviewIcon]）与抽象弧带剪影，
+ * 不描摹任何真实应用，所以几何只需要「数量」——`computeFanGeometry` 按 appCount / quickList.size
+ * 收缩（数量到顶 = 最坏收缩，正是要预览的东西）。
+ *
+ * 两处数量**都取自实际配置，没有占位常数**：
+ *  · 扇形项数 = 该方向的 `maxOuter + maxInner`（真机末位"全部应用"哨兵已计入该值）；
+ *  · 快捷栏项数 = 真机运行时列表项数（[rememberRuntimeQuickCount]）。
+ * 原先这里挂着两份真机应用名清单（20 条 + 4 条）——既不显示、又会在改名/换包时误导维护者；0921 删除。
+ */
+private fun previewPlaceholderApps(count: Int): List<FanAppInfo> =
+    List(count) { FanAppInfo(packageName = "preview.app.$it") }
 
-private val previewQuickApps = listOf(
-    FanAppInfo("com.android.camera", "相机"),
-    FanAppInfo("com.miui.notes", "笔记"),
-    FanAppInfo("com.miui.calculator", "计算器"),
-    FanAppInfo("com.android.settings", "设置")
-)
+/**
+ * 预览要画的快捷栏项数 = **真机运行时列表的项数**：条件性面板占位 + 已启用用户项，
+ * 上限 [ShortcutStore.MAX_USER_SHORTCUTS] 含占位。与真机走同一个函数，不再各写一份数量。
+ *
+ * 读「生效存储」：真机侧读的是遥控侧那一份，故优先 [RemotePrefsBridge.prefs]，
+ * 未接上时退回本进程存储（设置页写入的源）。
+ */
+@Composable
+private fun rememberRuntimeQuickCount(prefs: SharedPreferences): Int {
+    val context = LocalContext.current
+    val effectivePrefs = RemotePrefsBridge.prefs ?: prefs
+    return remember(effectivePrefs, context) {
+        ShortcutStore.buildRuntimeQuickList(
+            effectivePrefs,
+            ShortcutStore.isToolboxAvailable(context),
+            ShortcutStore.getToolboxLabel(context)
+        ).size
+    }
+}
 
 /**
  * 效果预览分区唯一卡片：miuix TabRow（竖屏/横屏/底角侧滑）+ 一块铺满的抽象扇形预览。
@@ -144,6 +157,7 @@ internal fun FanPreviewTabsCard(
                     FanStaticPreview(
                         config = config,
                         isLandscape = tab == LayoutOrientation.LANDSCAPE,
+                        prefs = repo.prefs,
                         corner = tab == LayoutOrientation.CORNER,
                         includeQuickBar = true,
                         modifier = Modifier.fillMaxSize()
@@ -221,20 +235,23 @@ private fun animatedPreviewConfig(
 internal fun FanStaticPreview(
     config: FanConfig,
     isLandscape: Boolean,
+    /** 生效存储：[rememberRuntimeQuickCount] 从中实读快捷栏项数，故预览数量恒与真机一致。 */
+    prefs: SharedPreferences,
     modifier: Modifier = Modifier,
     includeQuickBar: Boolean = true,
     /** 底角预览：锚点=精确底角、弧占向上象限（与竖/横屏同构的第三种形态）。 */
     corner: Boolean = false
 ) {
+    val quickCount = rememberRuntimeQuickCount(prefs)
     val animatedConfig = animatedPreviewConfig(config, isLandscape, corner)
-    val geometry = remember(animatedConfig, isLandscape, corner) {
+    val geometry = remember(animatedConfig, isLandscape, corner, quickCount, includeQuickBar) {
         previewGeometry(
             config = animatedConfig,
             width = if (isLandscape) LANDSCAPE_WIDTH else PORTRAIT_WIDTH,
             height = if (isLandscape) LANDSCAPE_HEIGHT else PORTRAIT_HEIGHT,
             isLandscape = isLandscape,
             corner = corner,
-            quickApps = if (includeQuickBar) previewQuickApps else emptyList()
+            quickApps = if (includeQuickBar) previewPlaceholderApps(quickCount) else emptyList()
         )
     }
     // 固定宽高比预览框（竖屏 3:4 / 横屏 4:3 / 底角近方形）：框形稳定不抖，扇形按内容适配缩放居中
@@ -258,7 +275,7 @@ private fun previewGeometry(
     height: Float,
     isLandscape: Boolean,
     corner: Boolean = false,
-    quickApps: List<FanAppInfo> = previewQuickApps
+    quickApps: List<FanAppInfo>
 ): FanGeometry {
     val appLimit = when {
         corner -> config.cornerMaxAppsOuter + config.cornerMaxAppsInner
@@ -269,7 +286,9 @@ private fun previewGeometry(
         // 底角预览：锚点=精确底角 (0,H)，与实机 postShowFanCorner 同源
         anchor = if (corner) Offset(0f, height) else Offset(0f, height / 2f),
         screenSize = IntSize(width.toInt(), height.toInt()),
-        apps = previewApps.take(appLimit.coerceIn(1, previewApps.size)),
+        // 项数 = 该方向配置上限（含真机末位"全部应用"哨兵），不再截到人为常数：
+        // 数量直接决定环上图标收缩，预览必须与真机同数。下限 1 = 真机配置为 0 时只剩哨兵项
+        apps = previewPlaceholderApps(appLimit.coerceAtLeast(1)),
         quickApps = quickApps,
         config = config,
         density = PREVIEW_DENSITY,
@@ -291,12 +310,12 @@ private fun StaticFanPreview(
         modifier = modifier
             .squircleSurface(
                 color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                cornerRadius = 12.dp
+                cornerRadius = FanVisuals.PREVIEW_FRAME_CORNER
             )
             .squircleBorder(
-                width = 1.dp,
-                color = colors.outline.copy(alpha = 0.35f),
-                cornerRadius = 12.dp
+                width = FanVisuals.PREVIEW_FRAME_BORDER_WIDTH,
+                color = colors.outline.copy(alpha = FanVisuals.PREVIEW_FRAME_BORDER_ALPHA),
+                cornerRadius = FanVisuals.PREVIEW_FRAME_CORNER
             )
     ) {
         val widthPx = with(density) { maxWidth.toPx() }
@@ -319,7 +338,7 @@ private fun StaticFanPreview(
             val outerPx = bandOuterR * scale
             // 磨砂弧带剪影：抽象平涂（粗描边弧 = 圆角端扇环），替代旧填充饼 + 双轨道
             drawArc(
-                color = colors.surfaceContainer.copy(alpha = 0.92f),
+                color = colors.surfaceContainer.copy(alpha = FanVisuals.PREVIEW_BAND_FILL_ALPHA),
                 startAngle = geometry.startAngle,
                 sweepAngle = geometry.spanAngle,
                 useCenter = false,
@@ -329,13 +348,13 @@ private fun StaticFanPreview(
             )
             // 最外层单条弧线（与真机 FanBoard ③ 层同口径）
             drawArc(
-                color = colors.outline.copy(alpha = 0.45f),
+                color = colors.outline.copy(alpha = FanVisuals.BAND_STROKE_TOP_ALPHA_LIGHT),
                 startAngle = geometry.startAngle,
                 sweepAngle = geometry.spanAngle,
                 useCenter = false,
                 topLeft = Offset(anchor.x - outerPx, anchor.y - outerPx),
                 size = Size(outerPx * 2f, outerPx * 2f),
-                style = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Round)
+                style = Stroke(width = FanVisuals.BAND_STROKE_WIDTH.toPx(), cap = StrokeCap.Round)
             )
         }
 
@@ -369,13 +388,14 @@ private fun StaticFanPreview(
 private fun previewViewport(geometry: FanGeometry): PreviewViewport {
     val iconSize = geometry.iconSize * PREVIEW_DENSITY
     val quickIconSize = geometry.quickIconSize * PREVIEW_DENSITY
-    val quickSpacing = quickIconSize * 0.35f
-    val quickPadding = quickIconSize * 0.5f
-    val quickCount = geometry.quickApps.take(4).size
+    // 与实机同源：间距/内边距/数量上限全部走 FanBoard 导出的 QUICK_BAR_* 常量（旧值手抄
+    // 0.35/0.5 一份、且数量按 take(4) 估宽 ⇒ 预览包围盒比实机窄、整幅缩放略偏大）
+    val quickCount = geometry.quickApps.take(QUICK_BAR_MAX_ICONS).size
     val quickWidth = if (quickCount == 0) 0f else {
-        quickCount * quickIconSize + (quickCount - 1) * quickSpacing + quickPadding * 2f
+        quickCount * quickIconSize + (quickCount - 1) * quickIconSize * QUICK_BAR_GAP_RATIO +
+            2f * quickIconSize * QUICK_BAR_SIDE_PAD_RATIO
     }
-    val quickHeight = quickIconSize + quickPadding * 2f
+    val quickHeight = quickIconSize + 2f * quickIconSize * QUICK_BAR_VERTICAL_PAD_RATIO
     val centers = geometry.items.map { Offset(it.centerX, it.centerY) }
     // 弧带外缘纳入包围盒（预览画的是弧带剪影，不能只按图标中心裁，否则带边被切）
     val (_, bandOuterR) = fanBandRadii(geometry, PREVIEW_DENSITY)
@@ -405,7 +425,7 @@ private fun previewViewport(geometry: FanGeometry): PreviewViewport {
         geometry.quickBarY + quickHeight,
         bandBottom
     )
-    val padding = iconSize * 0.55f
+    val padding = iconSize * FanVisuals.PREVIEW_VIEWPORT_PAD_RATIO
     return PreviewViewport(
         left = contentLeft - padding,
         top = contentTop - padding,
@@ -426,13 +446,13 @@ private fun PreviewIcon(
             .size(size.dp)
             .squircleSurface(
                 color = placeholderColor(colors),
-                cornerRadius = (size * 0.24f).dp
+                cornerRadius = (size * FanVisuals.ICON_CORNER_RATIO).dp
             )
     )
 }
 
 private fun placeholderColor(colors: FanThemeColors): Color =
-    colors.primaryContainer.copy(alpha = 0.55f)
+    colors.primaryContainer.copy(alpha = FanVisuals.PREVIEW_PLACEHOLDER_ALPHA)
 
 @Composable
 private fun PreviewQuickBar(
@@ -445,6 +465,9 @@ private fun PreviewQuickBar(
     val colors = currentFanThemeColors()
     val iconSizePx = geometry.quickIconSize * PREVIEW_DENSITY * scale
     val iconSizeDp = with(density) { iconSizePx.toDp() }
+    // 示意盒子也和实机同源：圆角取 capsule 圆角口径（px = dp × density），内边距/间距取
+    // QUICK_BAR_* 比例。旧值 10.dp / 5.dp / 4.dp / 2.dp 是手抄的另一套数字，滑条一动就对不上
+    val capsuleCorner = quickCapsuleCornerDp(geometry.quickIconSize).dp
 
     Row(
         modifier = Modifier
@@ -455,32 +478,30 @@ private fun PreviewQuickBar(
                 )
             }
             .squircleSurface(
-                color = colors.surfaceContainer.copy(alpha = 0.94f),
-                cornerRadius = 10.dp
+                color = colors.surfaceContainer.copy(alpha = FanVisuals.PREVIEW_CAPSULE_FILL_ALPHA),
+                cornerRadius = capsuleCorner
             )
             .squircleBorder(
                 width = 1.dp,
-                color = colors.outline.copy(alpha = 0.3f),
-                cornerRadius = 10.dp
+                color = colors.outline.copy(alpha = FanVisuals.PREVIEW_CAPSULE_BORDER_ALPHA),
+                cornerRadius = capsuleCorner
             )
-            .padding(horizontal = 5.dp, vertical = 4.dp)
+            .padding(
+                horizontal = (iconSizeDp.value * QUICK_BAR_SIDE_PAD_RATIO).dp,
+                vertical = (iconSizeDp.value * QUICK_BAR_VERTICAL_PAD_RATIO).dp
+            ),
+        horizontalArrangement = Arrangement.spacedBy((iconSizeDp.value * QUICK_BAR_GAP_RATIO).dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        geometry.quickApps.take(4).forEach { _ ->
+        geometry.quickApps.take(QUICK_BAR_MAX_ICONS).forEach { _ ->
             Box(
                 modifier = Modifier
-                    .widthIn(min = (iconSizeDp.value + 4f).dp)
-                    .padding(horizontal = 2.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(iconSizeDp.value.dp)
-                        .squircleSurface(
-                            color = placeholderColor(colors),
-                            cornerRadius = (iconSizeDp.value * 0.25f).dp
-                        )
-                )
-            }
+                    .size(iconSizeDp.value.dp)
+                    .squircleSurface(
+                        color = placeholderColor(colors),
+                        cornerRadius = (iconSizeDp.value * 0.25f).dp
+                    )
+            )
         }
     }
 }

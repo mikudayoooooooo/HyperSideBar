@@ -26,7 +26,7 @@
     <string name="probe_state_degraded">已降级 · 重启手机或重启模块后恢复</string>
     <string name="probe_state_dead">无应答 · 请检查 LSPosed 作用域或重启手机</string>
 
-    <string name="effect_preview">效果预览</string>
+    <string name="fan_layout_section">交互与布局</string>
     <string name="portrait_preview">竖屏</string>
     <string name="portrait_preview_summary">侧边扇形菜单与快捷应用栏</string>
     <string name="landscape_preview">横屏</string>
@@ -53,7 +53,6 @@
     <string name="theme_dark">深色</string>
     <string name="system_colors">系统配色</string>
     <string name="system_colors_summary">使用 HyperOS 系统动态颜色</string>
-    <string name="interaction_section">交互</string>
     <string name="invoke_section">呼出设置</string>
     <string name="invoke_settings_summary">滑动距离 %1$d dp · 呼出停顿 %2$d ms</string>
     <string name="trigger_swipe_distance_title">滑动距离</string>
@@ -82,7 +81,6 @@
     <string name="fan_blur_source_summary_transparent">既不取背后内容、也不加板材质：只剩弧线与图标，完全透视到后面的画面</string>
     <string name="fan_blur_source_summary_off">不取背后内容：板完全由「板材质浓度」决定，浓度 0 时板为透明（只剩弧线与图标）</string>
     <string name="fan_frosted_summary">仅扇形与快捷栏区域做系统级背景磨砂（AOSP 背景模糊通道，按板轮廓裁剪）；系统关闭模糊效果或材质引擎不可用时自动降级为纯色板；改动下次呼出生效</string>
-    <string name="defaults_section">重置</string>
     <string name="restore_defaults">恢复默认值</string>
     <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，下次呼出生效</string>
     <string name="restore_defaults_confirm">将全部布局与交互参数恢复为默认值，应用选择与快捷方式不受影响。</string>

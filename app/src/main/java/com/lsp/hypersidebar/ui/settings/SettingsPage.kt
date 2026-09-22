@@ -5,13 +5,9 @@ import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
-import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -37,15 +33,11 @@ import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.ShortcutStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.utils.overScrollVertical
-import top.yukonga.miuix.kmp.window.WindowDialog
 import kotlin.math.roundToInt
 
 @Composable
@@ -134,9 +126,6 @@ internal fun SettingsPage(
     var sheetOrientation by remember { mutableStateOf<LayoutOrientation?>(null) }
     var sheetVisible by remember { mutableStateOf(false) }
 
-    // 一键重置确认 sheet（反馈轮：先确认后执行）
-    var showResetConfirm by remember { mutableStateOf(false) }
-
     fun openLayoutSheet(orientation: LayoutOrientation) {
         effectiveRepo.discardDraft() // 兜底清残留（上次关闭未走 onDismissFinished 的极端路径）
         sheetOrientation = orientation
@@ -174,13 +163,46 @@ internal fun SettingsPage(
             }
         }
 
-        item { SmallTitle(text = stringResource(R.string.effect_preview)) }
+        item { SmallTitle(text = stringResource(R.string.fan_layout_section)) }
         item {
             // 三形态（竖/横/底角）一张卡：miuix TabRow 切换 + 铺满预览，点击进对应布局 sheet
             FanPreviewTabsCard(
                 repo = effectiveRepo,
                 onEditLayout = { orientation -> openLayoutSheet(orientation) }
             )
+        }
+        // 呼出/背景两组设置各为二级页面（InvokeSettings/FanBackground），本页只放入口行，
+        // summary 汇总当前值——revision 通道驱动重组，子页改动返回即刷新
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column {
+                    val swipeDp = remember(effectivePrefs, effectiveRepo.revision) {
+                        effectiveRepo.triggerMinDistanceDp().roundToInt()
+                    }
+                    val dwellMs = remember(effectivePrefs, effectiveRepo.revision) {
+                        effectiveRepo.triggerDwellMs()
+                    }
+                    ArrowPreference(
+                        title = stringResource(R.string.invoke_section),
+                        summary = stringResource(R.string.invoke_settings_summary, swipeDp, dwellMs),
+                        onClick = onNavigateToInvokeSettings
+                    )
+                    val fogPct = remember(effectivePrefs, effectiveRepo.revision) {
+                        (effectiveRepo.fanFogIntensity() * 100).roundToInt()
+                    }
+                    val dimOn = remember(effectivePrefs, effectiveRepo.revision) {
+                        effectiveRepo.fanDimEnabled()
+                    }
+                    ArrowPreference(
+                        title = stringResource(R.string.fan_background_section),
+                        summary = stringResource(
+                            R.string.fan_background_summary, fogPct,
+                            stringResource(if (dimOn) R.string.state_on else R.string.state_off)
+                        ),
+                        onClick = onNavigateToFanBackground
+                    )
+                }
+            }
         }
 
         item { SmallTitle(text = stringResource(R.string.apps_section)) }
@@ -228,53 +250,6 @@ internal fun SettingsPage(
             }
         }
 
-        // 交互区（0913 拍板二次修正）：两组设置各为二级页面（InvokeSettings/FanBackground），
-        // 本页只放入口行，summary 汇总当前值——revision 通道驱动重组，子页改动返回即刷新
-        item { SmallTitle(text = stringResource(R.string.interaction_section)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    val swipeDp = remember(effectivePrefs, effectiveRepo.revision) {
-                        effectiveRepo.triggerMinDistanceDp().roundToInt()
-                    }
-                    val dwellMs = remember(effectivePrefs, effectiveRepo.revision) {
-                        effectiveRepo.triggerDwellMs()
-                    }
-                    ArrowPreference(
-                        title = stringResource(R.string.invoke_section),
-                        summary = stringResource(R.string.invoke_settings_summary, swipeDp, dwellMs),
-                        onClick = onNavigateToInvokeSettings
-                    )
-                    val fogPct = remember(effectivePrefs, effectiveRepo.revision) {
-                        (effectiveRepo.fanFogIntensity() * 100).roundToInt()
-                    }
-                    val dimOn = remember(effectivePrefs, effectiveRepo.revision) {
-                        effectiveRepo.fanDimEnabled()
-                    }
-                    ArrowPreference(
-                        title = stringResource(R.string.fan_background_section),
-                        summary = stringResource(
-                            R.string.fan_background_summary, fogPct,
-                            stringResource(if (dimOn) R.string.state_on else R.string.state_off)
-                        ),
-                        onClick = onNavigateToFanBackground
-                    )
-                }
-            }
-        }
-
-        // 一键重置（§2.5.3，PRD"默认值且可重置"）：全部布局/交互参数，不动应用与快捷方式；
-        // 先确认后执行（反馈轮拍板），确认 sheet 与布局 sheet 同款图标按钮
-        item { SmallTitle(text = stringResource(R.string.defaults_section)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                BasicComponent(
-                    title = stringResource(R.string.restore_defaults),
-                    summary = stringResource(R.string.restore_defaults_summary),
-                    onClick = { showResetConfirm = true }
-                )
-            }
-        }
     }
 
     // 布局编辑 sheet 常驻组合（show 控制显隐）；
@@ -288,53 +263,6 @@ internal fun SettingsPage(
             // 保存路径 commit 已清空草稿，此处为无操作；取消/滑掉/返回=丢弃
             effectiveRepo.discardDraft()
             sheetOrientation = null
-        }
-    )
-
-    // 一键重置确认 dialog（反馈轮二：弃 sheet 用 dialog）
-    ResetConfirmDialog(
-        show = showResetConfirm,
-        onConfirm = {
-            effectiveRepo.restoreAllDefaults()
-            showResetConfirm = false
-            Toast.makeText(
-                context,
-                context.getString(R.string.restore_defaults_done),
-                Toast.LENGTH_SHORT
-            ).show()
-        },
-        onDismiss = { showResetConfirm = false }
-    )
-}
-
-@Composable
-private fun ResetConfirmDialog(
-    show: Boolean,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    // miuix WindowDialog（窗口级）：自带居中 title/summary 与 insideMargin；
-    // 按钮行照官方 DialogSection 模式——两等宽 TextButton 两端分布，确认染主色
-    WindowDialog(
-        show = show,
-        title = stringResource(R.string.restore_defaults),
-        summary = stringResource(R.string.restore_defaults_confirm),
-        onDismissRequest = onDismiss,
-        content = {
-            Row(horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(
-                    text = stringResource(R.string.layout_sheet_cancel),
-                    onClick = onDismiss,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(modifier = Modifier.width(20.dp))
-                TextButton(
-                    text = stringResource(R.string.reset_confirm),
-                    onClick = onConfirm,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.textButtonColorsPrimary()
-                )
-            }
         }
     )
 }

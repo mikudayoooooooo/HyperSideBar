@@ -9,13 +9,18 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -25,10 +30,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
@@ -256,6 +266,17 @@ private fun MessageState(message: String) {
     }
 }
 
+/** 列表单元格：分组标题与数据行平级成项——标题原先嵌在数据项内部，会被被拖行带着一起走。 */
+private sealed interface AppCell {
+    val key: String
+}
+
+private data class HeaderCell(val text: String, override val key: String) : AppCell
+
+private data class RowCell(val app: AppItem) : AppCell {
+    override val key get() = app.packageName
+}
+
 @Composable
 private fun AppList(
     apps: List<AppItem>,
@@ -277,14 +298,28 @@ private fun AppList(
         apps.drop(selectedCount).indexOfFirst { it.isSystem }
             .let { if (it >= 0) it + selectedCount else -1 }
     }
-    val listState = rememberLazyListState()
-    val dragState = rememberDragReorderState(
-        listState = listState,
-        onMoveByKey = { fromKey, toKey ->
-            if (fromKey is String && toKey is String) onReorder(fromKey, toKey)
-        },
-        onDragFinished = onReorderFinished
+    val cells = buildAppCells(
+        apps = apps,
+        showGroups = showGroups,
+        selectedCount = selectedCount,
+        firstSystemUnselected = firstSystemUnselected,
+        selectedGroupTitle = stringResource(R.string.selected_apps_group, selectedCount),
+        userAppsTitle = stringResource(R.string.user_apps),
+        systemAppsTitle = stringResource(R.string.system_apps)
     )
+    val listState = rememberLazyListState()
+    val reorderState = rememberReorderableLazyListState(
+        lazyListState = listState,
+        scrollThresholdPadding = WindowInsets.systemBars.asPaddingValues(),
+        // 库默认触发带太窄（贴屏边才滚），放宽到 120dp——手柄拖拽时手指够不到屏幕边缘
+        scrollThreshold = 120.dp
+    ) { from, to ->
+        val fromPkg = from.key as? String
+        val toPkg = to.key as? String
+        // 换位只在已选行之间发生：标题格与未选行（顺序由分组规则决定）不作目标
+        if (fromPkg != null && toPkg != null && toPkg in selectedApps) onReorder(fromPkg, toPkg)
+    }
+    val haptics = LocalHapticFeedback.current
     LazyColumn(
         state = listState,
         modifier = Modifier
@@ -292,31 +327,72 @@ private fun AppList(
             .overScrollVertical()
             .scrollEndHaptic()
     ) {
-        items(apps.size, key = { apps[it].packageName }) { index ->
-            val app = apps[index]
-            if (showGroups) {
-                when {
-                    index == 0 && selectedCount > 0 ->
-                        SmallTitle(text = stringResource(R.string.selected_apps_group, selectedCount))
-                    index == selectedCount ->
-                        SmallTitle(
-                            text = stringResource(
-                                if (app.isSystem) R.string.system_apps else R.string.user_apps
+        items(cells, key = { it.key }) { cell ->
+            when (cell) {
+                is HeaderCell -> SmallTitle(text = cell.text)
+                is RowCell -> {
+                    val pkg = cell.app.packageName
+                    val checked = pkg in selectedApps
+                    if (!checked) {
+                        AppSelectionRow(app = cell.app, isChecked = false, onToggle = { onToggle(pkg) })
+                    } else {
+                        ReorderableItem(
+                            state = reorderState,
+                            key = cell.key,
+                            animateItemModifier = Modifier.animateItem()
+                        ) { isDragging ->
+                            // 拖动中的抬升感：行无卡底，阴影不可见，用微放大表达"浮起"
+                            val scale by animateFloatAsState(
+                                if (isDragging) 1.03f else 1f, label = "appDragScale"
                             )
-                        )
-                    index == firstSystemUnselected ->
-                        SmallTitle(text = stringResource(R.string.system_apps))
+                            AppSelectionRow(
+                                app = cell.app,
+                                isChecked = true,
+                                onToggle = { onToggle(pkg) },
+                                handleModifier = Modifier.longPressDraggableHandle(
+                                    onDragStarted = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    },
+                                    onDragStopped = onReorderFinished
+                                ),
+                                modifier = Modifier.graphicsLayer {
+                                    scaleX = scale
+                                    scaleY = scale
+                                }
+                            )
+                        }
+                    }
                 }
             }
-            AppSelectionRow(
-                app = app,
-                isChecked = app.packageName in selectedApps,
-                onToggle = { onToggle(app.packageName) },
-                dragState = dragState,
-                modifier = Modifier.animateItem()
-            )
         }
     }
+}
+
+private fun buildAppCells(
+    apps: List<AppItem>,
+    showGroups: Boolean,
+    selectedCount: Int,
+    firstSystemUnselected: Int,
+    selectedGroupTitle: String,
+    userAppsTitle: String,
+    systemAppsTitle: String
+): List<AppCell> {
+    val cells = ArrayList<AppCell>(apps.size + 2)
+    apps.forEachIndexed { index, app ->
+        if (showGroups) {
+            // 与旧内联版同规则：when 级联，一个索引位最多一个小标题
+            val header = when {
+                index == 0 && selectedCount > 0 -> selectedGroupTitle to "header_selected"
+                index == selectedCount ->
+                    (if (app.isSystem) systemAppsTitle else userAppsTitle) to "header_unselected"
+                index == firstSystemUnselected -> systemAppsTitle to "header_system"
+                else -> null
+            }
+            if (header != null) cells += HeaderCell(header.first, header.second)
+        }
+        cells += RowCell(app)
+    }
+    return cells
 }
 
 @Composable
@@ -324,8 +400,8 @@ private fun AppSelectionRow(
     app: AppItem,
     isChecked: Boolean,
     onToggle: () -> Unit,
-    dragState: DragReorderState,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    handleModifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val appInfo = remember(app.packageName, app.label) {
@@ -351,21 +427,26 @@ private fun AppSelectionRow(
                 state = if (isChecked) ToggleableState.On else ToggleableState.Off,
                 onClick = onToggle
             )
-            // 拖动排序手柄：仅已选项可拖（未选项顺序由分组规则决定）
+            // 拖动排序手柄：40dp 触摸热区（图标视觉 24dp），长按起拖，仅已选项可挂
             if (isChecked) {
-                Icon(
-                    imageVector = MiuixIcons.Sort,
-                    contentDescription = stringResource(R.string.shortcut_drag_handle),
-                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                Box(
                     modifier = Modifier
                         .padding(start = 8.dp)
-                        .size(24.dp)
-                        .dragReorderHandle(dragState, app.packageName)
-                )
+                        .size(40.dp)
+                        .then(handleModifier),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.Sort,
+                        contentDescription = stringResource(R.string.shortcut_drag_handle),
+                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
         },
         onClick = onToggle,
-        modifier = modifier.dragReorderItem(dragState, app.packageName)
+        modifier = modifier
     )
 }
 

@@ -31,7 +31,7 @@
     <string name="portrait_preview_summary">侧边扇形菜单与快捷应用栏</string>
     <string name="landscape_preview">横屏</string>
     <string name="landscape_preview_summary">横屏使用更紧凑的展开角度</string>
-    <string name="corner_preview">底角侧滑</string>
+    <string name="corner_preview">底角斜滑</string>
 
     <string name="apps_section">应用</string>
     <string name="select_apps">扇形应用</string>
@@ -88,7 +88,7 @@
     <string name="reset_confirm">确认</string>
     <string name="portrait_layout">竖屏布局</string>
     <string name="landscape_layout">横屏布局</string>
-    <string name="corner_layout">底角侧滑</string>
+    <string name="corner_layout">底角斜滑</string>
     <string name="layout_sheet_cancel">取消</string>
     <string name="layout_sheet_save">保存</string>
     <string name="layout_sheet_restore_default">恢复默认</string>

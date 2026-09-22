@@ -109,7 +109,7 @@ private fun rememberRuntimeQuickCount(prefs: SharedPreferences): Int {
 }
 
 /**
- * 效果预览分区唯一卡片：miuix TabRow（竖屏/横屏/底角侧滑）+ 一块铺满的抽象扇形预览。
+ * 交互与布局分区唯一卡片：miuix TabRow（竖屏/横屏/底角斜滑）+ 一块铺满的抽象扇形预览。
  * 取代旧"双格卡+整宽单格卡"两张卡（三形态两张卡不对称）。点击预览进当前 tab 方向的布局 sheet；
  * 草稿优先读（revision 通道）→ sheet 内拖滑条时本卡实时跟随。
  */

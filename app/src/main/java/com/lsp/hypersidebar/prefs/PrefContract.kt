@@ -229,17 +229,18 @@ object PrefsFiles {
 
 /** 布局与交互参数默认值（竖屏/横屏独立），与 PRD 参数表对齐。 */
 object LayoutDefaults {
-    const val ICON_SIZE = 48f
+    // 0922 用户定档：三形态图标统一 32dp。只影响新装与关于页「恢复默认值」，已落盘配置不动
+    const val ICON_SIZE = 32f
     const val INNER_RADIUS = 110f       // 实测轮六：150→110（双圈过大）
-    const val OUTER_RADIUS_MAX = 150f   // 实测轮六：200→150
-    const val MAX_APPS_OUTER = 7
-    const val MAX_APPS_INNER = 4
+    const val OUTER_RADIUS_MAX = 160f   // 0922：150→160（32dp 图标下外圈容得下 9 个）
+    const val MAX_APPS_OUTER = 9
+    const val MAX_APPS_INNER = 6
 
-    const val LANDSCAPE_ICON_SIZE = 48f
-    const val LANDSCAPE_MAX_APPS_OUTER = 5
-    const val LANDSCAPE_MAX_APPS_INNER = 3
-    const val LANDSCAPE_INNER_RADIUS = 110f   // 实测轮六：150→110
-    const val LANDSCAPE_OUTER_RADIUS = 150f   // 实测轮六：200→150
+    const val LANDSCAPE_ICON_SIZE = 32f
+    const val LANDSCAPE_MAX_APPS_OUTER = 6
+    const val LANDSCAPE_MAX_APPS_INNER = 5
+    const val LANDSCAPE_INNER_RADIUS = 130f   // 0922：110→130
+    const val LANDSCAPE_OUTER_RADIUS = 180f   // 0922：150→180
 
     const val QUICK_ICON_SIZE = 36f
 
@@ -249,13 +250,14 @@ object LayoutDefaults {
     /** 底角斜滑触发默认开关（N1）：默认关，用户显式开启后才接管底角手势。 */
     const val CORNER_SWIPE_ENABLED = false
 
-    /** 底角斜滑扇形样式默认值：图标/数量沿用竖屏，半径独立放大（仿 Flyme 大半径四分之一弧，
-     *  双环 11 图标不再挤在 150dp 小弧上）。可在底角布局 sheet 独立微调。 */
+    /** 底角斜滑扇形样式默认值：图标沿用竖屏（32dp），半径与数量独立定档（仿 Flyme 大半径
+     *  四分之一弧，双环 13 图标不挤在小弧上）。0922 起数量不再跟竖屏联动。
+     *  可在底角布局 sheet 独立微调。 */
     const val CORNER_ICON_SIZE = ICON_SIZE
-    const val CORNER_INNER_RADIUS = 270f
-    const val CORNER_OUTER_RADIUS = 380f
-    const val CORNER_MAX_APPS_OUTER = MAX_APPS_OUTER
-    const val CORNER_MAX_APPS_INNER = MAX_APPS_INNER
+    const val CORNER_INNER_RADIUS = 216f   // 0922：270→216（恰为外圈 80% 上限）
+    const val CORNER_OUTER_RADIUS = 270f   // 0922：380→270
+    const val CORNER_MAX_APPS_OUTER = 8
+    const val CORNER_MAX_APPS_INNER = 5
 
     // ===== 滑条量程契约（0913 用户拍板：量程/步进与默认值同源定义，UI 禁止内联数字）=====
     /** 滑动距离滑条（dp）：min / max / 步进。默认值=上方 TRIGGER_MIN_DISTANCE_DP，须落在格点上 */

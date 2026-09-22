@@ -78,6 +78,14 @@ internal object FanVisuals {
     /** 入场扫开小于此值不画描边（省掉首帧空画）。 */
     const val SWEEP_VISIBLE_EPSILON = 0.01f
 
+    /**
+     * 弧带渐进模糊的衰减曲线（miuix `ProgressiveBlur.curve`）。
+     * shader 实证：`radius = maxRadius × (1 − smoothstep(raw)^curve)`
+     * —— `raw=0` 端（startFraction 侧）最糊、`raw=1` 端（endFraction 侧）降为 0；
+     * 1.0 = 平滑过渡；>1 让"清晰区"更靠外、过渡更集中在弧缘。
+     */
+    const val PROGRESSIVE_BLUR_CURVE = 1.0f
+
     // ===== 入场动画：图标从锚点沿半径飞出 =====
 
     /** 起飞起点缩放与飞行区间（终态 1.0）。 */

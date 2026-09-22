@@ -35,9 +35,12 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import top.yukonga.miuix.kmp.blur.BlendColorEntry
 import top.yukonga.miuix.kmp.blur.BlurBlendMode
 import top.yukonga.miuix.kmp.blur.BlurColors
+import top.yukonga.miuix.kmp.blur.ProgressiveBlur
 import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.progressiveTextureBlur
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
+import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
@@ -104,7 +107,10 @@ internal fun FanBoard(
     colors: FanThemeColors,
     fogIntensity: Float,
     wallpaper: ImageBitmap?,
+    /** 窗口原点（屏幕坐标）：把采样壁纸还原到窗口本地系时用——见 [FanBackdropSource.WALLPAPER] 的绘制。 */
     wallpaperOffset: IntOffset,
+    /** 屏幕像素尺寸（= 采样壁纸应铺满的范围）。Zero 时退回按窗口尺寸拉伸（旧行为）。 */
+    wallpaperDisplay: IntSize,
     sweep: () -> Float,
     modifier: Modifier = Modifier
 ) {
@@ -140,6 +146,21 @@ internal fun FanBoard(
             // 混色同时承担两个职责：有背后内容时是玻璃罩着色，无来源时就是板的底色本身。
             // 浓度下限非零 → 图层恒非空（空图层的 miuix 混色路径未经验证，不留隐患）。
             // 只进图层、不上屏：宿主是空 Box，drawContent() 无输出
+            //
+            // 注：这里**不做径向雾化渐变**。0921 曾按 0906 口径落地过"弧缘 100% → 锚点 35%"
+            // 的径向混色（中心=锚点、半径=弧带外缘），真机复验**肉眼不可辨**（弧带已被等半径
+            // 高斯压过，混色浓度差被抹平）⇒ 已撤回，勿再重复尝试；要纵深就走模糊那条路
+            // （弧带 progressiveTextureBlur，见 ②-a），那是**可见**的。
+            // 壁纸对位（0921）：采样位图 = 屏幕的**等比居中等比裁剪**（WallpaperSampler 按
+            // displayMetrics 裁剪后降到半分辨率），所以把它按「屏幕尺寸」还原、再用窗口原点
+            // 平移到窗口本地系，磨砂里的"背后"就与桌面真实壁纸像素对得上。
+            // 旧实现 dstSize = windowSize 是"拉伸铺满窗口"——窗口比屏幕矮（insets）时取景被压扁，
+            // 与桌面只是形似（真机对比可见接不上）。
+            val wallpaperDst = if (wallpaperDisplay.width > 0 && wallpaperDisplay.height > 0) {
+                wallpaperDisplay
+            } else {
+                geometry.windowSize
+            }
             val backdrop = rememberLayerBackdrop {
                 if (source == FanBackdropSource.WALLPAPER && wallpaper != null) {
                     drawImage(
@@ -147,7 +168,7 @@ internal fun FanBoard(
                         srcOffset = IntOffset.Zero,
                         srcSize = IntSize(wallpaper.width, wallpaper.height),
                         dstOffset = IntOffset(-wallpaperOffset.x, -wallpaperOffset.y),
-                        dstSize = geometry.windowSize,
+                        dstSize = wallpaperDst,
                         filterQuality = FilterQuality.Medium
                     )
                 }
@@ -177,8 +198,12 @@ internal fun FanBoard(
                 contrast = 1f,
                 saturation = LayoutDefaults.FAN_BOARD_SATURATION
             )
-            // ②-a 弧带：环扇形只能用 Generic path 表达、且坐标铺满整窗，故节点仍 fillMaxSize
+            // ②-a 弧带：环扇形只能用 Generic path 表达、且坐标铺满整窗，故节点仍 fillMaxSize。
+            // 模糊半径沿"从锚点指向弧带弧中点"的方向**渐进衰减**（miuix 0.9.4 ProgressiveBlur）：
+            // 弧缘最糊、往锚点方向渐清 —— 与上面混色罩的径向渐变同向，纵深一致；
+            // 胶囊仍是等半径（小面积上做渐进没有意义），两者共享同一 backdrop/混色/噪点/最大半径。
             val bandOutline = remember(geometry, density) { bandShape(geometry, density) }
+            val progressiveGradient = remember(geometry, density) { fanBandProgressiveBlur(geometry, density) }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -187,10 +212,11 @@ internal fun FanBoard(
                     // 真机上未必作用到「节点自己 draw 出来的模糊」上。没有这层兜底，模糊缓冲会按
                     // 节点包围盒出图 —— 一圈直角边（0921 用户真机：矩形与胶囊框线完全重合）
                     .clip(bandOutline)
-                    .textureBlur(
+                    .progressiveTextureBlur(
                         backdrop = backdrop,
                         shape = bandOutline,
                         blurRadius = blurRadiusDp,
+                        gradient = progressiveGradient,
                         noiseCoefficient = noise,
                         colors = blurColors
                     )
@@ -292,6 +318,56 @@ private fun bandShape(geometry: FanGeometry, density: Float) = object : Shape {
         layoutDirection: LayoutDirection,
         density: Density
     ): Outline = Outline.Generic(bandPath(geometry, density.density, 1f))
+}
+
+/**
+ * 弧带的渐进模糊配置（miuix 0.9.4 `ProgressiveBlur`）。语义由 0.9.4 的 shader 字节码实证：
+ *
+ * ```
+ * p    = dot(xy, in_gradAxis)                       // 像素沿轴的投影
+ * raw  = clamp((p - start) / (end - start), 0, 1)
+ * intensity = 1 - smoothstep(raw)^curve             // ⇒ raw=0 端最糊、raw=1 端降为 0
+ * radius    = maxRadius * intensity
+ * ```
+ *
+ * 角度约定（同源实证：`Left=0° / Top=90° / Right=180° / Bottom=270°`）＝轴向量 `(-cos θ, -sin θ)`，
+ * 即 0° 指屏幕左、90° 指上。于是：
+ *  - **轴** = 从锚点指向弧带弧中点（`(-cos, -sin)` 反解 ⇒ θ = atan2(-dy, -dx)）；
+ *  - **两端** = 弧带外缘投影放 `startFraction`（最糊）、内缘投影放 `endFraction`（降到清晰），
+ *    与"弧缘 100% → 锚点 35%"的雾化口径同向；
+ *  - `start/end` 是**投影范围的归一化位置**（0..1，相对本节点即整窗在该轴上的跨度），
+ *    允许 start > end（shader 只用 (p-start)/(end-start)，单调性不受影响）。
+ *
+ * 只要 start 落在沿轴更远的一侧，方向就是"越往外越糊"——即便库内部的 fraction→px 换算与
+ * 本函数的估法有偏差，也只是渐变被平移/压缩，不会把效果反过来。
+ */
+internal fun fanBandProgressiveBlur(geometry: FanGeometry, density: Float): ProgressiveBlur {
+    val midRad = Math.toRadians((geometry.startAngle + geometry.spanAngle / 2f).toDouble())
+    val dirX = cos(midRad).toFloat()
+    val dirY = sin(midRad).toFloat()
+    val angleDeg = Math.toDegrees(atan2(-dirY.toDouble(), -dirX.toDouble())).toFloat()
+
+    // 投影跨度：节点 = fillMaxSize（整窗），dot 线性 ⇒ 极值必在四角
+    val w = geometry.windowSize.width.toFloat()
+    val h = geometry.windowSize.height.toFloat()
+    val c0 = 0f
+    val c1 = w * dirX
+    val c2 = h * dirY
+    val c3 = w * dirX + h * dirY
+    val pMin = minOf(c0, c1, c2, c3)
+    val pMax = maxOf(c0, c1, c2, c3)
+    val span = (pMax - pMin).takeIf { it > 1f } ?: 1f
+
+    val anchorProj = geometry.anchor.x * dirX + geometry.anchor.y * dirY
+    val (innerR, outerR) = fanBandRadii(geometry, density)
+    val startFraction = ((anchorProj + outerR - pMin) / span).coerceIn(0f, 1f)
+    val endFraction = ((anchorProj + innerR - pMin) / span).coerceIn(0f, 1f)
+    return ProgressiveBlur(
+        angle = angleDeg,
+        startFraction = startFraction,
+        endFraction = endFraction,
+        curve = FanVisuals.PROGRESSIVE_BLUR_CURVE
+    )
 }
 
 /** 快捷栏最多并排展示的图标数（与 [QuickAppsBar] 的 `take(6)` 同源）。 */

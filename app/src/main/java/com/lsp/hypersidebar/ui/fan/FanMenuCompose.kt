@@ -89,6 +89,8 @@ internal fun FanMenuCompose(
     source: FanBackdropSource,
     wallpaper: android.graphics.Bitmap?,
     wallpaperOffset: IntOffset,
+    /** 屏幕像素尺寸：采样壁纸按窗口原点 + 屏幕尺寸还原到窗口本地系（与桌面真实壁纸对齐）。 */
+    wallpaperDisplay: IntSize,
     exitTick: Int,
     onExitFinished: () -> Unit,
     onAppSelected: (FanAppInfo) -> Unit,
@@ -185,6 +187,7 @@ internal fun FanMenuCompose(
                 fogIntensity = fogIntensity,
                 wallpaper = wallpaperImage,
                 wallpaperOffset = wallpaperOffset,
+                wallpaperDisplay = wallpaperDisplay,
                 sweep = { arcSweep.value }
             )
 

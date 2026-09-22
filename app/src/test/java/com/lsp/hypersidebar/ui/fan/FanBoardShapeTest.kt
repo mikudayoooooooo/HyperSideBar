@@ -87,6 +87,31 @@ class FanBoardShapeTest {
         assertEquals(null, quickCapsuleMetrics(geometry(0), density))
     }
 
+    @Test
+    fun `progressive blur axis and falloff follow the band outward direction`() {
+        // 三种呼出档都不该把渐隐轴搞反。miuix 角度约定（0.9.4 字节码实证：Left=0°/Top=90°/
+        // Right=180°/Bottom=270°）＝轴向量 (-cos θ, -sin θ)，故反解出的轴必须与"从锚点指向
+        // 弧带弧中点"同向；且弧缘（沿轴更远的一侧）要落在 startFraction = 模糊最强端。
+        val cases = listOf(
+            geom(Offset(0f, 1200f), corner = false),      // 边沿档：左边缘锚点
+            geom(Offset(10f, 2390f), corner = true),      // 底角档：左下角锚点
+            geom(Offset(1070f, 2390f), corner = true)     // 底角档：右下角锚点
+        )
+        cases.forEach { g ->
+            val p = fanBandProgressiveBlur(g, density)
+            val midRad = Math.toRadians((g.startAngle + g.spanAngle / 2f).toDouble())
+            val axisX = -Math.cos(Math.toRadians(p.angle.toDouble()))
+            val axisY = -Math.sin(Math.toRadians(p.angle.toDouble()))
+            val dot = axisX * Math.cos(midRad) + axisY * Math.sin(midRad)
+            assertEquals("渐隐轴必须指向弧带外侧（dot=$dot, angle=${p.angle}）", 1.0, dot, 0.01)
+            assertTrue(
+                "弧缘应比内缘靠外（start=${p.startFraction}, end=${p.endFraction}）",
+                p.startFraction > p.endFraction
+            )
+            assertTrue(p.startFraction in 0f..1f && p.endFraction in 0f..1f)
+        }
+    }
+
     private fun geom(anchor: Offset, corner: Boolean) = computeFanGeometry(
         anchor = anchor,
         screenSize = IntSize(1080, 2400),

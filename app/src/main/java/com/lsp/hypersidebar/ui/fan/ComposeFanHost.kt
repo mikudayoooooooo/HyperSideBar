@@ -90,9 +90,17 @@ class ComposeFanHost(
     /** 本次呼出的壁纸位图（仅「采样壁纸」来源非空：竖屏 launcher 且缓存就绪） */
     private var wallpaperBitmap: android.graphics.Bitmap? = null
 
-    /** 壁纸在全屏壁纸位图中的窗口原点偏移（当前恒 0：窗口全屏，无盒窗口平移） */
+    /**
+     * 壁纸对位（0921）：窗口原点在**屏幕坐标**中的位置。采样壁纸是屏幕的等比居中等比裁剪，
+     * 只有按屏幕还原再平移这个原点，磨砂里的"背后"才与桌面真实壁纸像素对得上。
+     * 逐呼出在 [computeAndPublishGeometry] 里从 getLocationOnScreen 实测（窗口比屏幕矮时非 0）。
+     */
     private var wallpaperOffset: androidx.compose.ui.unit.IntOffset =
         androidx.compose.ui.unit.IntOffset.Zero
+
+    /** 屏幕像素尺寸（壁纸应铺满的范围）；show() 里从 displayMetrics 读，供壁纸对位换算。 */
+    private var wallpaperDisplay: androidx.compose.ui.unit.IntSize =
+        androidx.compose.ui.unit.IntSize.Zero
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
@@ -185,6 +193,10 @@ class ComposeFanHost(
             ?: (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
                 .also { windowManager = it }
         density = context.resources.displayMetrics.density
+        wallpaperDisplay = androidx.compose.ui.unit.IntSize(
+            context.resources.displayMetrics.widthPixels,
+            context.resources.displayMetrics.heightPixels
+        )
         config = buildFanConfig()
         // 诊断（迭代二 P5）：呼出时回显实际读到的配置值——对照滑条改动可判定
         // hook 侧 prefs 是否实时同步（stale=快照不更新）
@@ -236,7 +248,8 @@ class ComposeFanHost(
                 crossWindowBlurEnabled = crossBlur,
                 wallpaperReady = wallpaperBitmap != null
             )
-            wallpaperOffset = androidx.compose.ui.unit.IntOffset.Zero
+            // 壁纸对位的窗口原点不在这里清零：由 computeAndPublishGeometry 在挂窗后实测覆盖
+            //（首帧绘制前，晚于本处；见该函数注释）
             val params = buildWindowParams()
             if (blurSource == FanBackdropSource.BEHIND_SCREEN) {
                 params.flags = params.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
@@ -304,6 +317,9 @@ class ComposeFanHost(
         val wrapper = wrapperView ?: return
         val loc = IntArray(2)
         runCatching { wrapper.getLocationOnScreen(loc) }
+        // 壁纸对位：把实测窗口原点交给渲染层（采样壁纸按屏幕还原后再平移这个原点）。
+        // 必须写在 geometryState 赋值之前——这个字段不是 state，靠这次 geometry 变更驱动重组时被读到
+        wallpaperOffset = androidx.compose.ui.unit.IntOffset(loc[0], loc[1])
         // 窗口恒为全屏 overlay：边距自适应直接用窗口本地系（锚点减去窗口实际原点）
         val g = computeFanGeometry(
             Offset(input.anchorX - loc[0], input.anchorY - loc[1]),
@@ -353,6 +369,7 @@ class ComposeFanHost(
                             source = blurSource,
                             wallpaper = if (blurSource == FanBackdropSource.WALLPAPER) wallpaperBitmap else null,
                             wallpaperOffset = wallpaperOffset,
+                            wallpaperDisplay = wallpaperDisplay,
                             exitTick = exitTickState.value,
                             onExitFinished = { finishExitFromCompose() },
                             onAppSelected = { app -> onAppSelected?.invoke(app) },

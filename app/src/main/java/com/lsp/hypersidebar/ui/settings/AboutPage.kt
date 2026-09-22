@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.BuildConfig
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.prefs.savePref
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.SelfCheck
@@ -87,6 +89,11 @@ internal fun AboutPage(
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
         }.getOrNull() ?: context.getString(R.string.unknown)
     }
+    // 一键重置（0922 从首页「重置」分区迁入）：首页不再常驻 SettingsRepository，本页按需
+    // 自建自弃；仍以 effectivePrefs 构造，保证写进 hook 可见的那一份
+    val repo = remember(effectivePrefs) { SettingsRepository(effectivePrefs) }
+    DisposableEffect(repo) { onDispose { repo.dispose() } }
+    var showResetConfirm by remember { mutableStateOf(false) }
     val deviceModel = remember { Build.MODEL.ifEmpty { Build.DEVICE } }
     val systemVersion = remember { "Android ${Build.VERSION.RELEASE}（API ${Build.VERSION.SDK_INT}）" }
     val frameworkName by produceState(
@@ -301,6 +308,13 @@ internal fun AboutPage(
         item { SmallTitle(text = stringResource(R.string.debug_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
+                // 恢复默认值（0922 从首页迁入）：低频破坏性操作不再占首页一个分区；
+                // 只回写布局/手势/背景参数，应用选择与快捷方式不受影响（确认 dialog 里说清）
+                BasicComponent(
+                    title = stringResource(R.string.restore_defaults),
+                    summary = stringResource(R.string.restore_defaults_summary),
+                    onClick = { showResetConfirm = true }
+                )
                 // 诊断与统计（0909 拍板）：调试区只留一个父入口，点进去再选
                 // 运行日志/使用统计/导出自检报告——本页不再平铺诊断功能行
                 ArrowPreference(
@@ -468,6 +482,53 @@ internal fun AboutPage(
                     enabled = !hostRestartBusy && selectedRestarts.isNotEmpty(),
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.textButtonColors(color = MiuixTheme.colorScheme.error)
+                )
+            }
+        }
+    )
+
+    // 一键重置确认 dialog（0922 随功能行自首页迁入，样式未变）
+    ResetConfirmDialog(
+        show = showResetConfirm,
+        onConfirm = {
+            repo.restoreAllDefaults()
+            showResetConfirm = false
+            Toast.makeText(
+                context,
+                context.getString(R.string.restore_defaults_done),
+                Toast.LENGTH_SHORT
+            ).show()
+        },
+        onDismiss = { showResetConfirm = false }
+    )
+}
+
+/** miuix WindowDialog（窗口级）：自带居中 title/summary 与 insideMargin；
+ *  按钮行照官方 DialogSection 模式——两等宽 TextButton 两端分布，确认染主色 */
+@Composable
+private fun ResetConfirmDialog(
+    show: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    WindowDialog(
+        show = show,
+        title = stringResource(R.string.restore_defaults),
+        summary = stringResource(R.string.restore_defaults_confirm),
+        onDismissRequest = onDismiss,
+        content = {
+            Row(horizontalArrangement = Arrangement.SpaceBetween) {
+                TextButton(
+                    text = stringResource(R.string.layout_sheet_cancel),
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(20.dp))
+                TextButton(
+                    text = stringResource(R.string.reset_confirm),
+                    onClick = onConfirm,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.textButtonColorsPrimary()
                 )
             }
         }

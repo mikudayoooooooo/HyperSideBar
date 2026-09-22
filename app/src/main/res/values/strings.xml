@@ -276,5 +276,17 @@
     <string name="stats_avg_gap">平均两次呼出间隔</string>
     <string name="stats_all_apps_share">全部应用占比</string>
     <string name="stats_note">口径：成功率=有确定性结果的启动（不含 :ui 本地直启）；全部应用占比=打开全部应用次数/打开应用次数；样本窗=各进程最近 200 条时长。</string>
+
+    <!-- 误触率口径 v2（PRD §9.3 定稿 / §11.3 采集层 v2）：分通道出数，加权总值仅趋势 -->
+    <string name="stats_misclick_title">误触率（口径 v2 · 逐事件）</string>
+    <string name="stats_misclick_empty">暂无展开事件（宿主回传后点刷新）</string>
+    <string name="stats_misclick_value">R1 %1$s%% · R %2$s%%</string>
+    <string name="stats_misclick_detail">展开 %1$d · 有效 %2$d · L1 %3$d · L2 %4$d · L3 %5$d · 修正 %6$d · 链 %7$d · 划过 %8$d</string>
+    <string name="stats_misclick_alt">剔除修正档后 R %1$s%% · 浏览退出率 %2$s%%</string>
+    <string name="stats_misclick_weighted">加权总 R（仅趋势，不判合格）</string>
+    <string name="stats_channel_edge">竖屏边缘</string>
+    <string name="stats_channel_strip">横屏热区</string>
+    <string name="stats_channel_corner">底角斜滑</string>
+    <string name="stats_misclick_note">主判据=全程未进预选，时长仅分档（L1&lt;350ms、L2&lt;1s）；位移只作「原位/划过」标签，不进判定。阈值按通道各自判：R1&lt;2% 且 R&lt;5%。强制收起只有看门狗可识别，来电/切窗/冻结属已知盲区。样本=各进程最近 500 次展开。</string>
     <string name="logs_verbose_summary">逐手势明细（g#N/s#N），排查呼出灵敏度时开启；默认关（关闭时零开销），开启后下次手势生效</string>
 </resources>

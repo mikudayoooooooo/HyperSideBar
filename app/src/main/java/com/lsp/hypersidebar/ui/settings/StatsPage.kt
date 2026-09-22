@@ -25,7 +25,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lsp.hypersidebar.R
+import com.lsp.hypersidebar.util.ChannelRate
+import com.lsp.hypersidebar.util.FanChannel
 import com.lsp.hypersidebar.util.LogCollector
+import com.lsp.hypersidebar.util.MisclickCaliber
 import com.lsp.hypersidebar.util.StatsRecorder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -65,6 +68,10 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
         responseMs = intList(merged, "responseMs"),
         gapMs = longList(merged, "gapMs")
     )
+    // 误触口径 v2：宿主回传的逐事件流水经纯函数判定 + 分通道聚合（本进程无事件源）
+    val misfire = remember(merged) {
+        MisclickCaliber.rollup(MisclickCaliber.judge(StatsRecorder.eventsOf(merged)))
+    }
 
     Column(
         modifier
@@ -120,6 +127,31 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
             MetricRow(stringResource(R.string.stats_avg_gap), avgSecs(samples.gapMs), suffix = "s")
         }
 
+        SmallTitle(text = stringResource(R.string.stats_misclick_title))
+        Card(Modifier.fillMaxWidth()) {
+            if (misfire.isEmpty()) {
+                Text(
+                    stringResource(R.string.stats_misclick_empty),
+                    fontSize = 13.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                )
+            }
+            misfire.forEach { MisclickRow(it) }
+            if (misfire.isNotEmpty()) {
+                MetricRow(
+                    stringResource(R.string.stats_misclick_weighted),
+                    String.format(java.util.Locale.US, "%.1f%%", MisclickCaliber.weightedR(misfire))
+                )
+            }
+        }
+        Text(
+            stringResource(R.string.stats_misclick_note),
+            fontSize = 11.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
+        )
+
         SmallTitle(text = stringResource(R.string.stats_total))
         Card(Modifier.fillMaxWidth()) {
             MetricRow(stringResource(R.string.stats_invocations), total[StatsRecorder.MetricKeys.SHOWS])
@@ -160,6 +192,57 @@ private fun MetricRow(label: String, value: Any?, isRate: Boolean = false, suffi
             else -> "$value"
         }
         Text(text, fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
+    }
+}
+
+private fun pct(v: Double): String = String.format(java.util.Locale.US, "%.1f", v)
+
+/** 单通道误触行：主指标 R1/R 带阈值配色，明细与"剔除修正档"另口径分两小行 */
+@Composable
+private fun MisclickRow(rate: ChannelRate) {
+    val label = stringResource(
+        when (rate.channel) {
+            FanChannel.EDGE -> R.string.stats_channel_edge
+            FanChannel.STRIP -> R.string.stats_channel_strip
+            FanChannel.CORNER -> R.string.stats_channel_corner
+        }
+    )
+    val valueColor = when {
+        !rate.hasSample -> MiuixTheme.colorScheme.onSurfaceVariantSummary
+        rate.passR1 && rate.passR -> MiuixTheme.colorScheme.primary
+        else -> MiuixTheme.colorScheme.error
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Row(Modifier.fillMaxWidth()) {
+            Text(label, fontSize = 14.sp, color = MiuixTheme.colorScheme.onBackground)
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (rate.hasSample) stringResource(R.string.stats_misclick_value, pct(rate.r1), pct(rate.r))
+                else "--",
+                fontSize = 14.sp,
+                color = valueColor
+            )
+        }
+        Text(
+            stringResource(
+                R.string.stats_misclick_detail,
+                rate.expands, rate.validExpands, rate.l1, rate.l2, rate.l3,
+                rate.fixL1 + rate.fixL2, rate.chains, rate.sweeps
+            ),
+            fontSize = 11.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+        )
+        if (rate.hasSample) {
+            Text(
+                stringResource(R.string.stats_misclick_alt, pct(rate.rExclFix), pct(rate.browseExitRate)),
+                fontSize = 11.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+            )
+        }
     }
 }
 
@@ -212,26 +295,41 @@ private fun allAppsShare(opens: Int?, allApps: Int?): String? {
     return (a * 100 / o).toString()
 }
 
-/** 导出按天 CSV（下载目录，复用 SelfCheck 的 MediaStore 路径）：表头与行同源 MetricKeys，防漂移 */
+/** 导出按天 CSV（下载目录，复用 SelfCheck 的 MediaStore 路径）+ 逐事件流水明细 */
 private suspend fun exportStatsCsv(context: Context, merged: JSONObject): String =
     withContext(Dispatchers.IO) {
-        val keys = listOf(
-            StatsRecorder.MetricKeys.SHOWS,
-            StatsRecorder.MetricKeys.OPENS,
-            StatsRecorder.MetricKeys.ALL_APPS,
-            StatsRecorder.MetricKeys.SHORTCUTS,
-            StatsRecorder.MetricKeys.CANCELS,
-            StatsRecorder.MetricKeys.LAUNCH_OK,
-            StatsRecorder.MetricKeys.LAUNCH_FAIL
-        )
+        val days = merged.optJSONObject("days")
+        // 表头 = MetricKeys 打头 + 全部天里出现过的键并集（以后加计数器键不必再改这里）
+        val keys = LinkedHashSet<String>().apply {
+            addAll(
+                listOf(
+                    StatsRecorder.MetricKeys.SHOWS,
+                    StatsRecorder.MetricKeys.OPENS,
+                    StatsRecorder.MetricKeys.ALL_APPS,
+                    StatsRecorder.MetricKeys.SHORTCUTS,
+                    StatsRecorder.MetricKeys.CANCELS,
+                    StatsRecorder.MetricKeys.LAUNCH_OK,
+                    StatsRecorder.MetricKeys.LAUNCH_FAIL
+                )
+            )
+            days?.let { ds ->
+                ds.keys().forEach { d -> ds.getJSONObject(d).keys().forEach { add(it) } }
+            }
+        }
         val sb = StringBuilder("date," + keys.joinToString(",") + "\n")
-        merged.optJSONObject("days")?.let { ds ->
+        days?.let { ds ->
             ds.keys().asSequence().sorted().forEach { d ->
                 val c = ds.getJSONObject(d)
                 sb.append(d)
                 keys.forEach { k -> sb.append(',').append(c.optInt(k)) }
                 sb.append('\n')
             }
+        }
+        // 误触口径 v2 的原始事实：逐事件流水（统计页的分层与率值都由它算出）
+        val events = StatsRecorder.eventsOf(merged)
+        if (events.isNotEmpty()) {
+            sb.append("\n# events\n")
+            sb.append(StatsRecorder.eventCsvRows(events))
         }
         com.lsp.hypersidebar.util.SelfCheck.export(context, sb.toString())
     }

@@ -1,6 +1,8 @@
 package com.lsp.hypersidebar.ui.fan
 
 import android.content.Context
+import com.lsp.hypersidebar.util.DismissCause
+import com.lsp.hypersidebar.util.FanChannel
 import com.lsp.hypersidebar.util.Trace
 import android.content.SharedPreferences
 import android.util.Log
@@ -66,7 +68,8 @@ class FanMenuController(
         // 0.x"fan 常驻"症状的最后防线（唯一不依赖事件流的收起路径）
         watchdogFires++
         HLog.w(TAG, "idle watchdog: no touch for ${idleMs}ms, self-dismiss (fire #$watchdogFires)")
-        dismiss()
+        // 口径 v2 里"系统强制收起"只有这一条可识别路径（来电/切窗/冻结无事件源，统计页标注盲区）
+        dismiss(DismissCause.WATCHDOG)
     }
 
     private fun touchHeartbeat() {
@@ -126,10 +129,16 @@ class FanMenuController(
             host = fanHost
             fanHost.show(anchorX, anchorY, data.apps, data.allQuick, isLandscape, cornerAnchor)
             touchHeartbeat()
-            // 数据记录（§11.3）：呼出次数/响应时间/两次呼出间隔
+            // 数据记录（§11.3）：呼出次数/响应时间/两次呼出间隔；通道与 assembleFanData 同构派生
             exitAfterLaunch = false
             showStartElapsed = android.os.SystemClock.elapsedRealtime()
-            StatsRecorder.onFanShown()
+            StatsRecorder.onFanShown(
+                when {
+                    cornerAnchor -> FanChannel.CORNER
+                    isLandscape -> FanChannel.STRIP
+                    else -> FanChannel.EDGE
+                }
+            )
             // 呼出即预热（2026-09-07 预热制）：QS_TILE 目标包 kill+预 bind、图标缓存预灌。
             // 策略差异：仅 :ui 的 DirectLaunchStrategy 覆写有动作，launcher 空实现
             launchStrategy.onFanShown(
@@ -341,25 +350,26 @@ class FanMenuController(
      * 改投递语义串行化：show Runnable 先入队、dismiss 后入队 ⇒ 必然先完整展示再拆除
      * （对应 PRD"未预选松手立即收起"），正确性与主线程阻塞时长无关。
      */
-    fun dismiss() {
+    fun dismiss(cause: DismissCause = DismissCause.USER_UP) {
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            doDismiss("main")
+            doDismiss("main", cause)
         } else {
             HLog.i(TAG, tl() + "dismiss: posted from ${Thread.currentThread().name}")
-            mainHandler.post { doDismiss("posted") }
+            mainHandler.post { doDismiss("posted", cause) }
         }
     }
 
-    private fun doDismiss(via: String) {
+    private fun doDismiss(via: String, cause: DismissCause) {
         cancelWatchdog()
         val h = host
         if (h == null) {
             isShowing = false
             return
         }
-        HLog.i(TAG, tl() + "doDismiss($via): requesting host exit")
-        // 数据记录（§11.3）：未选中即退出=取消（启动后的自动退出不计）
-        StatsRecorder.onFanClosed(exitAfterLaunch)
+        HLog.i(TAG, tl() + "doDismiss($via,$cause): requesting host exit")
+        // 数据记录（§11.3 采集层 v2）：收起原因透传进逐事件流水；
+        // 启动后的自动退出以 exitAfterLaunch 为准（覆盖调用方传的 USER_UP）
+        StatsRecorder.onFanClosed(if (exitAfterLaunch) DismissCause.LAUNCHED else cause)
         exitAfterLaunch = false
         // 摘除时序（2026-09-13 收拢动画改造）：host.dismiss() 请求收拢动画（内部即置
         // FLAG_NOT_TOUCHABLE=触摸零拦截）后立即返回，物理摘窗由收拢完成回调执行

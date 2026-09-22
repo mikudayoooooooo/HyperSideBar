@@ -20,13 +20,15 @@ import org.json.JSONObject
  * - 扇形展示成功 → [onFanShown]（FanMenuController.showInternal；含响应时间=
  *   停顿达标→装配完成、两次呼出间隔）
  * - 选中应用/全部应用 → [onOpen]（选中回调；含选择时长）；快捷方式 → [onShortcut]
- * - 收起 → [onFanClosed]（doDismiss；区分"启动后自动退出"与"取消退出"）
+ * - 收起 → [onFanClosed]（doDismiss 的 cause：user_up / launched / watchdog / preempted）
  * - 启动机制结果 → [onLaunchResult]（launcher=BroadcastLaunchStrategy.onRelayResult；
- *   :ui=root 代发回告 ACTION_RELAY_RESULT；DirectLaunchStrategy 本地直启无结果
- *   回调，不产 launchOk/Fail——成功率口径=有确定性结果的启动）
+ *   :ui 的 DirectLaunchStrategy 本地直启无结果回调，不产 launchOk/Fail——成功率口径=有确定性结果的启动）
  *
- * 全部应用占比=allApps/opens。（误触率随后移除：口径依赖逐事件 recent 流水，与
- * "按天计数"聚合模型异构、判定争议大，故不再采集）
+ * 全部应用占比=allApps/opens。
+ *
+ * 误触率：0912 曾因"按天计数器算不出逐事件口径"砍掉过一次；口径 v2（PRD §9.3 定稿）
+ * 落地方式改为**逐事件环形缓冲 + 展示侧纯函数判定**（[MisclickCaliber]），本类只存事实、
+ * 不算分层，避免计数器与事件流水两套真值。§9.2 原八项计数器语义全部保持不变。
  */
 object StatsRecorder {
 
@@ -51,6 +53,9 @@ object StatsRecorder {
     private const val MAX_SAMPLES = 200
     private const val KEEP_DAYS = 30
 
+    /** 逐事件环形缓冲上限（PRD §11.3 实现假设 500；紧凑字符串落盘约 10KB 量级） */
+    private const val MAX_EVENTS = 500
+
     /** 线程安全的日期格式化器（原每调用 new SimpleDateFormat，热路径重复构造） */
     private val DAY_FMT = java.time.format.DateTimeFormatter.ISO_LOCAL_DATE
 
@@ -65,6 +70,31 @@ object StatsRecorder {
     @Volatile private var dirty = false
     @Volatile private var loaded = false
 
+    // ===== 逐事件流水（§11.3 采集层 v2）=====
+    // 误触口径 v2 要的是"每次展开"的六元组，按天计数器算不出来（0912 因此砍过一次）。
+    // 分层/修正档/无效链一律在展示侧由 MisclickCaliber 纯函数算，此处只存事实——
+    // 不落 30 个按天 tier 键，避免两套真值互相漂移。
+
+    /** 进行中的一次展开（show→收起）；UP 之前的所有字段都往这里累积 */
+    private class OpenExpand {
+        @Volatile var trace = 0L
+        @Volatile var channel = FanChannel.EDGE
+        @Volatile var showAt = 0L
+        @Volatile var wallShowAt = 0L
+        @Volatile var upAt = 0L
+        @Volatile var preselected = false
+        @Volatile var zone = CancelZone.NONE
+        @Volatile var travel = 0f
+        @Volatile var deadZonePx = 0f
+        @Volatile var lastX = 0f
+        @Volatile var lastY = 0f
+        @Volatile var hasLast = false
+        @Volatile var live = false
+    }
+
+    private val open = OpenExpand()
+    private val events = ArrayDeque<ExpandEvent>()
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val saveRunnable = Runnable { saveNow() }
 
@@ -75,8 +105,8 @@ object StatsRecorder {
         lastStallAt = SystemClock.elapsedRealtime()
     }
 
-    /** 扇形展示成功（FanMenuController.showInternal 装配完成） */
-    fun onFanShown() {
+    /** 扇形展示成功（FanMenuController.showInternal 装配完成）；通道=竖屏边缘/横屏热区/底角 */
+    fun onFanShown(channel: FanChannel) {
         val now = SystemClock.elapsedRealtime()
         val resp = now - lastStallAt
         if (lastStallAt in 1 until now && resp < 10_000) {
@@ -88,7 +118,106 @@ object StatsRecorder {
         }
         lastShowAt = now
         bump(MetricKeys.SHOWS)
+        synchronized(open) {
+            open.trace += 1
+            open.channel = channel
+            open.showAt = now
+            open.wallShowAt = System.currentTimeMillis()
+            open.upAt = 0L
+            open.preselected = false
+            open.zone = CancelZone.NONE
+            open.travel = 0f
+            open.deadZonePx = 0f
+            open.hasLast = false
+            open.live = true
+        }
         scheduleSave()
+    }
+
+    /** 进入预选（host 的 selectedSince 起算点）——误触判定的主判据 */
+    fun onFanPreselected() {
+        synchronized(open) { if (open.live) open.preselected = true }
+    }
+
+    /**
+     * 展示期间的 MOVE：累加指尖位移（一次 sqrt，热路径零分配）。
+     * 位移只派生"原位/划过"标签，不进判定。
+     */
+    fun onFanMove(x: Float, y: Float) {
+        synchronized(open) {
+            if (!open.live) return
+            if (open.hasLast) {
+                val dx = x - open.lastX
+                val dy = y - open.lastY
+                open.travel += kotlin.math.sqrt(dx * dx + dy * dy)
+            }
+            open.lastX = x
+            open.lastY = y
+            open.hasLast = true
+        }
+    }
+
+    /** 松手（host UP）：记松手时刻 + 取消区；deadZonePx 供位移分档 */
+    fun onFanUp(zone: CancelZone, deadZonePx: Float) {
+        synchronized(open) {
+            if (!open.live) return
+            if (open.upAt == 0L) open.upAt = SystemClock.elapsedRealtime()
+            open.zone = zone
+            open.deadZonePx = deadZonePx
+        }
+    }
+
+    /** 收起：六元组定格入环形缓冲（UP 未记到的路径以 upAt=0 落库，判定自然归 NOT_CANCEL） */
+    fun onFanClosed(cause: DismissCause) {
+        val ev = synchronized(open) {
+            if (!open.live) return
+            open.live = false
+            ExpandEvent(
+                traceId = open.trace,
+                channel = open.channel,
+                showAt = open.showAt,
+                upAt = open.upAt,
+                preselected = open.preselected,
+                zone = open.zone,
+                cause = cause,
+                travelPx = open.travel,
+                deadZonePx = open.deadZonePx,
+                wallShowAt = open.wallShowAt
+            )
+        }
+        synchronized(events) {
+            if (events.size >= MAX_EVENTS) events.removeFirst()
+            events.addLast(ev)
+        }
+        // §9.2 原「取消退出次数」口径不变：非启动收尾即计一次
+        if (cause != DismissCause.LAUNCHED) bump(MetricKeys.CANCELS)
+        scheduleSave()
+    }
+
+    /** 逐事件流水（展示侧读取；已按展开时刻升序） */
+    fun eventLog(): List<ExpandEvent> = synchronized(events) { events.toList() }
+
+    /** 从合并后的 dump 里取逐事件流水（模块 App 侧本进程无事件，数据全在两宿主回传里） */
+    fun eventsOf(merged: JSONObject): List<ExpandEvent> =
+        merged.optJSONArray("events")?.let { a ->
+            (0 until a.length()).mapNotNull { decodeEvent(a.optString(it)) }
+        } ?: emptyList()
+
+    /** 逐事件的 CSV 明细行（导出用；口径展示与判定共用同一份字段序） */
+    fun eventCsvRows(list: List<ExpandEvent>): String {
+        val sb = StringBuilder("trace,channel,wall_show_at,hold_ms,preselected,zone,cause,travel_px,dead_zone_px\n")
+        list.forEach { e ->
+            sb.append(e.traceId).append(',')
+                .append(e.channel).append(',')
+                .append(e.wallShowAt).append(',')
+                .append(e.holdMs).append(',')
+                .append(if (e.preselected) 1 else 0).append(',')
+                .append(e.zone).append(',')
+                .append(e.cause).append(',')
+                .append(e.travelPx.toInt()).append(',')
+                .append(e.deadZonePx.toInt()).append('\n')
+        }
+        return sb.toString()
     }
 
     /** 选中并打开应用（全部应用入口 isAllApps=true）；selMs=展示→选中 */
@@ -103,14 +232,6 @@ object StatsRecorder {
     fun onShortcut() {
         bump(MetricKeys.SHORTCUTS)
         scheduleSave()
-    }
-
-    /** 扇形收起：launched=false = 未选中取消退出（PRD"取消选中并退出的次数"） */
-    fun onFanClosed(launched: Boolean) {
-        if (!launched) {
-            bump(MetricKeys.CANCELS)
-            scheduleSave()
-        }
     }
 
     /** 有确定性结果的启动回告（alive/ok=true 计成功） */
@@ -146,6 +267,29 @@ object StatsRecorder {
         return synchronized(selectMs) { Triple(selectMs.toList(), synchronized(responseMs) { responseMs.toList() }, synchronized(gapMs) { gapMs.toList() }) }
     }
 
+    private fun encodeEvent(e: ExpandEvent) =
+        "${e.traceId},${e.channel.ordinal},${e.showAt},${e.upAt},${if (e.preselected) 1 else 0}," +
+            "${e.zone.ordinal},${e.cause.ordinal},${e.travelPx.toInt()},${e.deadZonePx.toInt()},${e.wallShowAt}"
+
+    private fun decodeEvent(s: String): ExpandEvent? = runCatching {
+        val f = s.split(',')
+        ExpandEvent(
+            traceId = f[0].toLong(),
+            channel = FanChannel.entries[f[1].toInt()],
+            showAt = f[2].toLong(),
+            upAt = f[3].toLong(),
+            preselected = f[4] == "1",
+            zone = CancelZone.entries[f[5].toInt()],
+            cause = DismissCause.entries[f[6].toInt()],
+            travelPx = f[7].toFloat(),
+            deadZonePx = f[8].toFloat(),
+            wallShowAt = f[9].toLong()
+        )
+    }.getOrNull()
+
+    private fun eventsArray(list: List<ExpandEvent>) =
+        JSONArray().apply { list.forEach { put(encodeEvent(it)) } }
+
     // ===== 跨进程传输（配对 LogDumpBridge 的 stats extra） =====
 
     /** 拉取载荷：全量聚合结构 JSON（模块侧按天合并两进程） */
@@ -165,6 +309,7 @@ object StatsRecorder {
         root.put("selectMs", arr(synchronized(selectMs) { selectMs.toList() }))
         root.put("responseMs", arr(synchronized(responseMs) { responseMs.toList() }))
         root.put("gapMs", arr(synchronized(gapMs) { gapMs.toList() }))
+        root.put("events", eventsArray(eventLog()))
         return root.toString()
     }
 
@@ -174,6 +319,7 @@ object StatsRecorder {
         val select = mutableListOf<Int>()
         val resp = mutableListOf<Int>()
         val gap = mutableListOf<Long>()
+        val evs = mutableListOf<ExpandEvent>()
         dumps.forEach { raw ->
             runCatching {
                 val o = JSONObject(raw)
@@ -193,6 +339,10 @@ object StatsRecorder {
                 o.optJSONArray("selectMs")?.let { a -> (0 until a.length()).forEach { select.add(a.optInt(it)) } }
                 o.optJSONArray("responseMs")?.let { a -> (0 until a.length()).forEach { resp.add(a.optInt(it)) } }
                 o.optJSONArray("gapMs")?.let { a -> (0 until a.length()).forEach { gap.add(a.optLong(it)) } }
+                // elapsedRealtime 是设备级时钟，跨进程直接按展开时刻归并即可
+                o.optJSONArray("events")?.let { a ->
+                    (0 until a.length()).forEach { i -> decodeEvent(a.optString(i))?.let(evs::add) }
+                }
             }
         }
         return JSONObject()
@@ -200,6 +350,7 @@ object StatsRecorder {
             .put("selectMs", JSONArray(select))
             .put("responseMs", JSONArray(resp))
             .put("gapMs", JSONArray(gap))
+            .put("events", eventsArray(evs.sortedBy { it.showAt }.takeLast(MAX_EVENTS)))
     }
 
     // ===== 内部 =====
@@ -277,6 +428,13 @@ object StatsRecorder {
             o.optJSONArray("selectMs")?.let { a -> (0 until a.length()).forEach { selectMs.addLast(a.optInt(it)) } }
             o.optJSONArray("responseMs")?.let { a -> (0 until a.length()).forEach { responseMs.addLast(a.optInt(it)) } }
             o.optJSONArray("gapMs")?.let { a -> (0 until a.length()).forEach { gapMs.addLast(a.optLong(it)) } }
+            o.optJSONArray("events")?.let { a ->
+                val persisted = (0 until a.length()).mapNotNull { decodeEvent(a.optString(it)) }
+                synchronized(events) {
+                    events.clear()
+                    persisted.takeLast(MAX_EVENTS).forEach { events.addLast(it) }
+                }
+            }
         }.onFailure { HLog.w("Stats", "hydrate failed: ${it.message}") }
     }
 

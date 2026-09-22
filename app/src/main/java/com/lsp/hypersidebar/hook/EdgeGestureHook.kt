@@ -14,6 +14,7 @@ import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import com.lsp.hypersidebar.ui.fan.FanMenuController
 import com.lsp.hypersidebar.util.DataLoader
+import com.lsp.hypersidebar.util.DismissCause
 import com.lsp.hypersidebar.util.RelayToken
 import io.github.kyuubiran.ezxhelper.core.ClassLoaderProvider
 import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
@@ -143,7 +144,7 @@ class EdgeGestureHook(
         DataLoader.onDataSourceDead = {
             if (DataDeadState.mark()) {
                 HLog.e(TAG, "data source dead: edge gestures passthrough, fan disabled until reboot")
-                if (fanController.isShowing) fanController.dismiss()
+                if (fanController.isShowing) fanController.dismiss(DismissCause.PREEMPTED)
             }
         }
         // 状态探针（§2.5.4）：provider 供接收器应答 + Application.attach 后注册接收器
@@ -603,13 +604,13 @@ class EdgeGestureHook(
     private fun handleTouch(ev: MotionEvent, stub: View?): Boolean {
         // 数据源死亡停摆（迭代四 §1.3）：整条透传原生（原生返回优先），不再呼出
         if (DataDeadState.dead) {
-            if (fanController.isShowing) fanController.dismiss()
+            if (fanController.isShowing) fanController.dismiss(DismissCause.PREEMPTED)
             return false
         }
         // 总开关门（设置页"启用超级侧边栏"）：关闭=整条透传原生（同数据源死亡语义），
         // 展示中的 fan 立即收起；重新打开即时恢复（SyncedPrefs 读=内存缓存命中）
         if (!moduleEnabled()) {
-            if (fanController.isShowing) fanController.dismiss()
+            if (fanController.isShowing) fanController.dismiss(DismissCause.PREEMPTED)
             return false
         }
         // fan 展示中：事件转发给 fan 并消费；UP/CANCEL 收起（未预选立即收起，PRD §7.1）

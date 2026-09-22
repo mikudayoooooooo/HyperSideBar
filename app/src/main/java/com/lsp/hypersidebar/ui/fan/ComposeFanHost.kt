@@ -33,7 +33,9 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.sqrt
+import com.lsp.hypersidebar.util.CancelZone
 import com.lsp.hypersidebar.util.HLog
+import com.lsp.hypersidebar.util.StatsRecorder
 
 private const val TAG = "ComposeFanHost"
 
@@ -416,15 +418,21 @@ class ComposeFanHost(
                         lastSelectedFanIndex = -1
                         lastSelectedQuickIndex = -1
                         selectedSince = 0L
+                        // 采集层 v2：DOWN 即起点，位移从这一刻开始累加
+                        StatsRecorder.onFanMove(x, y)
                         val (fanSel, quickSel) = resolveSelection(
                             x, y, dx, dy, dist, deadZonePx, geometry
                         )
-                        if (fanSel != -1 || quickSel != -1) selectedSince = SystemClock.uptimeMillis()
+                        if (fanSel != -1 || quickSel != -1) {
+                            selectedSince = SystemClock.uptimeMillis()
+                            StatsRecorder.onFanPreselected()
+                        }
                         touchState.value = FanTouchState(x, y, 0, fanSel, quickSel)
                         Log.d(TAG, "touch DOWN fan=$fanSel quick=$quickSel dist=${dist.toInt()}")
                         return true
                     }
                     MotionEvent.ACTION_MOVE -> {
+                        StatsRecorder.onFanMove(x, y)
                         val prevFan = lastSelectedFanIndex
                         val prevQuick = lastSelectedQuickIndex
 
@@ -453,6 +461,7 @@ class ComposeFanHost(
                         val anySelected = fanSel != -1 || quickSel != -1
                         if (anySelected && (fanSel != prevFan || quickSel != prevQuick)) {
                             selectedSince = SystemClock.uptimeMillis()
+                            StatsRecorder.onFanPreselected()
                         }
 
                         touchState.value = FanTouchState(x, y, 0, fanSel, quickSel)
@@ -461,6 +470,16 @@ class ComposeFanHost(
                     MotionEvent.ACTION_UP -> {
                         val (fanSel, quickSel) = resolveSelection(
                             x, y, dx, dy, dist, deadZonePx, geometry
+                        )
+                        // 采集层 v2：UP 现场记取消区与松手时刻（口径要"松手时指尖在哪"，事后推不出）
+                        StatsRecorder.onFanUp(
+                            when {
+                                dist < deadZonePx -> CancelZone.DEAD
+                                dist < innerCancelPx -> CancelZone.INNER
+                                dist > outerCancelPx -> CancelZone.OUTER
+                                else -> CancelZone.IN_BAND
+                            },
+                            deadZonePx
                         )
                         touchState.value = FanTouchState(x, y, 2, -1, -1)
                         // 取证 dump：本地/原始坐标 + 极坐标 + 命中项全量，选中错位一轮日志定位

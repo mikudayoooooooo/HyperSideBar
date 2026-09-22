@@ -22,6 +22,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.sqrt
 import com.lsp.hypersidebar.util.HLog
+import com.lsp.hypersidebar.util.DismissCause
 import com.lsp.hypersidebar.util.StatsRecorder
 import com.lsp.hypersidebar.util.toastOnMain
 
@@ -374,7 +375,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         com.lsp.hypersidebar.util.DataLoader.onDataSourceDead = {
             if (DataDeadState.mark()) {
                 HLog.e(TAG, "data source dead: native sidebar restored, fan disabled until reboot")
-                if (fanController.isShowing) fanController.dismiss()
+                if (fanController.isShowing) fanController.dismiss(DismissCause.PREEMPTED)
                 enterDegradedMode("推荐数据源死亡（连续失败≥5 且无缓存）", "")
             }
         }

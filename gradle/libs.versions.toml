@@ -15,6 +15,8 @@ composeBom = "2024.02.00"
 # miuix 0.9.4 的 WindowDialog/MiuixPopupHost 会调 NavigationBackHandler，要求 activity ≥1.13
 # 提供 LocalNavigationEventDispatcherOwner；缺则弹窗必崩、miuix-nav 预测返回静默失效
 composeActivity = "1.13.0"
+# Lazy 列表拖动重排（0922 取代自研 DragReorder：自动滚动/异高项/抬升动画由库兜底）
+reorderable = "3.1.0"
 
 [libraries]
 android-utils = { module = "io.github.kyuubiran.ezxhelper:android-utils", version.ref = "ezxhelperVersion" }
@@ -38,6 +40,7 @@ compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = 
 compose-ui = { group = "androidx.compose.ui", name = "ui" }
 compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
 compose-activity = { group = "androidx.activity", name = "activity-compose", version.ref = "composeActivity" }
+reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

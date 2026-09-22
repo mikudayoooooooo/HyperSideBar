@@ -140,4 +140,7 @@ dependencies {
     implementation(libs.compose.ui)
     implementation(libs.compose.foundation)
     implementation(libs.compose.activity)
+
+    // 列表拖动重排（快捷方式 / 扇形应用固定顺序）
+    implementation(libs.reorderable)
 }

@@ -1,10 +1,10 @@
 package com.lsp.hypersidebar.ui.settings
 
-import androidx.navigation3.runtime.NavKey
 import com.lsp.hypersidebar.util.ShortcutAction
+import top.yukonga.miuix.kmp.nav.core.NavKey
 
 /**
- * nav3 导航键（U0 定案：全量迁移）。
+ * miuix-nav 导航键（0921 随 miuix 0.9.4 从 androidx nav3 迁入）。
  * 设置/关于双根 Tab 各持独立 NavBackStack；详情页（AppSelection/快捷方式/布局/交互）
  * 与快捷方式内部三级（列表→编辑→选择器，U0 ③ 验证模式）全部折叠进所在 Tab 的栈。
  */

@@ -8,17 +8,18 @@ junitVersion = "1.1.5"
 espressoCore = "3.5.1"
 appcompat = "1.6.1"
 material = "1.10.0"
-miuixUi = "0.9.3"
-navigation3 = "1.1.4"
+miuixUi = "0.9.4"
 xposed-api = "101.0.1"
 xposed-service = "101.0.0"
 composeBom = "2024.02.00"
-composeActivity = "1.8.2"
+# miuix 0.9.4 的 WindowDialog/MiuixPopupHost 会调 NavigationBackHandler，要求 activity ≥1.13
+# 提供 LocalNavigationEventDispatcherOwner；缺则弹窗必崩、miuix-nav 预测返回静默失效
+composeActivity = "1.13.0"
 
 [libraries]
 android-utils = { module = "io.github.kyuubiran.ezxhelper:android-utils", version.ref = "ezxhelperVersion" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
-androidx-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "navigation3" }
+miuix-nav = { module = "top.yukonga.miuix.kmp:miuix-nav", version.ref = "miuixUi" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
@@ -26,7 +27,6 @@ androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 miuix-icons = { module = "top.yukonga.miuix.kmp:miuix-icons", version.ref = "miuixUi" }
 miuix-blur = { module = "top.yukonga.miuix.kmp:miuix-blur", version.ref = "miuixUi" }
-miuix-navigation3-ui = { module = "top.yukonga.miuix.kmp:miuix-navigation3-ui", version.ref = "miuixUi" }
 miuix-preference = { module = "top.yukonga.miuix.kmp:miuix-preference", version.ref = "miuixUi" }
 miuix-ui = { module = "top.yukonga.miuix.kmp:miuix-ui", version.ref = "miuixUi" }
 miuix-squircle = { module = "top.yukonga.miuix.kmp:miuix-squircle", version.ref = "miuixUi" }

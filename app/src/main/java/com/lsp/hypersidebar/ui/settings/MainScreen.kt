@@ -7,7 +7,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,11 +23,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.navigation3.runtime.NavBackStack
-import androidx.navigation3.runtime.NavEntry
-import androidx.navigation3.ui.NavDisplay
-import androidx.navigation3.ui.defaultPopTransitionSpec
-import androidx.navigation3.ui.defaultTransitionSpec
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
@@ -55,6 +49,10 @@ import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.extended.SelectAll
 import top.yukonga.miuix.kmp.icon.extended.Settings
+import top.yukonga.miuix.kmp.nav.core.NavDisplay
+import top.yukonga.miuix.kmp.nav.core.NavDisplayEffects
+import top.yukonga.miuix.kmp.nav.core.navBackStackOf
+import top.yukonga.miuix.kmp.nav.core.rememberNavSystemCornerRadius
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.UUID
 
@@ -79,13 +77,14 @@ internal fun MainScreen(
     }
 
     // 双根 Tab 各持独立栈：切 Tab = 换栈，旧栈整体保活（切回深度不丢，U0 实测）
-    val settingsStack = remember { NavBackStack<SettingsKey>(SettingsKey.TabSettings) }
-    val aboutStack = remember { NavBackStack<SettingsKey>(SettingsKey.TabAbout) }
+    val settingsStack = remember { navBackStackOf(SettingsKey.TabSettings) }
+    val aboutStack = remember { navBackStackOf(SettingsKey.TabAbout) }
     var activeTab by rememberSaveable { mutableIntStateOf(0) }
     val activeStack = if (activeTab == 0) settingsStack else aboutStack
 
     val selectAppsTitle = stringResource(R.string.select_apps)
-    val currentTitle = when (val top = activeStack.last()) {
+    // miuix-nav 的 NavBackStack 元素类型是 NavKey（非泛型），取栈顶要显式收回 SettingsKey
+    val currentTitle = when (val top = activeStack.last() as SettingsKey) {
         SettingsKey.TabSettings -> stringResource(R.string.tab_settings)
         SettingsKey.TabAbout -> stringResource(R.string.tab_about)
         is SettingsKey.AppSelection -> top.title
@@ -103,11 +102,6 @@ internal fun MainScreen(
     val shortcutSelectionBar = remember { ShortcutSelectionBar() }
     val inBatchSelection = activeStack.lastOrNull() == SettingsKey.ShortcutList &&
         shortcutSelectionBar.active
-
-    // 根 Tab 互切保持现网根 Tab 的淡入淡出；其余（详情推/弹）走 miuix HyperOS 横滑默认
-    val rootContentKeys = remember {
-        setOf(SettingsKey.TabSettings.toString(), SettingsKey.TabAbout.toString())
-    }
 
     Scaffold(
         topBar = {
@@ -170,238 +164,228 @@ internal fun MainScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            transitionSpec = {
-                val fromRoot = rootContentKeys.contains(initialState.entries.lastOrNull()?.contentKey)
-                val toRoot = rootContentKeys.contains(targetState.entries.lastOrNull()?.contentKey)
-                if (fromRoot && toRoot) {
-                    fadeIn(animationSpec = tween(300, easing = DecelerateEasing(1.0f))) togetherWith
-                        fadeOut(animationSpec = tween(300, easing = AccelerateEasing(1.0f)))
-                } else {
-                    defaultTransitionSpec<SettingsKey>().invoke(this)
-                }
-            },
-            popTransitionSpec = { defaultPopTransitionSpec<SettingsKey>().invoke(this) },
-            entryProvider = { key ->
-                when (key) {
-                    SettingsKey.TabSettings -> NavEntry(key) {
-                        RootPageContainer(
-                            activeTab = activeTab,
-                            onSelectTab = { activeTab = it }
-                        ) {
-                            SettingsPage(
-                                prefs = prefs,
-                                status = moduleStatus,
-                                currentThemeMode = themeMode,
-                                onThemeModeChange = onThemeModeChange,
-                                onNavigateToAppSelection = {
-                                    settingsStack.add(
-                                        SettingsKey.AppSelection(PrefKeys.CUSTOM_APPS, selectAppsTitle)
-                                    )
-                                },
-                                onNavigateToShortcutSelection = {
-                                    settingsStack.add(SettingsKey.ShortcutList)
-                                },
-                                onNavigateToInvokeSettings = {
-                                    settingsStack.add(SettingsKey.InvokeSettings)
-                                },
-                                onNavigateToFanBackground = {
-                                    settingsStack.add(SettingsKey.FanBackground)
-                                },
-                                modifier = Modifier.weight(1f)
+            effects = NavDisplayEffects(
+                cornerClipRadius = rememberNavSystemCornerRadius(),
+                backdropColor = MiuixTheme.colorScheme.background
+            )
+        ) {
+            entry<SettingsKey.TabSettings> {
+                RootPageContainer(
+                    activeTab = activeTab,
+                    onSelectTab = { activeTab = it }
+                ) {
+                    SettingsPage(
+                        prefs = prefs,
+                        status = moduleStatus,
+                        currentThemeMode = themeMode,
+                        onThemeModeChange = onThemeModeChange,
+                        onNavigateToAppSelection = {
+                            settingsStack.add(
+                                SettingsKey.AppSelection(PrefKeys.CUSTOM_APPS, selectAppsTitle)
                             )
-                        }
-                    }
-                    SettingsKey.TabAbout -> NavEntry(key) {
-                        RootPageContainer(
-                            activeTab = activeTab,
-                            onSelectTab = { activeTab = it }
-                        ) {
-                            AboutPage(
-                                service = service,
-                                prefs = prefs,
-                                prefsRevision = prefsRevision,
-                                onNavigateToDiagnostics = {
-                                    aboutStack.add(SettingsKey.Diagnostics)
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                    is SettingsKey.AppSelection -> NavEntry(key) {
-                        DetailPageContainer {
-                            AppSelectionPage(
-                                prefs = prefs,
-                                prefsKey = key.prefsKey
-                            )
-                        }
-                    }
-                    SettingsKey.ShortcutList -> NavEntry(key) {
-                        DetailPageContainer {
-                            ShortcutListPage(
-                                prefs = prefs,
-                                bar = shortcutSelectionBar,
-                                onEdit = { shortcut ->
-                                    settingsStack.add(SettingsKey.ShortcutEdit(shortcut, isNew = false))
-                                },
-                                onAdd = { kind ->
-                                    settingsStack.add(
-                                        SettingsKey.ShortcutEdit(
-                                            ShortcutAction(
-                                                id = UUID.randomUUID().toString(),
-                                                kind = kind,
-                                                label = "",
-                                                enabled = true
-                                            ),
-                                            isNew = true
-                                        )
-                                    )
-                                }
-                            )
-                        }
-                    }
-                    is SettingsKey.ShortcutEdit -> NavEntry(key) {
-                        DetailPageContainer {
-                            ShortcutEditPage(
-                                shortcut = key.shortcut,
-                                isNew = key.isNew,
-                                prefs = prefs,
-                                initialTargetSpec = SplitResult(
-                                    pkg = key.shortcut.packageName ?: "",
-                                    act = key.shortcut.activityName ?: ""
-                                ),
-                                onSave = { updated ->
-                                    if (key.isNew) {
-                                        ShortcutStore.addShortcut(prefs, updated)
-                                    } else {
-                                        ShortcutStore.updateShortcut(prefs, updated)
-                                    }
-                                    settingsStack.removeLast()
-                                },
-                                onDelete = if (key.isNew) null else {
-                                    {
-                                        ShortcutStore.removeShortcut(prefs, key.shortcut.id)
-                                        settingsStack.removeLast()
-                                    }
-                                },
-                                onPickActivity = { settingsStack.add(SettingsKey.ShortcutPicker) },
-                                onPickQsTile = { settingsStack.add(SettingsKey.QsTilePicker) },
-                                onBack = { settingsStack.removeLast() }
-                            )
-                        }
-                    }
-                    SettingsKey.Logs -> NavEntry(key) {
-                        DetailPageContainer {
-                            LogPage(
-                                prefs = prefs,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
-                    SettingsKey.Stats -> NavEntry(key) {
-                        DetailPageContainer {
-                            StatsPage(modifier = Modifier.fillMaxSize())
-                        }
-                    }
-                    SettingsKey.Diagnostics -> NavEntry(key) {
-                        DetailPageContainer {
-                            DiagnosticsPage(
-                                service = service,
-                                prefs = prefs,
-                                onNavigateToLogs = { aboutStack.add(SettingsKey.Logs) },
-                                onNavigateToStats = { aboutStack.add(SettingsKey.Stats) }
-                            )
-                        }
-                    }
-                    SettingsKey.InvokeSettings -> NavEntry(key) {
-                        DetailPageContainer {
-                            InvokeSettingsPage(
-                                prefs = prefs,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
-                    SettingsKey.FanBackground -> NavEntry(key) {
-                        DetailPageContainer {
-                            FanBackgroundPage(
-                                prefs = prefs,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    }
-                    SettingsKey.QsTilePicker -> NavEntry(key) {
-                        DetailPageContainer {
-                            QsTilePickerPage(
-                                onSelected = { item, isTile ->
-                                    // 与 ShortcutPicker 同款回填：原地替换栈中编辑键 + 弹出选择器。
-                                    // 磁贴→QS_TILE（类名存 serviceName）；应用快捷方式→COMPONENT
-                                    //（目标 activity am start 直启，C2 定案）
-                                    val idx = settingsStack.indexOfLast { it is SettingsKey.ShortcutEdit }
-                                    if (idx >= 0) {
-                                        val cur = settingsStack[idx] as SettingsKey.ShortcutEdit
-                                        // 快捷方式三分：动态/固定项（shortcutId 非空）→ SHORTCUT_ID
-                                        //（startShortcut 桌面桥代发，目标 intent 非桌面不可见）；
-                                        // manifest 项 → COMPONENT（activity am start 直启）
-                                        val dynamic = !isTile && item.shortcutId != null
-                                        settingsStack[idx] = cur.copy(
-                                            shortcut = cur.shortcut.copy(
-                                                packageName = item.packageName,
-                                                activityName = if (isTile || dynamic) null else item.className,
-                                                serviceName = if (isTile) item.className else null,
-                                                shortcutId = if (dynamic) item.shortcutId else null,
-                                                kind = when {
-                                                    isTile -> com.lsp.hypersidebar.util.ShortcutKind.QS_TILE
-                                                    dynamic -> com.lsp.hypersidebar.util.ShortcutKind.SHORTCUT_ID
-                                                    else -> com.lsp.hypersidebar.util.ShortcutKind.COMPONENT
-                                                },
-                                                label = cur.shortcut.label.ifEmpty { item.label },
-                                                iconPackageName = item.packageName
-                                            )
-                                        )
-                                    }
-                                    settingsStack.removeLast()
-                                },
-                                onBack = { settingsStack.removeLast() }
-                            )
-                        }
-                    }
-                    SettingsKey.ShortcutPicker -> NavEntry(key) {
-                        DetailPageContainer {
-                            ActivityPickerPage(
-                                onSelected = { pkg, act, label, isQsTile ->
-                                    // 选择器回填：原地替换栈中编辑键 + 弹出选择器（同帧），
-                                    // 编辑页从更新后的 shortcut 重建字段（等价旧 when() 销毁重建语义）
-                                    val idx = settingsStack.indexOfLast { it is SettingsKey.ShortcutEdit }
-                                    if (idx >= 0) {
-                                        val cur = settingsStack[idx] as SettingsKey.ShortcutEdit
-                                        settingsStack[idx] = cur.copy(
-                                            shortcut = cur.shortcut.copy(
-                                                packageName = pkg,
-                                                // QS 磁贴：类名走 serviceName（与 SERVICE 同构，编辑页
-                                                // 保存映射按 kind 分支），kind 显式置 QS_TILE——
-                                                // 否则 COMPONENT 探测会把它当普通 Service startService（无效）
-                                                activityName = if (isQsTile) null else act,
-                                                serviceName = if (isQsTile) act else cur.shortcut.serviceName,
-                                                kind = when {
-                                                    isQsTile -> com.lsp.hypersidebar.util.ShortcutKind.QS_TILE
-                                                    cur.shortcut.kind == com.lsp.hypersidebar.util.ShortcutKind.QS_TILE ->
-                                                        com.lsp.hypersidebar.util.ShortcutKind.COMPONENT
-                                                    else -> cur.shortcut.kind
-                                                },
-                                                // 仅当当前名称为空时才用 Activity 标签自动填充，避免覆盖用户已输入的名称
-                                                label = cur.shortcut.label.ifEmpty { label },
-                                                iconPackageName = pkg
-                                            )
-                                        )
-                                    }
-                                    settingsStack.removeLast()
-                                },
-                                onBack = { settingsStack.removeLast() }
-                            )
-                        }
-                    }
+                        },
+                        onNavigateToShortcutSelection = {
+                            settingsStack.add(SettingsKey.ShortcutList)
+                        },
+                        onNavigateToInvokeSettings = {
+                            settingsStack.add(SettingsKey.InvokeSettings)
+                        },
+                        onNavigateToFanBackground = {
+                            settingsStack.add(SettingsKey.FanBackground)
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
-        )
+            entry<SettingsKey.TabAbout> {
+                RootPageContainer(
+                    activeTab = activeTab,
+                    onSelectTab = { activeTab = it }
+                ) {
+                    AboutPage(
+                        service = service,
+                        prefs = prefs,
+                        prefsRevision = prefsRevision,
+                        onNavigateToDiagnostics = {
+                            aboutStack.add(SettingsKey.Diagnostics)
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+            entry<SettingsKey.AppSelection> { key ->
+                DetailPageContainer {
+                    AppSelectionPage(
+                        prefs = prefs,
+                        prefsKey = key.prefsKey
+                    )
+                }
+            }
+            entry<SettingsKey.ShortcutList> {
+                DetailPageContainer {
+                    ShortcutListPage(
+                        prefs = prefs,
+                        bar = shortcutSelectionBar,
+                        onEdit = { shortcut ->
+                            settingsStack.add(SettingsKey.ShortcutEdit(shortcut, isNew = false))
+                        },
+                        onAdd = { kind ->
+                            settingsStack.add(
+                                SettingsKey.ShortcutEdit(
+                                    ShortcutAction(
+                                        id = UUID.randomUUID().toString(),
+                                        kind = kind,
+                                        label = "",
+                                        enabled = true
+                                    ),
+                                    isNew = true
+                                )
+                            )
+                        }
+                    )
+                }
+            }
+            entry<SettingsKey.ShortcutEdit> { key ->
+                DetailPageContainer {
+                    ShortcutEditPage(
+                        shortcut = key.shortcut,
+                        isNew = key.isNew,
+                        prefs = prefs,
+                        initialTargetSpec = SplitResult(
+                            pkg = key.shortcut.packageName ?: "",
+                            act = key.shortcut.activityName ?: ""
+                        ),
+                        onSave = { updated ->
+                            if (key.isNew) {
+                                ShortcutStore.addShortcut(prefs, updated)
+                            } else {
+                                ShortcutStore.updateShortcut(prefs, updated)
+                            }
+                            settingsStack.removeLast()
+                        },
+                        onDelete = if (key.isNew) null else {
+                            {
+                                ShortcutStore.removeShortcut(prefs, key.shortcut.id)
+                                settingsStack.removeLast()
+                            }
+                        },
+                        onPickActivity = { settingsStack.add(SettingsKey.ShortcutPicker) },
+                        onPickQsTile = { settingsStack.add(SettingsKey.QsTilePicker) },
+                        onBack = { settingsStack.removeLast() }
+                    )
+                }
+            }
+            entry<SettingsKey.Logs> {
+                DetailPageContainer {
+                    LogPage(
+                        prefs = prefs,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+            entry<SettingsKey.Stats> {
+                DetailPageContainer {
+                    StatsPage(modifier = Modifier.fillMaxSize())
+                }
+            }
+            entry<SettingsKey.Diagnostics> {
+                DetailPageContainer {
+                    DiagnosticsPage(
+                        service = service,
+                        prefs = prefs,
+                        onNavigateToLogs = { aboutStack.add(SettingsKey.Logs) },
+                        onNavigateToStats = { aboutStack.add(SettingsKey.Stats) }
+                    )
+                }
+            }
+            entry<SettingsKey.InvokeSettings> {
+                DetailPageContainer {
+                    InvokeSettingsPage(
+                        prefs = prefs,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+            entry<SettingsKey.FanBackground> {
+                DetailPageContainer {
+                    FanBackgroundPage(
+                        prefs = prefs,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+            entry<SettingsKey.QsTilePicker> {
+                DetailPageContainer {
+                    QsTilePickerPage(
+                        onSelected = { item, isTile ->
+                            // 与 ShortcutPicker 同款回填：原地替换栈中编辑键 + 弹出选择器。
+                            // 磁贴→QS_TILE（类名存 serviceName）；应用快捷方式→COMPONENT
+                            //（目标 activity am start 直启，C2 定案）
+                            val idx = settingsStack.indexOfLast { it is SettingsKey.ShortcutEdit }
+                            if (idx >= 0) {
+                                val cur = settingsStack[idx] as SettingsKey.ShortcutEdit
+                                // 快捷方式三分：动态/固定项（shortcutId 非空）→ SHORTCUT_ID
+                                //（startShortcut 桌面桥代发，目标 intent 非桌面不可见）；
+                                // manifest 项 → COMPONENT（activity am start 直启）
+                                val dynamic = !isTile && item.shortcutId != null
+                                settingsStack[idx] = cur.copy(
+                                    shortcut = cur.shortcut.copy(
+                                        packageName = item.packageName,
+                                        activityName = if (isTile || dynamic) null else item.className,
+                                        serviceName = if (isTile) item.className else null,
+                                        shortcutId = if (dynamic) item.shortcutId else null,
+                                        kind = when {
+                                            isTile -> com.lsp.hypersidebar.util.ShortcutKind.QS_TILE
+                                            dynamic -> com.lsp.hypersidebar.util.ShortcutKind.SHORTCUT_ID
+                                            else -> com.lsp.hypersidebar.util.ShortcutKind.COMPONENT
+                                        },
+                                        label = cur.shortcut.label.ifEmpty { item.label },
+                                        iconPackageName = item.packageName
+                                    )
+                                )
+                            }
+                            settingsStack.removeLast()
+                        },
+                        onBack = { settingsStack.removeLast() }
+                    )
+                }
+            }
+            entry<SettingsKey.ShortcutPicker> {
+                DetailPageContainer {
+                    ActivityPickerPage(
+                        onSelected = { pkg, act, label, isQsTile ->
+                            // 选择器回填：原地替换栈中编辑键 + 弹出选择器（同帧），
+                            // 编辑页从更新后的 shortcut 重建字段（等价旧 when() 销毁重建语义）
+                            val idx = settingsStack.indexOfLast { it is SettingsKey.ShortcutEdit }
+                            if (idx >= 0) {
+                                val cur = settingsStack[idx] as SettingsKey.ShortcutEdit
+                                settingsStack[idx] = cur.copy(
+                                    shortcut = cur.shortcut.copy(
+                                        packageName = pkg,
+                                        // QS 磁贴：类名走 serviceName（与 SERVICE 同构，编辑页
+                                        // 保存映射按 kind 分支），kind 显式置 QS_TILE——
+                                        // 否则 COMPONENT 探测会把它当普通 Service startService（无效）
+                                        activityName = if (isQsTile) null else act,
+                                        serviceName = if (isQsTile) act else cur.shortcut.serviceName,
+                                        kind = when {
+                                            isQsTile -> com.lsp.hypersidebar.util.ShortcutKind.QS_TILE
+                                            cur.shortcut.kind == com.lsp.hypersidebar.util.ShortcutKind.QS_TILE ->
+                                                com.lsp.hypersidebar.util.ShortcutKind.COMPONENT
+                                            else -> cur.shortcut.kind
+                                        },
+                                        // 仅当当前名称为空时才用 Activity 标签自动填充，避免覆盖用户已输入的名称
+                                        label = cur.shortcut.label.ifEmpty { label },
+                                        iconPackageName = pkg
+                                    )
+                                )
+                            }
+                            settingsStack.removeLast()
+                        },
+                        onBack = { settingsStack.removeLast() }
+                    )
+                }
+            }
+        }
     }
 }
 

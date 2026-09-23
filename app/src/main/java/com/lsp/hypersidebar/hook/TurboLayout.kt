@@ -8,6 +8,8 @@ import android.util.Log
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import com.lsp.hypersidebar.anchor.AnchorResolver
+import com.lsp.hypersidebar.anchor.AnchorRoles
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.FanMenuController
@@ -18,6 +20,7 @@ import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfte
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createBeforeHook
 import java.lang.ref.WeakReference
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.sqrt
@@ -64,12 +67,22 @@ private const val DEFAULT_DEGRADE_TOAST = "扇形侧边栏：边缘穿透持续�
  */
 class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
 
-    private val sideBar = "com.miui.dock.sidebar.f"
-    private val handleBarView = "com.miui.dock.sidebar.RegionSamplingImageView"
-    private val coverView = "com.miui.dock.sidebar.b"
+    // ===== 锚点来自结构化解析（adapt/anchor-resolver），不再硬编码混淆名 =====
+    // 语义：未解析出来（NOT_FOUND）⇒ 返回 null ⇒ 对应 hook 跳过（逐 role 闭锁，不影响其它 hook；
+    // OS2/OS3 上解析结果与旧硬编码名完全一致 ⇒ 行为零变化）。
+    private val sideBar: String? get() = AnchorResolver.fqcnOf(AnchorRoles.SIDEBAR_TOUCH.role)
+    private val coverView: String? get() = AnchorResolver.fqcnOf(AnchorRoles.SIDEBAR_COVER.role)
+    private val whiteBarDrawable: String? get() = AnchorResolver.fqcnOf(AnchorRoles.SIDEBAR_DRAWABLE.role)
+    private val handleBarView: String? get() = AnchorResolver.fqcnOf(AnchorRoles.SIDEBAR_HANDLE_BAR.role)
+    private val hintCleanup: String? get() = AnchorResolver.fqcnOf(AnchorRoles.SIDEBAR_HINT_CLEANUP.role)
+
     override val name: String = "HookTargetBox"
 
-    private var sidebarWrapperRef: WeakReference<Any>? = null
+    /**
+     * cover 构造器计数。取代旧的 `wrapper=` 诊断口径（旧口径读 `dock.sidebar.j.Q()`，
+     * OS4 上该方法已漂移为 `p.Q(long)` ⇒ 只在 OS2/OS3 有意义；构造器计数三版本等价且更直接）。
+     */
+    private val coverCtorCount = AtomicInteger()
     private val coverRefs = CopyOnWriteArrayList<WeakReference<View>>()
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     @Volatile private var lastDrawableLogTime = 0L
@@ -101,7 +114,11 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     }
 
     fun hookOnTouch() {
-        val hooked = MethodFinder.fromClass(sideBar)
+        val cls = sideBar ?: run {
+            HLog.w(TAG, "hookOnTouch skipped: sidebar_touch 未解析（保持原生行为）")
+            return
+        }
+        val hooked = MethodFinder.fromClass(cls)
             .filterByName("onTouch")
             .filterByParamTypes(View::class.java, MotionEvent::class.java)
             .filterByReturnType(Boolean::class.java)
@@ -131,16 +148,9 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         Log.d(TAG, "hookOnTouch: hooked=$hooked")
     }
 
-    fun hookM26633Q() {
-        MethodFinder.fromClass("com.miui.dock.sidebar.j")
-            .filterByName("Q")
-            .filterByParamTypes()
-            .firstOrNull()
-            ?.createAfterHook {
-                sidebarWrapperRef = WeakReference(it.thisObject)
-                Log.d(TAG, "Q afterHook: saved wrapper ref, class=${it.thisObject.javaClass.name}")
-            }
-    }
+    // hookM26633Q（旧 `dock.sidebar.j.Q()` 装载与 sidebarWrapperRef）已删除：
+    // 它只服务 getStats() 的 wrapper 计数，而 OS4 上该方法已漂移（j.Q() → p.Q(long)）。
+    // 改用 cover 构造器计数（coverCtorCount），三版本等价且不依赖混淆名。
 
     // ===== B 路线横屏状态机（1B，PRD §7.1/§7.3.1） =====
     // 移植 EdgeGestureHook 的锚点圆法 v2（生产验证），适配 :ui 条上触摸：
@@ -347,12 +357,19 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         runCatching { remotePrefs.getBoolean(PrefKeys.ENABLED, true) }.getOrDefault(true)
 
     fun getStats(): String {
-        val wrapper = if (sidebarWrapperRef?.get() != null) "1" else "0"
-        return "controller=${fanController.getStats()}, wrapper=$wrapper"
+        return "controller=${fanController.getStats()}, cover=$coverCtorCount"
     }
 
     override fun init() {
         HLog.i(TAG, "=== TurboLayout init ===")
+        // 结构化锚点解析（每宿主进程一次）：必须早于所有依赖锚点的 hook 安装。
+        // L2 总闸可远程关闭（pref），解析失败逐 role 闭锁（不影响其它 hook、不改变既有默认路径）。
+        val structuralScan = runCatching {
+            remotePrefs.getBoolean(PrefKeys.ANCHOR_STRUCTURAL_SCAN, true)
+        }.getOrDefault(true)
+        runCatching { AnchorResolver.resolveAll(structuralScan) }
+            .onFailure { HLog.w(TAG, "anchor resolve failed: ${it.message}") }
+        HLog.i(TAG, "anchor: ${AnchorResolver.stateLine()}")
         // 熔断器：发布本进程新鲜状态（清掉上进程生命周期遗留的熔断键）+ 熔断动作
         breaker.forceReset()
         breaker.onTripped = { reason ->
@@ -383,7 +400,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         // ClassNotFoundException 曾中断 init，导致排在其后的 hook 从未安装）
         listOf(
             { hookOnTouch() },
-            { hookM26633Q() },
             { hookCoverPassThrough() },
             { hookCoverLifecycleFlags() },
             { hookHideWhiteBar() },
@@ -423,16 +439,20 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
      * 屏幕输出恒为空白。已降级（1C）放行（条恢复可见）；类名漂移时安全降级为可见。
      */
     private fun hookHideWhiteBar() {
+        val cls = whiteBarDrawable ?: run {
+            HLog.w(TAG, "hookHideWhiteBar skipped: sidebar_drawable 未解析（条保持可见，安全降级）")
+            return
+        }
         runCatching {
-            MethodFinder.fromClass("com.miui.dock.sidebar.c")
+            MethodFinder.fromClass(cls)
                 .filterByName("draw")
                 .filterByParamTypes(Canvas::class.java)
                 .firstOrNull()
                 ?.createBeforeHook {
                     if (!passthroughDegraded && moduleEnabled()) it.result = null
                 }
-                ?.also { HLog.i(TAG, "hookHideWhiteBar: c.draw hooked OK") }
-                ?: HLog.w(TAG, "hookHideWhiteBar: c.draw NOT FOUND（条保持可见，安全降级）")
+                ?.also { HLog.i(TAG, "hookHideWhiteBar: $cls.draw hooked OK") }
+                ?: HLog.w(TAG, "hookHideWhiteBar: $cls.draw NOT FOUND（条保持可见，安全降级）")
         }.onFailure { HLog.w(TAG, "hookHideWhiteBar failed: ${it.message}（条保持可见）") }
     }
 
@@ -441,14 +461,21 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
      * 指向一条被隐藏的条会造成困惑。缺失时打日志跳过，不影响其它功能。
      */
     private fun hookHideHints() {
+        // 实测（tools/current_anchor_drift.py）：`dock.sidebar.n` 在 OS2/OS3 **类都不存在**，
+        // OS4 存在但语义已变（Runnable）⇒ 本 hook 三版本都从未装成功过（与 DockLayout 同类死代码）。
+        // base 轮保持"缺失即跳过"，语义待复核（计划 §5）。
+        val cls = hintCleanup ?: run {
+            HLog.w(TAG, "hookHideHints skipped: sidebar_hint_cleanup 未解析（提示保留）")
+            return
+        }
         listOf("M1" to "引导弹窗", "N1" to "tip 角标").forEach { (method, desc) ->
             runCatching {
-                MethodFinder.fromClass("com.miui.dock.sidebar.n")
+                MethodFinder.fromClass(cls)
                     .filterByName(method)
                     .filterByParamTypes()
                     .firstOrNull()
                     ?.createBeforeHook { it.result = null }
-                    ?: HLog.w(TAG, "hookHideHints: n.$method NOT FOUND（$desc 保留）")
+                    ?: HLog.w(TAG, "hookHideHints: $cls.$method NOT FOUND（$desc 保留）")
             }.onFailure { HLog.w(TAG, "hookHideHints[$method] failed: ${it.message}") }
         }
     }
@@ -462,16 +489,21 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
      * 看门狗兜底通道切换、系统重置与旋转后残留收敛；非 EDGE 清除 flag 保原生可用。
      */
     private fun hookCoverPassThrough() {
+        val cls = coverView ?: run {
+            HLog.w(TAG, "hookCoverPassThrough skipped: sidebar_cover 未解析（穿透不生效，不阻断其它 hook）")
+            return
+        }
         runCatching {
-            ConstructorFinder.fromClass(coverView).firstOrNull()
+            ConstructorFinder.fromClass(cls).firstOrNull()
                 ?.createAfterHook {
                     val view = it.thisObject as? View ?: return@createAfterHook
-                    HLog.i(TAG, "cover view captured (ctor): $coverView")
+                    coverCtorCount.incrementAndGet()
+                    HLog.i(TAG, "cover view captured (ctor): $cls")
                     purgeCoverRefs()
                     coverRefs.add(WeakReference(view))
                     applyCoverFlag(view)
                 }
-                ?: HLog.w(TAG, "hookCoverPassThrough: $coverView ctor NOT FOUND")
+                ?: HLog.w(TAG, "hookCoverPassThrough: $cls ctor NOT FOUND")
         }.onFailure { HLog.w(TAG, "hookCoverPassThrough failed: ${it.message}") }
         startCoverWatchdog()
     }
@@ -697,37 +729,19 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     }
 
     private fun hookDockLayoutVisibility() {
-        // DockLayout 运行时类名可能是 com.miui.gamebooster.windowmanager.newbox.e
-        // 或者尝试常见混淆名。注意：MethodFinder.fromClass 对不存在的类直接抛
-        // ClassNotFoundException（实测 DockLayout 抛出曾中断 init，连带后续 hook 未安装），
-        // 每个候选必须独立捕获
-        val classNames = listOf(
-            "com.miui.gamebooster.windowmanager.newbox.e",
-            "com.miui.gamebooster.windowmanager.newbox.d",
-            "com.miui.gamebooster.ui.DockLayout"
-        )
-
-        for (className in classNames) {
-            Log.d(TAG, "hookDockLayoutVisibility: trying class $className")
-            val hooked = runCatching {
-                MethodFinder.fromClass(className)
-                    .filterByName("setVisibility")
-                    .filterByParamTypes(Int::class.javaPrimitiveType)
-                    .firstOrNull()
-                    ?.createBeforeHook {
-                        if (PanelHideState.hidden.get()) {
-                            it.args[0] = View.GONE
-                            Log.d(TAG, "hookDockLayoutVisibility: intercepted setVisibility, set to GONE")
-                        }
-                    }
-            }.getOrNull()
-            if (hooked != null) {
-                HLog.i(TAG, "hookDockLayoutVisibility: hooked $className")
-                return
-            } else {
-                Log.d(TAG, "hookDockLayoutVisibility: class $className not found or no matching method")
-            }
+        // base 轮：**只解析不安装**（计划 §5）。两个理由：
+        //   1) 该 hook 在 OS2/OS3/OS4 上**从未装成功过** —— 旧候选 `newbox.e` 是 RecyclerView 子类、
+        //      `newbox.d` 是 Runnable，都不满足"自身声明 setVisibility(I)"；设备日志实测为
+        //      `no class matched, skip`（PanelHideState 因此是只写不读的死状态）；
+        //   2) 结构化目标 `GameToolboxMainView` 属"游戏工具箱主视图"，而原意图是"隐藏 dock"
+        //      （dock 相关类在 com.miui.dock.*）—— 语义可能根本不是一回事，贸然启用有误伤风险。
+        // 解析结果照常进自检表，让这处漂移显式化；启用与否留待语义复核后决定。
+        val r = AnchorResolver.get(AnchorRoles.DOCK_LAYOUT.role)
+        val cls = r?.fqcn
+        if (cls != null) {
+            HLog.i(TAG, "hookDockLayoutVisibility: resolved=$cls（base 轮不安装，语义待复核）")
+        } else {
+            HLog.w(TAG, "hookDockLayoutVisibility: 未解析（${r?.note ?: "no resolution"}）")
         }
-        HLog.w(TAG, "hookDockLayoutVisibility: no class matched, skip")
     }
 }

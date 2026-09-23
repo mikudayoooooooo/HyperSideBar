@@ -53,6 +53,12 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        // 结构化锚点解析的 L2 后端（DexKit）只随 arm64-v8a 分发：目标设备全是 arm64，
+        // 增量约 386 KB；x86/x86_64 只在本地模拟器需要（本项目无模拟器）。
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+
         // 注入依赖版本到 BuildConfig，运行时可通过 BuildConfig.XXX 读取
         buildConfigField("String", "XPOSED_API_VERSION", "\"101.0.1\"")
         buildConfigField("String", "EZXHELPER_VERSION", "\"3.2.0-preview1\"")
@@ -142,4 +148,9 @@ dependencies {
 
     // 列表拖动重排（快捷方式 / 扇形应用固定顺序）
     implementation(libs.reorderable)
+
+    // 运行时 dex 解析（结构化锚点解析 L2）：C++ 实现，自带 consumer proguard 规则保住 native 方法。
+    // .so 不由宿主加载路径解析，而是由 NativeLibLoader 从模块 APK 抽出后 System.load
+    // （LSPosed 模块的 .so 不在宿主的 native 搜索路径里）。许可义务见 README「第三方组件与许可」。
+    implementation(libs.dexkit)
 }

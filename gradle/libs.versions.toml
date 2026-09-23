@@ -15,6 +15,9 @@ composeBom = "2024.02.00"
 composeActivity = "1.13.0"
 # Lazy 列表拖动重排（0922 取代自研 DragReorder：自动滚动/异高项/抬升动画由库兜底）
 reorderable = "3.1.0"
+# 运行时 dex 解析（结构化锚点解析的 L2 后端）：C++ 实现，APK 只打包 arm64-v8a
+# 许可：Apache-2.0（除 Core/）+ LGPL-3.0（Core/，即 libdexkit.so）—— 见 README「第三方组件与许可」
+dexkit = "2.3.0"
 
 [libraries]
 android-utils = { module = "io.github.kyuubiran.ezxhelper:android-utils", version.ref = "ezxhelperVersion" }
@@ -37,6 +40,7 @@ compose-ui = { group = "androidx.compose.ui", name = "ui" }
 compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
 compose-activity = { group = "androidx.activity", name = "activity-compose", version.ref = "composeActivity" }
 reorderable = { module = "sh.calvin.reorderable:reorderable", version.ref = "reorderable" }
+dexkit = { module = "org.luckypray:dexkit", version.ref = "dexkit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

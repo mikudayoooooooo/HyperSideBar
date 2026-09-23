@@ -83,6 +83,13 @@ object PrefKeys {
      *  赋值链=各进程 hook init 读一次 + ConfigSync.applySync 随全量配置刷新 */
     const val DEBUG_VERBOSE_LOGS = "debugVerboseLogs"
 
+    // ===== 结构化锚点解析（adapt/anchor-resolver）：L2 结构扫描总闸 =====
+    /**
+     * L2（DexKit 结构扫描）总闸，默认开。置 false 即**免重新构建**退回 L0/L1 快路径
+     * （候选名 + 反射指纹校验）：宿主里 native 出问题时可远程关闭，代价是丢失"名字漂移自愈"能力。
+     */
+    const val ANCHOR_STRUCTURAL_SCAN = "anchorStructuralScan"
+
     // ===== 运行日志拉取通道（迭代六 §11.2）：模块 App 请求 hook 进程回传 HLog 环形缓冲 =====
     // 与 manifest 快捷方式桥同模式（REQUEST 广播 → 各进程回 REPLY；模块 App 前台=活进程必收）
     const val LOG_DUMP_REQUEST = "com.lsp.hypersidebar.action.LOG_DUMP_REQUEST"

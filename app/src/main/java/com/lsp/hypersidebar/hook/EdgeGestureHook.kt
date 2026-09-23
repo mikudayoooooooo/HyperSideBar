@@ -130,6 +130,12 @@ class EdgeGestureHook(
 
     override fun init() {
         HLog.i(TAG, "=== EdgeGestureHook init, pid=${android.os.Process.myPid()} ===")
+        // 结构化锚点解析（每宿主进程一次）：本宿主也建表并写日志。
+        // 自检报告已通过 LogCollector 拉取三进程日志尾 ⇒ 这里建表即等于"三宿主回传"，
+        // 不需要新增广播通道。（home 侧本轮只建表/log，不做 hook 门控 —— 门控留给 OS4 分支。）
+        runCatching { com.lsp.hypersidebar.anchor.AnchorResolver.resolveAll(remotePrefs) }
+            .onFailure { HLog.w(TAG, "anchor resolve failed: ${it.message}") }
+        HLog.i(TAG, "anchor: ${com.lsp.hypersidebar.anchor.AnchorResolver.stateLine()}")
         // 熔断器：发布本进程新鲜状态（清掉上进程生命周期遗留的熔断键）+ 熔断动作
         breaker.forceReset()
         breaker.onTripped = { reason ->

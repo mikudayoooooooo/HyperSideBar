@@ -46,6 +46,12 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
     @Volatile private var hostAdapter: Any? = null
 
     override fun init() {
+        // 结构化锚点解析（每宿主进程一次）：本宿主建表并写日志（自检报告经三进程日志尾回收，
+        // 见 SelfCheck / LogCollector）。SystemUI 本轮只建表，不做 hook 门控 ——
+        // 磁贴链路的适配器契约校验属 OS2 分支（P0-1）。
+        runCatching { com.lsp.hypersidebar.anchor.AnchorResolver.resolveAll(prefs) }
+            .onFailure { HLog.w(TAG, "anchor resolve failed: ${it.message}") }
+        HLog.i(TAG, "anchor: ${com.lsp.hypersidebar.anchor.AnchorResolver.stateLine()}")
         hookAdapterStash()
         hookClickReceiver()
     }

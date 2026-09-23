@@ -99,7 +99,12 @@ object SelfCheck {
                 prefs.getBoolean(PrefKeys.DEBUG_RELAY_BLACKHOLE, false)
             }.getOrDefault(false)
             val framework = runCatching {
-                "${service?.frameworkName} ${service?.frameworkVersion} (api=${service?.apiVersion})"
+                // 自检报告的「框架身份」：名字/版本/API 版本 + 版本号（数值，便于比较构建新旧）
+                // + 能力位（PROP_CAP_SYSTEM / PROP_CAP_REMOTE / PROP_RT_API_PROTECTION…）。
+                // 尝鲜用户回传时，这一条直接告诉我们他跑的是哪个 LSPosed 构建 —— 云适配最缺的信息。
+                val props = service?.frameworkProperties ?: 0L
+                "${service?.frameworkName} ${service?.frameworkVersion} " +
+                    "(api=${service?.apiVersion}, vc=${service?.frameworkVersionCode}, props=0x${props.toString(16)})"
             }.getOrDefault("未绑定（LSPosed 服务不可达）")
             val customApps = runCatching {
                 prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty()

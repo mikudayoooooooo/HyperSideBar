@@ -53,6 +53,14 @@ internal object AnchorResolver {
     @Volatile
     private var hostTag = "unknown"
 
+    /** 便捷重载：直接吃宿主侧 prefs（总闸读 [PrefKeys.ANCHOR_STRUCTURAL_SCAN]，默认开） */
+    fun resolveAll(prefs: android.content.SharedPreferences?): Map<String, RoleResolution> =
+        resolveAll(
+            runCatching {
+                prefs?.getBoolean(com.lsp.hypersidebar.prefs.PrefKeys.ANCHOR_STRUCTURAL_SCAN, true)
+            }.getOrNull() ?: true
+        )
+
     /** 幂等；返回 role → 解析结果。任何异常都在内部消化（绝不打断宿主 init） */
     fun resolveAll(structuralScanEnabled: Boolean): Map<String, RoleResolution> {
         table?.let { return it }

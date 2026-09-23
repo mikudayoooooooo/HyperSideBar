@@ -33,3 +33,15 @@ PROJECT_NOTES.md
 .kotlin/
 __pycache__/
 hs_err_pid*.log
+
+# 适配研究工作区（本地保留，不入库）：
+# .ota-extract/ 内含已解包的 ROM 分区与固件（GB 级，且属第三方版权物），
+# tools/、docs/ 为离线取证脚本与调研文档，_apk/、_repos/ 为反编译产物与第三方仓库克隆。
+.ota-extract/
+tools/
+docs/
+_apk/
+_repos/
+analysis/
+analysis_result.md
+result.json

@@ -24,6 +24,9 @@ class XposedInit : XposedModule() {
 
     override fun onModuleLoaded(param: ModuleLoadedParam) {
         EzXposed.initOnModuleLoaded(this, param)
+        // NativeLibLoader 抽 libdexkit.so 需要模块 APK 路径；必须在任何宿主 init 之前就位。
+        runCatching { EzXposed.initModuleResources() }
+            .onFailure { Log.w(TAG, "initModuleResources failed: ${it.message}") }
     }
 
     override fun onPackageLoaded(param: PackageLoadedParam) {

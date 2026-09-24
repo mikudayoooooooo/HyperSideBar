@@ -12,27 +12,32 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * 注意：`declaredMethods` 与规则要求的"**自身声明**"同口径 —— 继承来的方法不算，
  * 与 ezxhelper `MethodFinder.fromClass()`（declared + 本类直接实现的接口）一致。
+ *
+ * ConcurrentHashMap **禁止 null value**。类不存在时不得 `getOrPut { null }`，
+ * 否则 launcher / SystemUI 进程（没有 `dock.sidebar`）会直接 NPE，把整张表打成 unresolved。
  */
 internal class ReflectFacts(private val classLoader: ClassLoader) : FactsSource {
 
-    private val classes = ConcurrentHashMap<String, Class<*>?>()
+    private val classes = ConcurrentHashMap<String, Class<*>>()
     private val signatures = ConcurrentHashMap<String, Set<String>>()
 
     override fun exists(fqcn: String): Boolean = load(fqcn) != null
 
-    override fun declaredSignatures(fqcn: String): Set<String> =
-        signatures.getOrPut(fqcn) {
-            val cls = load(fqcn) ?: return@getOrPut emptySet()
+    override fun declaredSignatures(fqcn: String): Set<String> {
+        val cls = load(fqcn) ?: return emptySet()
+        return signatures.getOrPut(fqcn) {
             cls.declaredMethods.mapTo(HashSet()) { signatureOf(it) }
         }
+    }
 
     override fun superName(fqcn: String): String? = load(fqcn)?.superclass?.name
 
-    private fun load(fqcn: String): Class<*>? =
-        classes.getOrPut(fqcn) {
-            // initialize=false：只加载与链接，不跑静态初始化（避免副作用）
-            runCatching { Class.forName(fqcn, false, classLoader) }.getOrNull()
-        }
+    private fun load(fqcn: String): Class<*>? {
+        classes[fqcn]?.let { return it }
+        val cls = runCatching { Class.forName(fqcn, false, classLoader) }.getOrNull() ?: return null
+        classes.putIfAbsent(fqcn, cls)
+        return classes[fqcn] ?: cls
+    }
 
     /** 与 [MethodSpec.signature] 同格式：`name(param,param):ret`，用点分名 */
     private fun signatureOf(m: Method): String {

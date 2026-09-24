@@ -48,6 +48,8 @@ class FreeformRelayHook(
             ?.createAfterHook {
                 val ctx = it.args[0] as? Context ?: return@createAfterHook
                 registerReceiver(ctx)
+                com.lsp.hypersidebar.anchor.AnchorResolver.completeWithContext(ctx)
+                HLog.i(TAG, "anchor after attach: ${com.lsp.hypersidebar.anchor.AnchorResolver.stateLine()}")
                 // 配置同步通道（批次 2 同款，:ui 补接）：收设置页全量推送，
                 // 总开关/横屏 dwell 等 remotePrefs 读取的实时性不再单靠 LSPosed push
                 com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx)

@@ -79,7 +79,8 @@ internal object NativeLibLoader {
      * （同名规则 = 模块 versionCode + ABI，覆盖安装后自动失效重抽）。
      */
     private fun extract(target: File) {
-        val apk = EzXposed.modulePath
+        val apk = runCatching { EzXposed.modulePath }.getOrNull()
+            ?: error("EzXposed.modulePath not initialized")
         ZipFile(apk).use { zip ->
             val entry = zip.getEntry(APK_ENTRY) ?: error("entry not found: $APK_ENTRY")
             if (target.isFile && target.length() == entry.size) return

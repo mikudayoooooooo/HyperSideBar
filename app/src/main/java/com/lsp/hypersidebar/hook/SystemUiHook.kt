@@ -98,6 +98,8 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                     Context.RECEIVER_EXPORTED
                 )
                 HLog.i(TAG, "qs tile click receiver registered (via Application.attach)")
+                    com.lsp.hypersidebar.anchor.AnchorResolver.completeWithContext(ctx)
+                    HLog.i(TAG, "anchor after attach: ${com.lsp.hypersidebar.anchor.AnchorResolver.stateLine()}")
             }
     }
 

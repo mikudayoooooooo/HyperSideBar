@@ -226,6 +226,8 @@ class EdgeGestureHook(
                         receiver, IntentFilter(PrefKeys.PROBE_ACTION_HOME), Context.RECEIVER_EXPORTED
                     )
                     HLog.i(TAG, "probe receiver registered (via Application.attach)")
+                    com.lsp.hypersidebar.anchor.AnchorResolver.completeWithContext(ctx)
+                    HLog.i(TAG, "anchor after attach: ${com.lsp.hypersidebar.anchor.AnchorResolver.stateLine()}")
                     // 配置同步通道（批次 2）：收设置页全量推送，根治 hook 进程死快照
                     com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx)
                     HLog.i(TAG, "config sync receiver registered (via Application.attach)")

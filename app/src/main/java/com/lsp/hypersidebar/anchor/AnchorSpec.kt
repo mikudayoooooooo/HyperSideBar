@@ -211,4 +211,72 @@ object AnchorRoles {
         SIDEBAR_TOUCH, SIDEBAR_COVER, SIDEBAR_DRAWABLE, SIDEBAR_HANDLE_BAR,
         SIDEBAR_HINT_CLEANUP, DOCK_LAYOUT
     )
+
+    private const val RECENTS = "com.miui.home.recents"
+
+    /** 贴边手势占位视图：呼出/透传的实际入口 */
+    val HOME_GESTURE_STUB = RoleSpec(
+        "home_gesture_stub", RECENTS,
+        listOf(MethodSpec.of("onTouchEvent", listOf("android.view.MotionEvent"), "boolean")),
+        SuperRule.Any,
+        listOf("$RECENTS.GestureStubView")
+    )
+
+    /** 三键导航的同类占位视图 */
+    val HOME_NAV_STUB = RoleSpec(
+        "home_nav_stub", RECENTS,
+        listOf(MethodSpec.of("onTouchEvent", listOf("android.view.MotionEvent"), "boolean")),
+        SuperRule.Any,
+        listOf("$RECENTS.NavStubView")
+    )
+
+    /**
+     * 快滑透传回调（`GestureStubView$3.onSwipeStop(Z,F,Z)`）。
+     * 内部类不做 super 约束、也不给结构化搜索指纹（`ownAll` 为空 ⇒ 结构层自动跳过）——
+     * 它只是"OS2/OS3 在、OS4 不在"的观测点，靠 hint 命中即可。
+     */
+    val HOME_SWIPE_STOP = RoleSpec(
+        "home_swipe_stop", RECENTS,
+        listOf(MethodSpec.of("onSwipeStop", listOf("boolean", "float", "boolean"), "void")),
+        SuperRule.Any,
+        listOf("$RECENTS.GestureStubView\$3")
+    )
+
+    // ===== 每宿主 role 表（OS2 分支 P1） =====
+    //
+    // 背景：侧边栏/工具箱六个 role 全是 **securitycenter 专属**。base 轮对每个宿主都跑同一张
+    // 全表，实测在 `com.miui.home` / `com.android.systemui` 上稳定产出 6 行 NOT_FOUND 噪声，
+    // 且白白加载 DexKit（.so 映射 + 5 次查询）。这里按宿主包名分表：
+    //   - 无关宿主直接返回空表 ⇒ 不解析、不建索引（`AnchorResolver` 见空表即跳过 L2）；
+    //   - 自检报告只剩有意义的行，漂移信号不被噪声淹没。
+    //
+    // 纪律：**表内 role 一经加入不得随意移除** —— 它们是漂移观测点（例如 `dock_layout`
+    // 已删除对应 hook，但仍要解析出 `GameToolboxMainView` 以便在自检里看见）。
+
+    /** 安全中心（侧边栏 + 工具箱 panel 的实际宿主） */
+    val SECURITY_CENTER: List<RoleSpec> = ALL
+
+    /**
+     * 桌面。OS2/OS3 是 Java（`com.miui.home`），OS4 的 launcher 是 `hyos_spawner` 孵化的
+     * Rust 进程（**无 dex**）⇒ 本表在 OS4 上预期全 NOT_FOUND，属正确结果而非故障。
+     *
+     * 手势三个锚点当前由 `EdgeGestureHook` 直接硬编码（见该类），本轮**只建表不接线**：
+     * 目的是把 "OS2/OS3 在 → OS4 没了" 这个漂移事实暴露到自检报告里，为 OS4 的 native
+     * 路线提供守门数据。
+     */
+    val HOME: List<RoleSpec> = listOf(HOME_GESTURE_STUB, HOME_NAV_STUB, HOME_SWIPE_STOP)
+
+    /**
+     * SystemUI。磁贴链路的类名/契约校验由 `SystemUiHook` 的候选表负责（P0-1），
+     * 这里留空表：SystemUI 没有侧边栏类 role，跑了也只是噪声。
+     */
+    val SYSTEM_UI: List<RoleSpec> = emptyList()
+
+    /** 按宿主包名选表；未知宿主 = 空表（不解析、不加载 DexKit） */
+    fun forHost(pkg: String?): List<RoleSpec> = when (pkg) {
+        "com.miui.securitycenter" -> SECURITY_CENTER
+        "com.miui.home" -> HOME
+        "com.android.systemui" -> SYSTEM_UI
+        else -> emptyList()
+    }
 }

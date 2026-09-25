@@ -81,7 +81,9 @@ internal object AnchorResolver {
                         "resolveAll failed, all roles unresolved: ${t.javaClass.simpleName}: ${t.message}",
                         t
                     )
-                    AnchorRoles.ALL.associate { spec ->
+                    val host = runCatching { HostIdentity.of(currentApplication()) }
+                        .getOrDefault(HostIdentity("unknown", 0L, 0L))
+                    AnchorRoles.forHost(host.pkg).associate { spec ->
                         spec.role to RoleResolution(
                             spec.role, null, Layer.NONE, 0, ResolveState.NOT_FOUND,
                             "resolver crashed: ${t.javaClass.simpleName}"
@@ -118,6 +120,16 @@ internal object AnchorResolver {
         val classLoader = ClassLoaderProvider.safeClassLoader
         val facts = ReflectFacts(classLoader)
 
+        // 每宿主 role 表（OS2 分支 P1）：无关宿主 = 空表 ⇒ 不解析、不建 DexKit 索引。
+        // 这既消掉 base 轮实测的 6 行 NOT_FOUND 噪声，也省掉 .so 映射与 5 次查询。
+        val specs = AnchorRoles.forHost(host.pkg)
+        if (specs.isEmpty()) {
+            indexState = "skipped-no-roles-for-host"
+            l2Completed = true
+            HLog.i(TAG, "resolve skipped: no roles for host=${host.pkg}")
+            return emptyMap()
+        }
+
         // L2 需要 cacheDir + 模块 APK 路径。hook init 时 Application 经常还没 attach。
         val canStartL2 = structuralScanEnabled && ctx?.cacheDir != null
         val index = if (canStartL2) {
@@ -131,8 +143,8 @@ internal object AnchorResolver {
             null
         }
 
-        val out = LinkedHashMap<String, RoleResolution>(AnchorRoles.ALL.size)
-        for (spec in AnchorRoles.ALL) {
+        val out = LinkedHashMap<String, RoleResolution>(specs.size)
+        for (spec in specs) {
             val r = AnchorEngine.resolve(facts, index, spec)
             HLog.i(TAG, "role ${r.oneLine()}")
             out[spec.role] = r
@@ -142,6 +154,10 @@ internal object AnchorResolver {
     }
 
     private fun runL2(ctx: Context, current: Map<String, RoleResolution>) {
+        if (current.isEmpty()) {
+            l2Completed = true
+            return
+        }
         runCatching { EzXposed.initAppContext(ctx, false) }
         val host = HostIdentity.of(ctx)
         hostTag = host.tag
@@ -157,7 +173,8 @@ internal object AnchorResolver {
         val facts = ReflectFacts(classLoader)
         val out = LinkedHashMap<String, RoleResolution>(current)
         var upgraded = 0
-        for (spec in AnchorRoles.ALL) {
+        // 用**本宿主的表**而非全表：`current` 的键就是本宿主已解析的 role 集合
+        for (spec in AnchorRoles.forHost(host.pkg)) {
             val prev = current[spec.role] ?: continue
             if (prev.isResolved) continue
             val next = AnchorEngine.resolve(facts, index, spec)

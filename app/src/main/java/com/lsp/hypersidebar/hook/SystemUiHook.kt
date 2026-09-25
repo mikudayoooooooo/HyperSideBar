@@ -45,6 +45,11 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
     /** dagger 单例，构造于 SystemUI 启动期——构造即 stash 供接收器使用 */
     @Volatile private var hostAdapter: Any? = null
 
+    /** P0-3：本轮 ROM 是否提供 `CustomTileExt.exemptTemporarily()`（OS2 无 ⇒ 已知降级） */
+    @Volatile private var exemptionSupported: Boolean? = null
+
+    @Volatile private var exemptionMissingLogged = false
+
     override fun init() {
         // 结构化锚点解析（每宿主进程一次）：本宿主建表并写日志（自检报告经三进程日志尾回收，
         // 见 SelfCheck / LogCollector）。SystemUI 本轮只建表，不做 hook 门控 ——
@@ -59,16 +64,55 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
     private fun hookAdapterStash() {
         // 类解析必须走宿主 classloader（EzXHelper ClassLoaderProvider）——
         // javaClass.classLoader 是模块自身的，看不到 SystemUI 类（11:22 实测 not found）
-        val adapterClass = runCatching {
-            ClassLoaderProvider.safeClassLoader.loadClass(ADAPTER_CLASS)
-        }.getOrNull() ?: run {
-            HLog.w(TAG, "MiuiQSHostAdapter not found (ROM drift?)")
+        val adapterClass = resolveAdapterClass() ?: run {
+            HLog.w(TAG, "QS host adapter not found on any candidate (ROM drift?)")
             return
         }
         adapterClass.declaredConstructors.toList().createAfterHooks { param ->
             hostAdapter = param.thisObjectOrNull
-            HLog.i(TAG, "MiuiQSHostAdapter stashed")
+            HLog.i(TAG, "QS host adapter stashed: ${adapterClass.name}")
         }
+    }
+
+    /**
+     * P0-1：QS 宿主适配器**候选表 + 契约校验**。
+     *
+     * OS3/OS4 是 `qs.pipeline.domain.adapter.MiuiQSHostAdapter`；**OS2 没有 pipeline 层**，
+     * 适配器是 `qs.QSHostAdapter`（另有 `QSTileHost` 同接口）。只凭名字命中不够 ——
+     * 必须过契约校验，否则会把"名字还在但接口变了"的类当适配器 stash 起来，
+     * 让点击链路在更深处才失败（更难定位）。
+     *
+     * 契约（两版本共同满足）：
+     *   ① 声明字段 `interactor`（实例非 null —— 它是点击链路的入口）
+     *   ② 声明方法 `createTile(String):QSTile`
+     *   ③ `interactor` 上存在 `getCurrentQSTiles()` 或 `getCurrentTilesSpecs()` 之一
+     *
+     * 全不命中 ⇒ 返回 null，`SystemUiHook` 保持"磁贴通道不可用"（fail-closed，不比现状差）。
+     */
+    private fun resolveAdapterClass(): Class<*>? {
+        val cl = ClassLoaderProvider.safeClassLoader
+        for (name in ADAPTER_CANDIDATES) {
+            val cls = runCatching { cl.loadClass(name) }.getOrNull() ?: continue
+            val ok = runCatching {
+                val tile = cls.declaredMethods.firstOrNull {
+                    it.name == "createTile" && it.parameterTypes.size == 1 &&
+                        it.parameterTypes[0] == String::class.java
+                } ?: return@runCatching false
+                val field = cls.getDeclaredField("interactor").apply { isAccessible = true }
+                val interactorType = field.type
+                val hasEnumeration = interactorType.methods.any {
+                    it.parameterCount == 0 &&
+                        (it.name == GET_CURRENT_QS_TILES || it.name == GET_CURRENT_TILES_SPECS)
+                }
+                tile.returnType.name.contains("QSTile") && hasEnumeration
+            }.getOrDefault(false)
+            if (ok) {
+                HLog.i(TAG, "QS host adapter resolved: $name")
+                return cls
+            }
+            HLog.i(TAG, "QS host adapter candidate rejected by contract: $name")
+        }
+        return null
     }
 
     private fun hookClickReceiver() {
@@ -125,14 +169,6 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
             val cl = adapter.javaClass.classLoader
             val interactor = readField(adapter, "interactor")
                 ?: error("interactor field is null")
-            val tiles = interactor.javaClass.methods
-                .firstOrNull { it.name == "getCurrentQSTiles" && it.parameterCount == 0 }
-                ?.invoke(interactor) as? List<*>
-                ?: run {
-                    HLog.w(TAG, "clickTile: getCurrentQSTiles not found/returned non-list")
-                    return@runCatching 0
-                }
-            HLog.i(TAG, "clickTile: current tiles=${tiles.size}")
             val toSpec = cl.loadClass(CUSTOM_TILE_CLASS)
                 .methods.firstOrNull { it.name == "toSpec" && it.parameterCount == 1 }
                 ?: run {
@@ -141,27 +177,42 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                 }
             val spec = toSpec.invoke(null, cn) as? String ?: return@runCatching 0
 
+            // P0-2：两段式枚举。**旧路径一律优先** —— OS3/OS4 行为零变化（base 已实机验证），
+            // 仅当 `getCurrentQSTiles()` 不存在（OS2）才走 spec 列表。
             var isPinned = false
-            val tile = tiles.firstOrNull { t ->
-                t != null && runCatching {
-                    t.javaClass.methods
-                        .firstOrNull { it.name == "getTileSpec" && it.parameterCount == 0 }
-                        ?.invoke(t) == spec
-                }.getOrNull() == true
-            }?.also { isPinned = true } ?: createdTiles.get(spec)
-            ?: run {
-                // 未固定磁贴：现场创建（createTile 返回 null 则彻底不可触发）
-                val created = adapter.javaClass.methods
-                    .firstOrNull { it.name == "createTile" && it.parameterCount == 1 }
-                    ?.invoke(adapter, spec)
-                    ?: run {
-                        HLog.w(TAG, "clickTile: createTile returned null: $spec")
-                        return@runCatching 0
+            val tile = currentTileObjects(interactor)
+                ?.firstOrNull { t ->
+                    t != null && runCatching {
+                        t.javaClass.methods
+                            .firstOrNull { it.name == "getTileSpec" && it.parameterCount == 0 }
+                            ?.invoke(t) == spec
+                    }.getOrNull() == true
+                }?.also { isPinned = true }
+                // OS2 路径：spec 在当前列表 ⇒ 经适配器取实例（getTile 取不到再由下方 createTile 兜底）
+                ?: run {
+                    val pinnedBySpec = spec in currentTileSpecs(interactor)
+                    if (pinnedBySpec) {
+                        isPinned = true
+                        pinnedTile(adapter, spec)
+                    } else {
+                        null
                     }
-                HLog.i(TAG, "clickTile: tile created on demand: $spec")
-                createdTiles.put(spec, created)
-                created
-            }
+                }
+                ?: createdTiles.get(spec)
+                ?: run {
+                    // 未固定磁贴：现场创建（createTile 返回 null 则彻底不可触发）
+                    val created = adapter.javaClass.methods
+                        .firstOrNull { it.name == "createTile" && it.parameterCount == 1 }
+                        ?.invoke(adapter, spec)
+                        ?: run {
+                            HLog.w(TAG, "clickTile: createTile returned null: $spec")
+                            return@runCatching 0
+                        }
+                    HLog.i(TAG, "clickTile: tile created on demand: $spec")
+                    createdTiles.put(spec, created)
+                    created
+                }
+            HLog.i(TAG, "clickTile: tile located (pinned=$isPinned) spec=$spec")
 
             // 预热①绑定（2026-09-07 方案 B 重写，取代 09-06 的"解绑再重绑"）
             //
@@ -218,11 +269,32 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
             // 经 mCustomTileExt 反射）——豁免后台弹出/启动限制。冻结场景下配合 300ms
             // 延迟投递给 system_server 豁免/解冻传播留窗（SystemUI 直写 cgroup 被
             // SELinux 拒绝：23:10 EACCES 实证，故走豁免+延迟）
+            //
+            // P0-3：**OS2 无 `CustomTileExt` 类、tile 上也无 `mCustomTileExt` 字段**。
+            // 旧实现直接 readField ⇒ 每次点击抛 NoSuchFieldException 并被 runCatching 吞掉，
+            // 刷一条误导性的 "exemptTemporarily failed" 错误日志。这里改为**先探测再调用**：
+            // 缺失 = 已知的能力降级（不是故障），降级为 info 并只打一次，同时把状态透出给自检。
             runCatching {
-                readField(tile, "mCustomTileExt")?.let { ext ->
-                    ext.javaClass.methods
+                val ext = readField(tile, "mCustomTileExt")
+                if (ext == null) {
+                    exemptionSupported = false
+                    if (!exemptionMissingLogged) {
+                        exemptionMissingLogged = true
+                        HLog.i(
+                            TAG,
+                            "exemptTemporarily unavailable in this ROM (no CustomTileExt) " +
+                                "— tile clicks under background/freeze restrictions may not fire"
+                        )
+                    }
+                } else {
+                    exemptionSupported = true
+                    val m = ext.javaClass.methods
                         .firstOrNull { it.name == "exemptTemporarily" && it.parameterCount == 0 }
-                        ?.invoke(ext)
+                    if (m == null) {
+                        HLog.w(TAG, "CustomTileExt present but exemptTemporarily() missing")
+                    } else {
+                        m.invoke(ext)
+                    }
                 }
             }.onFailure {
                 HLog.w(TAG, "exemptTemporarily failed: ${it.javaClass.simpleName}: ${it.message}")
@@ -319,6 +391,40 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                 obj.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(obj)
             }
 
+    // ===== P0-2：当前磁贴枚举的两条通道（旧路径优先） =====
+
+    /**
+     * OS3/OS4 路径：`interactor.getCurrentQSTiles():List<QSTile>`。
+     * 返回 null = 接口不存在（OS2）或调用失败 ⇒ 调用方回落 [currentTileSpecs]。
+     */
+    private fun currentTileObjects(interactor: Any): List<*>? = runCatching {
+        interactor.javaClass.methods
+            .firstOrNull { it.name == GET_CURRENT_QS_TILES && it.parameterCount == 0 }
+            ?.invoke(interactor) as? List<*>
+    }.getOrNull().also { if (it != null) HLog.i(TAG, "clickTile: current tiles=${it.size}") }
+
+    /**
+     * OS2 路径：`interactor.getCurrentTilesSpecs():List<String>`。
+     * 失败返回空表 ⇒ 视作"未固定" ⇒ 走 createTile（与现状降级路径一致）。
+     */
+    private fun currentTileSpecs(interactor: Any): List<String> = runCatching {
+        interactor.javaClass.methods
+            .firstOrNull { it.name == GET_CURRENT_TILES_SPECS && it.parameterCount == 0 }
+            ?.invoke(interactor) as? List<*>
+    }.getOrNull()?.filterIsInstance<String>().orEmpty()
+
+    /**
+     * OS2 路径：`adapter.getTile(spec):QSTile`。
+     * 已固定但**尚未创建**的磁贴可能返回 null ⇒ 交由调用方的 createTile 兜底。
+     */
+    private fun pinnedTile(adapter: Any, spec: String): Any? = runCatching {
+        adapter.javaClass.methods
+            .firstOrNull { it.name == "getTile" && it.parameterCount == 1 }
+            ?.invoke(adapter, spec)
+    }.getOrNull().also {
+        if (it == null) HLog.i(TAG, "clickTile: getTile(spec) returned null, will createTile: $spec")
+    }
+
     /** 字段直写（与 readField 同款容错），用于复位 TileServiceManager 绑定标志位 */
     private fun writeField(obj: Any, name: String, value: Any) {
         runCatching { obj.javaClass.getField(name).set(obj, value) }
@@ -328,8 +434,22 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
     }
 
     private companion object {
-        const val ADAPTER_CLASS =
-            "com.android.systemui.qs.pipeline.domain.adapter.MiuiQSHostAdapter"
+        /**
+         * QS 宿主适配器候选（**按优先级**，P0-1）。
+         * - `qs.pipeline.domain.adapter.MiuiQSHostAdapter`：OS3 / OS4
+         * - `qs.QSHostAdapter`：**OS2**（无 pipeline 层）；另有 `QSTileHost` 同接口，可作三号候选
+         * 命中后一律过契约校验（见 `resolveAdapterClass`），不凭名字采信。
+         */
+        val ADAPTER_CANDIDATES = listOf(
+            "com.android.systemui.qs.pipeline.domain.adapter.MiuiQSHostAdapter",
+            "com.android.systemui.qs.QSHostAdapter",
+            "com.android.systemui.qs.QSTileHost",
+        )
+
+        /** 当前磁贴枚举：OS3/OS4 用前者，**OS2 只有后者**（P0-2） */
+        const val GET_CURRENT_QS_TILES = "getCurrentQSTiles"
+        const val GET_CURRENT_TILES_SPECS = "getCurrentTilesSpecs"
+
         const val CUSTOM_TILE_CLASS = "com.android.systemui.qs.external.CustomTile"
 
         /** 投递后诊断延迟：等 bindService→onServiceConnected 冲刷完成后再查 pendingClick */

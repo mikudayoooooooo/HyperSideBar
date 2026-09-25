@@ -226,4 +226,70 @@ class AnchorEngineTest {
         assertEquals("com.miui.gamebooster.windowmanager.newbox.GameToolboxMainView", r.fqcn)
         assertEquals(Layer.STRUCTURAL, r.layer)
     }
+
+    // ===== OS2 分支：每宿主 role 表（P1） =====
+
+    @Test
+    fun `host tables select the roles that actually exist per host`() {
+        // 安全中心 = 侧边栏全表；桌面 = 三个手势锚点；SystemUI / 未知宿主 = 空表
+        assertEquals(AnchorRoles.ALL, AnchorRoles.forHost("com.miui.securitycenter"))
+        assertEquals(
+            listOf(
+                "home_gesture_stub", "home_nav_stub", "home_swipe_stop"
+            ),
+            AnchorRoles.forHost("com.miui.home").map { it.role }
+        )
+        assertTrue(AnchorRoles.forHost("com.android.systemui").isEmpty())
+        assertTrue(AnchorRoles.forHost("com.example.unknown").isEmpty())
+        assertTrue(AnchorRoles.forHost(null).isEmpty())
+    }
+
+    @Test
+    fun `home roles resolve from hints and never fall through to structural scan`() {
+        val onTouchEvent = MethodSpec.of(
+            "onTouchEvent", listOf("android.view.MotionEvent"), "boolean"
+        ).signature
+        val swipeStop = MethodSpec.of(
+            "onSwipeStop", listOf("boolean", "float", "boolean"), "void"
+        ).signature
+        val src = FakeFacts(
+            parents = mapOf(
+                "com.miui.home.recents.GestureStubView" to "android.view.View",
+                "com.miui.home.recents.NavStubView" to "android.view.View",
+                "com.miui.home.recents.GestureStubView\$3" to "java.lang.Object",
+            ),
+            methods = mapOf(
+                "com.miui.home.recents.GestureStubView" to setOf(onTouchEvent),
+                "com.miui.home.recents.NavStubView" to setOf(onTouchEvent),
+                "com.miui.home.recents.GestureStubView\$3" to setOf(swipeStop),
+            ),
+        )
+        // 桌面表带 index 也不该被结构化替代：hint 命中即返回 HINT
+        val index = FakeIndex(emptyMap())
+        for (spec in AnchorRoles.HOME) {
+            val r = AnchorEngine.resolve(src, index, spec)
+            assertTrue("${spec.role} should resolve", r.isResolved)
+            assertEquals(Layer.HINT, r.layer)
+        }
+    }
+
+    @Test
+    fun `home roles report NOT_FOUND on a dex-less host like OS4 launcher`() {
+        // OS4 launcher 是 Rust 进程（无 dex）⇒ 表内 role 全 NOT_FOUND 属**正确**结果
+        val src = FakeFacts(parents = emptyMap(), methods = emptyMap())
+        for (spec in AnchorRoles.HOME) {
+            val r = AnchorEngine.resolve(src, null, spec)
+            assertEquals(ResolveState.NOT_FOUND, r.state)
+            assertFalse(r.isResolved)
+        }
+    }
+
+    @Test
+    fun `swipe stop role is hint-only and skips structural search`() {
+        // ownAll 非空但 index 为 null 时：先试 hint，失败后因无 index 报 NOT_FOUND 并说明
+        val src = FakeFacts(parents = emptyMap(), methods = emptyMap())
+        val r = AnchorEngine.resolve(src, null, AnchorRoles.HOME_SWIPE_STOP)
+        assertEquals(ResolveState.NOT_FOUND, r.state)
+        assertEquals(Layer.NONE, r.layer)
+    }
 }

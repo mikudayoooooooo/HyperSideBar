@@ -27,12 +27,13 @@ import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "FanLaunch"
 
-/** 打开原生面板后恢复 dock 可见性的延时（openNativePanel → PanelHideState 复位） */
-private const val PANEL_HIDE_RESTORE_MS = 5_000L
-
 /**
  * securitycenter:ui 进程的直调策略。
- * 打开原生面板时经 PanelHideState 短暂隐藏 dock（hookDockLayoutVisibility 消费），5s 后恢复。
+ *
+ * 打开原生面板只发 PANNEL_OPEN 广播（:ui 平台签名特权转发给安全中心）。
+ * 原先还配套"置 PanelHideState 5s → 由 hookDockLayoutVisibility 隐藏 dock"，该功能已删除：
+ * dock 子系统（com.miui.dock.* / DockWindowManagerService）里没有声明 setVisibility 的容器，
+ * 唯一结构候选又是"被打开的面板"本身 —— 依据 docs/adaptation/dock-layout-semantics-verdict.md。
  */
 class DirectLaunchStrategy(
     /** :ui 的 remotePrefs（只读）：取模块下发的跨进程防伪令牌 */
@@ -59,15 +60,11 @@ class DirectLaunchStrategy(
     }
 
     override fun openNativePanel(context: Context) {
-        PanelHideState.hidden.set(true)
         val intent = Intent("com.miui.gamebooster.PANNEL_OPEN").apply {
             setPackage(HostPackages.UI_HOST)
         }
         context.sendBroadcast(intent, "com.miui.gamebooster.permission.PANNEL_OPEN")
         HLog.i(TAG, "openNativePanel: broadcast sent")
-        Handler(Looper.getMainLooper()).postDelayed({
-            PanelHideState.hidden.set(false)
-        }, PANEL_HIDE_RESTORE_MS)
     }
 
     override fun launchShortcut(context: Context, shortcut: ShortcutAction) {

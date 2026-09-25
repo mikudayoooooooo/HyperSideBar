@@ -51,7 +51,7 @@ class BroadcastLaunchStrategy(
     }
 
     override fun openNativePanel(context: Context) {
-        // 面板打开经 :ui 的 FreeformRelayHook 转发（其负责 PanelHideState 的设置与恢复）
+        // 面板打开经 :ui 的 FreeformRelayHook 转发到 DirectLaunchStrategy.openNativePanel
         sendToRelay(context, "openPanel") { putExtra(PrefKeys.FAN_EXTRA_OPEN_PANEL, true) }
     }
 

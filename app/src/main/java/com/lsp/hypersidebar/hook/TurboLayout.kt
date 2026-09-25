@@ -74,7 +74,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private val coverView: String? get() = AnchorResolver.fqcnOf(AnchorRoles.SIDEBAR_COVER.role)
     private val whiteBarDrawable: String? get() = AnchorResolver.fqcnOf(AnchorRoles.SIDEBAR_DRAWABLE.role)
     private val handleBarView: String? get() = AnchorResolver.fqcnOf(AnchorRoles.SIDEBAR_HANDLE_BAR.role)
-    private val hintCleanup: String? get() = AnchorResolver.fqcnOf(AnchorRoles.SIDEBAR_HINT_CLEANUP.role)
 
     override val name: String = "HookTargetBox"
 
@@ -396,19 +395,21 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 enterDegradedMode("推荐数据源死亡（连续失败≥5 且无缓存）", "")
             }
         }
-        // 各 hook 独立容错：任一失败不中断其余（实测 hookDockLayoutVisibility 的
-        // ClassNotFoundException 曾中断 init，导致排在其后的 hook 从未安装）
+        // 各 hook 独立容错：任一失败不中断其余（历史实测：某个 ClassNotFoundException 曾中断 init，
+        // 导致排在其后的 hook 从未安装）
         listOf(
             { hookOnTouch() },
             { hookCoverPassThrough() },
             { hookCoverLifecycleFlags() },
             { hookHideWhiteBar() },
-            { hookHideHints() },
-            { hookHandleBarPixelKill() },
-            { hookDockLayoutVisibility() }
+            { hookHandleBarPixelKill() }
         ).forEach { step ->
             runCatching { step() }.onFailure { HLog.e(TAG, "init step failed: ${it.message}", it) }
         }
+        // 本类已删除两个"从未生效"的 hook（role 仍保留在锚点表里，自检可继续观察漂移）：
+        //   sidebar_hint_cleanup —— 目标类在 OS2/OS3 不存在、OS4 语义已变
+        //   dock_layout          —— dock 子系统没有可 setVisibility 的容器（唯一候选是"被打开的面板"本身）
+        // 依据见 docs/adaptation/dock-layout-semantics-verdict.md
         HLog.i(TAG, "init done: ${getStats()}")
         // 预热推荐列表缓存（:ui 侧 B 路线横屏呼出共用 DataLoader；反射 ~1s 不进呼出关键路径）。
         // :ui 的 appContext 一般立即可用；带重试防未就绪（与边缘通道同款）。
@@ -456,29 +457,9 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         }.onFailure { HLog.w(TAG, "hookHideWhiteBar failed: ${it.message}（条保持可见）") }
     }
 
-    /**
-     * 残留提示清理（EDGE）：n.M1 = 一次性引导弹窗、n.N1 = 小窗 tip 角标——
-     * 指向一条被隐藏的条会造成困惑。缺失时打日志跳过，不影响其它功能。
-     */
-    private fun hookHideHints() {
-        // 实测（tools/current_anchor_drift.py）：`dock.sidebar.n` 在 OS2/OS3 **类都不存在**，
-        // OS4 存在但语义已变（Runnable）⇒ 本 hook 三版本都从未装成功过（与 DockLayout 同类死代码）。
-        // base 轮保持"缺失即跳过"，语义待复核（计划 §5）。
-        val cls = hintCleanup ?: run {
-            HLog.w(TAG, "hookHideHints skipped: sidebar_hint_cleanup 未解析（提示保留）")
-            return
-        }
-        listOf("M1" to "引导弹窗", "N1" to "tip 角标").forEach { (method, desc) ->
-            runCatching {
-                MethodFinder.fromClass(cls)
-                    .filterByName(method)
-                    .filterByParamTypes()
-                    .firstOrNull()
-                    ?.createBeforeHook { it.result = null }
-                    ?: HLog.w(TAG, "hookHideHints: $cls.$method NOT FOUND（$desc 保留）")
-            }.onFailure { HLog.w(TAG, "hookHideHints[$method] failed: ${it.message}") }
-        }
-    }
+    // hookHideHints（role: sidebar_hint_cleanup）已删除：
+    // 目标类 `com.miui.dock.sidebar.n` 在 OS2/OS3 **类都不存在**、OS4 语义变成 Runnable（三版本实测）
+    // ⇒ 该 hook 从未装成功过，属死代码。role 仍保留在锚点表里（自检可观察漂移）。
 
     /**
      * 触摸穿透（EDGE，实测轮七）：SidebarCoverView（com.miui.dock.sidebar.b，extends View，
@@ -728,20 +709,12 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         }.onFailure { HLog.w(TAG, "drawable probe failed: ${it.message}") }
     }
 
-    private fun hookDockLayoutVisibility() {
-        // base 轮：**只解析不安装**（计划 §5）。两个理由：
-        //   1) 该 hook 在 OS2/OS3/OS4 上**从未装成功过** —— 旧候选 `newbox.e` 是 RecyclerView 子类、
-        //      `newbox.d` 是 Runnable，都不满足"自身声明 setVisibility(I)"；设备日志实测为
-        //      `no class matched, skip`（PanelHideState 因此是只写不读的死状态）；
-        //   2) 结构化目标 `GameToolboxMainView` 属"游戏工具箱主视图"，而原意图是"隐藏 dock"
-        //      （dock 相关类在 com.miui.dock.*）—— 语义可能根本不是一回事，贸然启用有误伤风险。
-        // 解析结果照常进自检表，让这处漂移显式化；启用与否留待语义复核后决定。
-        val r = AnchorResolver.get(AnchorRoles.DOCK_LAYOUT.role)
-        val cls = r?.fqcn
-        if (cls != null) {
-            HLog.i(TAG, "hookDockLayoutVisibility: resolved=$cls（base 轮不安装，语义待复核）")
-        } else {
-            HLog.w(TAG, "hookDockLayoutVisibility: 未解析（${r?.note ?: "no resolution"}）")
-        }
-    }
+    // hookDockLayoutVisibility（role: dock_layout）已删除，依据 docs/adaptation/dock-layout-semantics-verdict.md：
+    //   · dock 子系统（com.miui.dock.* / com.miui.gamebooster.service.DockWindowManagerService）里
+    //     **没有**声明 setVisibility(I) 的容器 ⇒ 原实现无有效目标（OS2/OS3/OS4 实测从未安装成功）；
+    //   · 全 APK 里唯一结构候选 GameToolboxMainView 是"被打开的游戏工具箱面板"本身（含 setRootView /
+    //     setOnBrightnessChange / GridLayoutManager），置 GONE 会反向伤害；
+    //   · dock 显隐是窗口级的（DockWindowManagerService，166 方法），且模块已用 c.draw 置空 + 穿透完成
+    //     视觉封口；横屏 B 路线还依赖该 dock 窗口存在。
+    // role 仍保留在锚点表里（自检可观察漂移）。
 }

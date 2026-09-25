@@ -188,12 +188,14 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                             ?.invoke(t) == spec
                     }.getOrNull() == true
                 }?.also { isPinned = true }
-                // OS2 路径：spec 在当前列表 ⇒ 经适配器取实例（getTile 取不到再由下方 createTile 兜底）
+                // OS2 路径：spec 在当前列表 ⇒ 经适配器取实例
                 ?: run {
-                    val pinnedBySpec = spec in currentTileSpecs(interactor)
-                    if (pinnedBySpec) {
-                        isPinned = true
-                        pinnedTile(adapter, spec)
+                    if (spec in currentTileSpecs(interactor)) {
+                        // 只有**真的取到实例**才认 pinned —— 尚未创建的固定磁贴
+                        // getTile 会返回 null，此时不能谎报 pinned：下方 createTile
+                        // 现场创建的实例走 click(null) 实测无效（见 21:45 对照实验），
+                        // 必须落进 addWindowToken + mService.onClick 投递路径。
+                        pinnedTile(adapter, spec)?.also { isPinned = true }
                     } else {
                         null
                     }

@@ -82,8 +82,8 @@
 - 启用快捷方式可能需要root；
 - **游戏 / 视频工具箱开关必须保持开启**，否则横屏状态下无法唤出；
 - 更新模块版本后，请再次重启上述三个应用（桌面 / 系统界面 / 手机管家），否则部分功能可能不生效；
-- 本项目只在 `HyperOS 3.300` 上测试过，其他机型或系统不保证可用性（`com.miui.securitycenter` 版本为 12.2.8，`com.miui.home` 版本为 6.01.05，`com.android.systemui` 版本为16.03.251211）；
-- 未来可能会云适配HyperOS2以及HyperOS4；
+- 本项目只在 `HyperOS 3.300` 上实机验证过，其他机型或系统不保证可用性（`com.miui.securitycenter` 版本为 12.2.8，`com.miui.home` 版本为 6.01.05，`com.android.systemui` 版本为16.03.251211）；
+- `HyperOS 2` 已完成离线静态适配（`adapt/hyperos2` 分支，**尚未实机验证**），详见下方「适配进度」；
 - LSPosed 框架必须支持 API 101 及以上；
 - 扇形应用展示的应用源于系统的 `getFreeformSuggestionList`，因此并不会展示所有应用；
 - 连续失败会触发熔断，hook 将不再主动生效（可在设置页查看通道状态并手动重试，或重启手机）；
@@ -98,6 +98,36 @@
 - 可能存在的各类 bug 或者不完善的功能、漏洞；
 - 代码含人量较低。
   
+## 适配进度
+
+| 系统版本 | 状态 | 说明 |
+|---|---|---|
+| **HyperOS 3** | ✅ 已实机验证 | 基线（本仓默认分支） |
+| **HyperOS 2** | 🧪 已离线适配，待实机验证 | `adapt/hyperos2` 分支 |
+| **HyperOS 4** | 🔬 研究中 | 桌面为 native 进程（无 dex），需 native hook 路线 |
+
+### HyperOS 2（`adapt/hyperos2`）
+
+四条通道中三条**零改动** —— 桌面手势、侧边栏、工具箱面板的锚点与 HyperOS 3 完全一致
+（侧边栏解析结果同为 `com.miui.dock.sidebar` 的 `f` / `b` / `c` + `RegionSamplingImageView`）。
+唯一需要适配的是 **SystemUI 磁贴链路**，共三处：
+
+1. QS 宿主适配器：HyperOS 2 无 pipeline 层，类名是 `com.android.systemui.qs.QSHostAdapter`。
+   现改为**候选表 + 契约校验**（必须声明 `interactor` 字段与 `createTile(String):QSTile`，
+   且 interactor 暴露磁贴枚举方法），不凭名字采信。
+2. 当前磁贴枚举：HyperOS 2 无 `getCurrentQSTiles()`，回落 `getCurrentTilesSpecs()` +
+   `getTile(spec)`。**旧路径优先**，HyperOS 3 / 4 行为零变化。
+3. `CustomTileExt`（后台弹出/启动限制豁免）在 HyperOS 2 上**不存在**。改为探测后跳过，
+   不再每次点击抛异常刷日志。
+
+> ⚠️ **已知功能降级**：因第 3 点，HyperOS 2 在**冻结 / 后台受限**场景下磁贴点击可能不生效；
+> 正常状态下不受影响。
+
+此外改为**按宿主分表**解析锚点：侧边栏六个角色是安全中心专属，桌面与 SystemUI 现在不再
+空跑全表（此前会稳定产出 6 行 `NOT_FOUND` 噪声并白白加载 DexKit）。
+
+**未经实机验证**，尝鲜请自行评估风险；出问题可关闭模块总开关或移除作用域回滚。
+
 ## 基于
 
 - [LSPosed](https://github.com/LSPosed/LSPosed)（libxposed API）

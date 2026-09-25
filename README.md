@@ -103,7 +103,31 @@
 - [LSPosed](https://github.com/LSPosed/LSPosed)（libxposed API）
 - [miuix](https://github.com/compose-miuix-ui/miuix)（HyperOS 风格 Compose UI 库）
 - [EzXHelper](https://github.com/KyuubiRan/EzXHelper)
+- [DexKit](https://github.com/LuckyPray/DexKit)（运行时 dex 解析，用于宿主混淆类名的结构化定位；自 `adapt/anchor-resolver` 分支起引入，仅打包 `arm64-v8a`）
   
+## 第三方组件与许可
+
+本项目自身以 [Apache License 2.0](LICENSE) 发布。以下为随 APK 分发的第三方组件及其许可义务：
+
+| 组件 | 版本 | 许可 | 说明 |
+|---|---|---|---|
+| DexKit | `org.luckypray:dexkit:2.3.0` | **Apache-2.0**（除 `Core/`）+ **LGPL-3.0**（`Core/`，即 `libdexkit.so` 内的 C++ 引擎） | 精确源码见 [GitHub tag 2.3.0](https://github.com/LuckyPray/DexKit/tree/2.3.0) 与 Maven 坐标 `org.luckypray:dexkit:2.3.0` |
+| libxposed API / service | 101.x | Apache-2.0 | 编译期依赖（`compileOnly`），不随 APK 分发 |
+| EzXHelper | 3.2.0-preview1 | Apache-2.0 | — |
+| miuix | 0.9.x | Apache-2.0 | — |
+
+关于 DexKit 的 LGPL-3.0 部分（`libdexkit.so`）：
+
+- 本项目**仅调用、不修改**该库，并以**动态加载**方式使用，因此本项目源码保持 Apache-2.0，无需按 LGPL 开放；
+- 该 `.so` 由模块在运行时加载，优先**直接从模块 APK 内**加载（`<模块APK>!/lib/arm64-v8a/libdexkit.so`，
+  该条目为 STORED 且页对齐，由系统 linker 直接 mmap），必要时回退到释放到宿主应用缓存目录后
+  以绝对路径 `System.load` 加载（文件名形如 `hypersidebar_libdexkit_<模块版本>_arm64-v8a.so`）；
+- **替换此库的方法**：把同 ABI 的其它 `libdexkit.so` 放到宿主应用的缓存目录下并命名为
+  `hypersidebar_libdexkit_override_arm64-v8a.so`（例如 `/data/user/0/<宿主包>/cache/`），
+  模块会**优先加载该文件**。本项目不对它做签名或完整性校验——这正是 LGPL-3.0 §4 要求的"用户可替换"；
+- 完整文本：LGPL-3.0 <https://www.gnu.org/licenses/lgpl-3.0.html>、Apache-2.0 <https://www.apache.org/licenses/LICENSE-2.0>；
+- 若后续版本修改了 DexKit 源码，修改部分将按 LGPL-3.0 单独提供。
+
 ## 开源协议
 
 [Apache License 2.0](LICENSE)

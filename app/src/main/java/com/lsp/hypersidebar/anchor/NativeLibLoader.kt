@@ -27,7 +27,24 @@ internal object NativeLibLoader {
     private const val ABI = "arm64-v8a"
     private const val APK_ENTRY = "lib/$ABI/libdexkit.so"
 
-    enum class State { NOT_TRIED, LOADED, UNSUPPORTED_ABI, NO_CACHE_DIR, EXTRACT_FAILED, LOAD_FAILED }
+    /** 用户替换件（LGPL-3.0 §4 可替换性入口）：放入宿主 cacheDir 即优先加载，不做任何校验 */
+    private const val OVERRIDE_NAME = "hypersidebar_libdexkit_override_$ABI.so"
+
+    enum class State {
+        NOT_TRIED,
+        LOADED_OVERRIDE,
+        LOADED_APK,
+        LOADED_EXTRACTED,
+        UNSUPPORTED_ABI,
+        NO_MODULE_PATH,
+        NO_CACHE_DIR,
+        EXTRACT_FAILED,
+        LOAD_FAILED,
+        ;
+
+        val isLoaded: Boolean
+            get() = this == LOADED_OVERRIDE || this == LOADED_APK || this == LOADED_EXTRACTED
+    }
 
     @Volatile
     private var state = State.NOT_TRIED
@@ -42,30 +59,64 @@ internal object NativeLibLoader {
 
     /** 幂等；成功返回 true。任何异常都被吞掉并记入 [statusLine]。 */
     fun ensureLoaded(cacheDir: File?): Boolean {
-        if (state == State.LOADED) return true
+        if (state.isLoaded) return true
         synchronized(this) {
-            if (state == State.LOADED) return true
+            if (state.isLoaded) return true
             if (!Build.SUPPORTED_ABIS.contains(ABI)) {
                 return fail(State.UNSUPPORTED_ABI, Build.SUPPORTED_ABIS.joinToString())
             }
-            val dir = cacheDir ?: return fail(State.NO_CACHE_DIR, "cacheDir=null")
+            val apk = runCatching { EzXposed.modulePath }.getOrNull()
+            if (apk.isNullOrEmpty()) {
+                return fail(State.NO_MODULE_PATH, "EzXposed.modulePath 未初始化")
+            }
+            val notes = StringBuilder()
+
+            // 1) 用户替换件优先（存在才试；加载失败则继续走标准路径）
+            if (cacheDir != null) {
+                val override = File(cacheDir, OVERRIDE_NAME)
+                if (override.isFile) {
+                    val err = runCatching { System.load(override.absolutePath) }.exceptionOrNull()
+                    if (err == null) {
+                        state = State.LOADED_OVERRIDE
+                        detail = override.name
+                        HLog.i(TAG, "libdexkit loaded from user override: ${override.absolutePath}")
+                        return true
+                    }
+                    HLog.w(TAG, "user override rejected: ${brief(err)}")
+                    notes.append("override: ").append(brief(err)).append("; ")
+                }
+            }
+
+            // 2) 直接从模块 APK：条目 STORED + 页对齐 ⇒ linker 可 mmap，不需要解包，
+            //    也不受宿主域对 cacheDir 文件的执行限制（securitycenter:ui 的解包版会被拒）
+            val apkErr = runCatching { System.load("$apk!/$APK_ENTRY") }.exceptionOrNull()
+            if (apkErr == null) {
+                state = State.LOADED_APK
+                detail = "apk"
+                HLog.i(TAG, "libdexkit loaded from module apk: $apk!/$APK_ENTRY")
+                return true
+            }
+            notes.append("apk: ").append(brief(apkErr)).append("; ")
+
+            // 3) 兜底：抽到宿主 cacheDir 再 System.load(绝对路径)
+            val dir = cacheDir ?: return fail(State.NO_CACHE_DIR, notes.toString())
             val target = File(dir, "hypersidebar_libdexkit_${BuildConfig.VERSION_CODE}_$ABI.so")
             return try {
-                extract(target)
+                extract(apk, target)
                 System.load(target.absolutePath)
-                state = State.LOADED
-                detail = ""
-                HLog.i(TAG, "libdexkit loaded: ${target.absolutePath} (${target.length()} B)")
+                state = State.LOADED_EXTRACTED
+                detail = target.name
+                HLog.i(TAG, "libdexkit loaded from extracted file: ${target.absolutePath}")
                 true
             } catch (t: Throwable) {
+                notes.append("extract: ").append(brief(t))
                 target.delete()
-                fail(
-                    if (target.exists()) State.LOAD_FAILED else State.EXTRACT_FAILED,
-                    t.message ?: t.javaClass.simpleName
-                )
+                fail(if (target.exists()) State.LOAD_FAILED else State.EXTRACT_FAILED, notes.toString())
             }
         }
     }
+
+    private fun brief(t: Throwable): String = (t.message ?: t.javaClass.simpleName).take(200)
 
     private fun fail(s: State, why: String): Boolean {
         state = s
@@ -78,9 +129,7 @@ internal object NativeLibLoader {
      * 抽到 `.tmp` 再改名，避免半截文件被后续进程误用；已存在且大小一致则直接复用
      * （同名规则 = 模块 versionCode + ABI，覆盖安装后自动失效重抽）。
      */
-    private fun extract(target: File) {
-        val apk = runCatching { EzXposed.modulePath }.getOrNull()
-            ?: error("EzXposed.modulePath not initialized")
+    private fun extract(apk: String, target: File) {
         ZipFile(apk).use { zip ->
             val entry = zip.getEntry(APK_ENTRY) ?: error("entry not found: $APK_ENTRY")
             if (target.isFile && target.length() == entry.size) return

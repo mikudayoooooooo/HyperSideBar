@@ -56,6 +56,29 @@ import top.yukonga.miuix.kmp.nav.core.rememberNavSystemCornerRadius
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.UUID
 
+/**
+ * 弹出导航栈顶（空栈为 no-op）。
+ *
+ * ⚠️ **禁止把这些栈写成 `removeLast()`** —— 2026-09-26 实机崩溃（Android 14）：
+ *
+ * ```
+ * java.lang.NoSuchMethodError: No virtual method removeLast()Ljava/lang/Object;
+ *   in class Landroidx/compose/runtime/snapshots/SnapshotStateList;
+ *   at MainScreen$lambda$11$0$0$9$0$0$0(MainScreen.kt:347)
+ * ```
+ *
+ * 原因：Kotlin 2.4 把 `MutableList.removeLast()` 解析到 **Java 21 的
+ * `SequencedCollection.removeLast()` 成员方法**，而该成员在 Android 上**API 35
+ * （Android 15）才存在**。本项目 `minSdk = 33`，于是 Android 13/14 设备一调用
+ * 就 `NoSuchMethodError` 崩溃（表现为"添加磁贴快捷方式必崩"，因为该路径
+ * 会出栈返回上一页）。API 35+ 正常，所以问题只在旧系统上暴露。
+ *
+ * `removeAt(lastIndex)` 是 `java.util.List` 自 API 1 起就有的成员，任何版本都安全。
+ */
+private fun popLast(stack: MutableList<*>) {
+    if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex)
+}
+
 @Composable
 internal fun MainScreen(
     prefs: SharedPreferences,
@@ -135,7 +158,7 @@ internal fun MainScreen(
                                 animationSpec = tween(300, easing = AccelerateEasing(1.0f))
                             ) + fadeOut(animationSpec = tween(300, easing = AccelerateEasing(1.0f)))
                         ) {
-                            IconButton(onClick = { activeStack.removeLast() }) {
+                            IconButton(onClick = { popLast(activeStack) }) {
                                 Icon(
                                     imageVector = MiuixIcons.Back,
                                     contentDescription = stringResource(R.string.back)
@@ -261,17 +284,17 @@ internal fun MainScreen(
                             } else {
                                 ShortcutStore.updateShortcut(prefs, updated)
                             }
-                            settingsStack.removeLast()
+                            popLast(settingsStack)
                         },
                         onDelete = if (key.isNew) null else {
                             {
                                 ShortcutStore.removeShortcut(prefs, key.shortcut.id)
-                                settingsStack.removeLast()
+                                popLast(settingsStack)
                             }
                         },
                         onPickActivity = { settingsStack.add(SettingsKey.ShortcutPicker) },
                         onPickQsTile = { settingsStack.add(SettingsKey.QsTilePicker) },
-                        onBack = { settingsStack.removeLast() }
+                        onBack = { popLast(settingsStack) }
                     )
                 }
             }
@@ -344,9 +367,9 @@ internal fun MainScreen(
                                     )
                                 )
                             }
-                            settingsStack.removeLast()
+                            popLast(settingsStack)
                         },
-                        onBack = { settingsStack.removeLast() }
+                        onBack = { popLast(settingsStack) }
                     )
                 }
             }
@@ -379,9 +402,9 @@ internal fun MainScreen(
                                     )
                                 )
                             }
-                            settingsStack.removeLast()
+                            popLast(settingsStack)
                         },
-                        onBack = { settingsStack.removeLast() }
+                        onBack = { popLast(settingsStack) }
                     )
                 }
             }

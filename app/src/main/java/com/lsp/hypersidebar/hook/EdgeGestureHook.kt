@@ -119,6 +119,13 @@ class EdgeGestureHook(
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingShow: Runnable? = null
+
+    /** 原生触摸处理器字段（OS2 `mGesturesBackController` / OS3 `mGesturesBackTouchProcessor`），
+     *  解析一次后缓存（非 Volatile：仅在手势输入线程上读写） */
+    private var cachedProcessorField: java.lang.reflect.Field? = null
+
+    /** 字段解析失败的警告只打一次（避免每次呼出刷屏） */
+    private var processorMissingLogged = false
     private var fanSeenThisGesture = false
     private var probeRegistered = false
 
@@ -813,23 +820,94 @@ class EdgeGestureHook(
      * 在 $3.onSwipeStop 完整路径里。修法：给原生触摸处理器喂合成 UP——走完整原生收尾
      * （$3.onSwipeStop 拦截层把 shouldBack 翻为 false → 箭头动画退出 + 预测式返回复位 +
      * 状态机复位），在与原生相同的线程（本 hook 的输入线程）同步调用。
+     *
+     * **字段名跨 ROM 漂移**（2026-09-26 三代 MiuiHome 离线实证）：
+     *
+     * | ROM | 字段 | 处理器类 |
+     * |---|---|---|
+     * | OS3.318 | `mGesturesBackTouchProcessor` | `GesturesBackTouchProcessor` |
+     * | **OS2.0.215** | **`mGesturesBackController`** | **`GesturesBackController`** |
+     * | OS4 | GestureStubView 不在 dex（native/Rust launcher） | — |
+     *
+     * 关键：**方法签名三代一致**（`onPointerEvent(MotionEvent, GestureStubView):void`），
+     * 只有字段名与类名被重命名 ⇒ 按候选名优先、再按"字段类型声明了 onPointerEvent"结构化
+     * 兜底，即可同时覆盖两代，且未来再改名也能自愈。
      */
     private fun cancelNativeGesture(stub: View?, ev: MotionEvent) {
         if (stub == null) return
         runCatching {
-            val field = stub.javaClass.getDeclaredField("mGesturesBackTouchProcessor")
-                .apply { isAccessible = true }
-            val processor = field.get(stub) ?: return
-            val method = processor.javaClass.getMethod(
-                "onPointerEvent", MotionEvent::class.java, stub.javaClass
-            )
+            val processor = resolveGestureProcessor(stub) ?: run {
+                if (!processorMissingLogged) {
+                    processorMissingLogged = true
+                    HLog.w(TAG, "gesture processor field unresolved → native teardown skipped")
+                }
+                return
+            }
+            val method = findOnPointerEvent(processor.javaClass, stub.javaClass) ?: run {
+                HLog.w(TAG, "onPointerEvent not found on ${processor.javaClass.name}")
+                return
+            }
             method.isAccessible = true
             val up = MotionEvent.obtain(
                 ev.downTime, ev.eventTime, MotionEvent.ACTION_UP, ev.rawX, ev.rawY, 0
             )
             try { method.invoke(processor, up, stub) } finally { up.recycle() }
-            HLog.i(TAG, "native gesture teardown via synthetic UP")
+            HLog.i(TAG, "native gesture teardown via synthetic UP (${processor.javaClass.simpleName})")
         }.onFailure { HLog.w(TAG, "cancelNativeGesture failed: ${it.message}") }
+    }
+
+    /** 已知字段名（按 ROM 新旧排列），仅作快路径 —— 命中后仍要过 [findOnPointerEvent] 校验 */
+    private val gestureProcessorFieldNames = listOf(
+        "mGesturesBackController",          // OS2
+        "mGesturesBackTouchProcessor",      // OS3（历史名，保留向后兼容）
+    )
+
+    /**
+     * 解析 GestureStubView 上的"原生触摸处理器"字段值。
+     * ① 候选名快路径（须通过指纹校验，避免"名字还在但语义变了"）；
+     * ② 结构化兜底：遍历本类声明字段，取**类型声明了 `onPointerEvent(MotionEvent, <本类>)`** 的那个。
+     * 结果按 stub 类缓存（每进程一次），失败不缓存（下次仍可重试）。
+     */
+    private fun resolveGestureProcessor(stub: View): Any? {
+        val stubClass = stub.javaClass
+        cachedProcessorField?.let { f ->
+            if (f.declaringClass == stubClass) {
+                return runCatching {
+                    f.apply { isAccessible = true }.get(stub)
+                }.getOrNull()
+            }
+        }
+        // ① 候选名
+        for (name in gestureProcessorFieldNames) {
+            val f = runCatching { stubClass.getDeclaredField(name) }.getOrNull() ?: continue
+            if (findOnPointerEvent(f.type, stubClass) != null) {
+                cachedProcessorField = f
+                HLog.i(TAG, "gesture processor field resolved by name: $name (${f.type.simpleName})")
+                return runCatching { f.apply { isAccessible = true }.get(stub) }.getOrNull()
+            }
+        }
+        // ② 结构化：字段类型是否声明 onPointerEvent(MotionEvent, 本类)
+        for (f in stubClass.declaredFields) {
+            if (findOnPointerEvent(f.type, stubClass) == null) continue
+            cachedProcessorField = f
+            HLog.i(TAG, "gesture processor field resolved structurally: ${f.name} (${f.type.simpleName})")
+            return runCatching { f.apply { isAccessible = true }.get(stub) }.getOrNull()
+        }
+        return null
+    }
+
+    /**
+     * 在 [owner] 上找 `onPointerEvent(MotionEvent, <第二参可接受 stubClass>)`。
+     * 用参数形状而非精确 `getMethod`——第二参在三代都是 `GestureStubView` 本身，
+     * 但按 `isAssignableFrom` 匹配可容忍未来换成其父类/接口。
+     */
+    private fun findOnPointerEvent(owner: Class<*>, stubClass: Class<*>): java.lang.reflect.Method? {
+        val all = owner.declaredMethods.toList() + owner.methods.toList()
+        return all.firstOrNull { m ->
+            m.name == "onPointerEvent" && m.parameterTypes.size == 2 &&
+                MotionEvent::class.java.isAssignableFrom(m.parameterTypes[0]) &&
+                m.parameterTypes[1].isAssignableFrom(stubClass)
+        }
     }
 
     private fun cancelPendingShow() {

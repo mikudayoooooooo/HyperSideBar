@@ -244,6 +244,59 @@ class AnchorEngineTest {
         assertTrue(AnchorRoles.forHost(null).isEmpty())
     }
 
+    /**
+     * 回归防线（09-26 实机事故）：hook init 时 `Application` 还没创建 ⇒ `HostIdentity`
+     * 退化成 `unknown#0#0`。若此时直接 `forHost("unknown")` 得到空表，会**整表跳过**，
+     * 侧边栏三通道静默降级（实机表现：三宿主全 `skipped-no-roles-for-host`）。
+     *
+     * 约束：调用方必须能区分"未知宿主"（拿不到包名 ⇒ 回落全表）与"已知无关宿主"
+     * （如 systemui ⇒ 空表是正确结果）。判据是包名哨兵值，而不是"表为空"。
+     */
+    @Test
+    fun `unknown host is distinguishable from a known irrelevant host`() {
+        // 已知无关宿主 ⇒ 空表是**正确**的，应当跳过解析
+        assertTrue(AnchorRoles.forHost("com.android.systemui").isEmpty())
+        // 未知宿主同样返回空表 —— 所以调用方绝不能只看"空表"就跳过
+        assertTrue(AnchorRoles.forHost("unknown").isEmpty())
+        // 回落目标：全表必须非空且覆盖六个侧边栏/工具箱 role
+        assertEquals(6, AnchorRoles.ALL.size)
+    }
+
+    @Test
+    fun `full table resolves all four sidebar roles when host is unknown`() {
+        // 模拟"宿主未知 ⇒ 用全表解析"：保证回归修复后侧边栏通道照常装 hook
+        val onTouchSig = MethodSpec.of(
+            "onTouch", listOf("android.view.View", "android.view.MotionEvent"), "boolean"
+        ).signature
+        val drawSig = MethodSpec.of("draw", listOf("android.graphics.Canvas"), "void").signature
+        val dispatchSig = MethodSpec.of(
+            "dispatchTouchEvent", listOf("android.view.MotionEvent"), "boolean"
+        ).signature
+        val src = FakeFacts(
+            parents = mapOf(
+                "com.miui.dock.sidebar.f" to "java.lang.Object",
+                "com.miui.dock.sidebar.b" to "android.view.View",
+                "com.miui.dock.sidebar.c" to "android.graphics.drawable.Drawable",
+                "com.miui.dock.sidebar.RegionSamplingImageView" to "android.widget.ImageView",
+            ),
+            methods = mapOf(
+                "com.miui.dock.sidebar.f" to setOf(onTouchSig),
+                "com.miui.dock.sidebar.b" to setOf(onTouchSig),
+                "com.miui.dock.sidebar.c" to setOf(drawSig),
+                "com.miui.dock.sidebar.RegionSamplingImageView" to setOf(dispatchSig),
+            ),
+        )
+        val resolved = AnchorRoles.ALL.mapNotNull { spec ->
+            AnchorEngine.resolve(src, null, spec).takeIf { it.isResolved }?.role
+        }
+        // 四个侧边栏 role 必须全部解析出来 —— "通道不静默失效"的直接保证
+        listOf(
+            "sidebar_touch", "sidebar_cover", "sidebar_drawable", "sidebar_handle_bar"
+        ).forEach { role ->
+            assertTrue("$role must resolve so its hook still installs", role in resolved)
+        }
+    }
+
     @Test
     fun `home roles resolve from hints and never fall through to structural scan`() {
         val onTouchEvent = MethodSpec.of(

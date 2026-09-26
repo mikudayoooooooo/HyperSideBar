@@ -45,6 +45,9 @@ internal object AnchorResolver {
 
     private const val TAG = "AnchorResolver"
 
+    /** `HostIdentity` 拿不到 `applicationInfo` 时的占位包名 —— 表示"宿主待定"，不是"无关宿主" */
+    private const val UNKNOWN_HOST = "unknown"
+
     @Volatile
     private var table: Map<String, RoleResolution>? = null
 
@@ -59,6 +62,10 @@ internal object AnchorResolver {
 
     @Volatile
     private var l2Completed = false
+
+    /** hook init 时拿不到包名 ⇒ 表按全表建；`completeWithContext` 里重定过就置真 */
+    @Volatile
+    private var hostRescoped = false
 
     /** 便捷重载：直接吃宿主侧 prefs（总闸读 [PrefKeys.ANCHOR_STRUCTURAL_SCAN]，默认开） */
     fun resolveAll(prefs: android.content.SharedPreferences?): Map<String, RoleResolution> =
@@ -97,14 +104,54 @@ internal object AnchorResolver {
 
     /**
      * `Application.attach` 之后补 L2。已 RESOLVED 的 hint 不动；只重解 NOT_FOUND / AMBIGUOUS。
-     * 可重复调用，第二次是 no-op。
+     *
+     * 同时承担**重定宿主**职责：hook init 时若拿不到包名（`Application` 未就绪），表是按全表
+     * 建的、tag 是 `unknown#0#0`；本方法拿到真实 ctx 后重新选表并重算，把表收敛到该宿主真正
+     * 需要的 role 上。可重复调用；`hostRescoped` 之后即 no-op。
      */
     fun completeWithContext(ctx: Context) {
-        if (!structuralScanWanted || l2Completed) return
+        if (l2Completed && hostRescoped) return
         synchronized(this) {
-            if (!structuralScanWanted || l2Completed) return
+            if (l2Completed && hostRescoped) return
             val current = table ?: return
-            runCatching { runL2(ctx, current) }
+            // 宿主当时未知 ⇒ 先按真实宿主重选表并整体重算（L0/L1，顺带纠正 hostTag）
+            if (!hostRescoped) {
+                val real = runCatching { HostIdentity.of(ctx) }
+                    .getOrDefault(HostIdentity(UNKNOWN_HOST, 0L, 0L))
+                val specs = AnchorRoles.forHost(real.pkg)
+                val wasUnknown = hostTag.startsWith("$UNKNOWN_HOST#")
+                if (real.pkg != UNKNOWN_HOST && (wasUnknown || specs.size != current.size)) {
+                    if (specs.isEmpty()) {
+                        // 真实宿主无关（如 systemui）⇒ 清空表，后续不再解析
+                        hostTag = real.tag
+                        table = emptyMap()
+                        indexState = "skipped-no-roles-for-host"
+                        l2Completed = true
+                        hostRescoped = true
+                        HLog.i(TAG, "re-scoped after attach: no roles for host=${real.pkg}")
+                        return
+                    }
+                    val facts = ReflectFacts(ClassLoaderProvider.safeClassLoader)
+                    val rebuilt = LinkedHashMap<String, RoleResolution>(specs.size)
+                    for (spec in specs) {
+                        rebuilt[spec.role] = AnchorEngine.resolve(facts, null, spec)
+                    }
+                    table = rebuilt
+                    hostTag = real.tag
+                    hostRescoped = true
+                    HLog.i(
+                        TAG,
+                        "re-scoped after attach: host=${real.pkg} ${summary(rebuilt)}"
+                    )
+                }
+            }
+            if (!structuralScanWanted || l2Completed) return
+            val base = table ?: return
+            if (base.isEmpty()) {
+                l2Completed = true
+                return
+            }
+            runCatching { runL2(ctx, base) }
                 .onFailure { t ->
                     HLog.w(TAG, "L2 complete failed: ${t.javaClass.simpleName}: ${t.message}")
                     indexState = "unavailable"
@@ -122,12 +169,25 @@ internal object AnchorResolver {
 
         // 每宿主 role 表（OS2 分支 P1）：无关宿主 = 空表 ⇒ 不解析、不建 DexKit 索引。
         // 这既消掉 base 轮实测的 6 行 NOT_FOUND 噪声，也省掉 .so 映射与 5 次查询。
-        val specs = AnchorRoles.forHost(host.pkg)
+        //
+        // ⚠️ 本轮实机回归的修复点：hook `init()`（onPackageReady）时机 `Application`
+        // 往往**还没创建** ⇒ `currentApplication()` 返回 null ⇒ `HostIdentity` 退化成
+        // `unknown#0#0`。早期版本在这里直接 `forHost("unknown")` = 空表 = **整表跳过**，
+        // 导致侧边栏三通道静默降级（09-26 18:51 报告：三宿主全 `skipped-no-roles-for-host`）。
+        // 现在分两种情况：
+        //   - 宿主**已知**且表为空（如 systemui）⇒ 才是真的"该宿主无需解析"，跳过；
+        //   - 宿主**未知**（拿不到包名）⇒ 用全表解析，等 `completeWithContext` 拿不到再纠正。
+        // 宁可多解析几行，也不能因为拿不到包名就漏掉整条通道。
+        val hostKnown = host.pkg != UNKNOWN_HOST
+        val specs = if (hostKnown) AnchorRoles.forHost(host.pkg) else AnchorRoles.ALL
         if (specs.isEmpty()) {
             indexState = "skipped-no-roles-for-host"
             l2Completed = true
             HLog.i(TAG, "resolve skipped: no roles for host=${host.pkg}")
             return emptyMap()
+        }
+        if (!hostKnown) {
+            HLog.i(TAG, "host unknown at hook init (Application not ready); using full role table, will re-scope after attach")
         }
 
         // L2 需要 cacheDir + 模块 APK 路径。hook init 时 Application 经常还没 attach。

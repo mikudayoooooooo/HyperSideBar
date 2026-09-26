@@ -44,9 +44,24 @@ object FreeformLauncher {
 
     /**
      * 以小窗打开本模块的 Activity（全部应用面板，PRD"实质为一个以 freeform 小窗形式
-     * 打开的 activity"）。自身包的小窗资格已验证（2026-08-30：:ui 启动，windowMode=freeform）。
-     * getActivityOptions 返回 null 或反射失败时降级普通全屏启动，功能不中断。
-     * configure = 启动前对 intent 的附加配置（如携带面板数据 extras）。
+     * 打开的 activity"）。getActivityOptions 返回 null 或反射失败时降级普通全屏启动，
+     * 功能不中断。configure = 启动前对 intent 的附加配置（如携带面板数据 extras）。
+     *
+     * **资格查询按两个候选依次尝试**（2026-09-26 实机实证，两代 ROM 表现不同）：
+     *
+     * | ROM | `getActivityOptions(hostPkg)` | `getActivityOptions(modulePkg)` |
+     * |---|---|---|
+     * | OS3.318 | ✅ 非 null → 小窗 | （未走到） |
+     * | **OS2.0.215** | ❌ **null** → 全屏 | ✅ 非 null |
+     *
+     * 调用方在 `:ui` 进程里，`context.packageName` = 宿主包（`com.miui.securitycenter`），
+     * 而被拉起的 Activity 属于 [MODULE_PACKAGE]。MIUI 的小窗资格是**按包判定**的，
+     * 且**安全中心的资格随 ROM/安全中心版本变化** —— OS2 上它没资格，于是旧实现
+     * 必然降级全屏（实机日志 `own pkg freeform options null (B4: no eligibility?)`）。
+     *
+     * 处置：**宿主包优先**（=OS3 既有行为，零回归），失败再试模块包（=OS2 修复）。
+     * 两者都查不到才降级全屏。同一次会话内的对照实验可佐证：同一 context 下查模块包
+     * 成功（`MiuiMultiWindow fallback success`）而查宿主包失败。
      */
     fun launchSelfFreeform(context: Context, activity: Class<*>, configure: ((Intent) -> Unit)? = null) {
         // 显式模块包名（勿用 Intent(context, Class)——宿主进程包名错误，见 MODULE_PACKAGE 注释）
@@ -57,17 +72,30 @@ object FreeformLauncher {
         }
         try {
             val cls = Class.forName(MIUI_MULTI_WINDOW_UTILS)
-            val options = getActivityOptions(cls, context, context.packageName)
+            var eligiblePkg = context.packageName
+            var options = getActivityOptions(cls, context, context.packageName)
+            if (options == null && context.packageName != MODULE_PACKAGE) {
+                // OS2：宿主（安全中心）无小窗资格 ⇒ 改问被拉起的模块包本身
+                eligiblePkg = MODULE_PACKAGE
+                options = getActivityOptions(cls, context, MODULE_PACKAGE)
+                if (options != null) {
+                    HLog.i(TAG, "own pkg ineligible, module pkg eligible → freeform via $MODULE_PACKAGE")
+                }
+            }
             if (options != null) {
                 val method = context.javaClass.getMethod(
                     START_ACTIVITY_AS_USER,
                     Intent::class.java, android.os.Bundle::class.java, UserHandle::class.java
                 )
                 method.invoke(context, intent, options.toBundle(), Process.myUserHandle())
-                HLog.i(TAG, "own activity freeform ok: ${activity.simpleName}")
+                HLog.i(TAG, "own activity freeform ok: ${activity.simpleName} (eligibility=$eligiblePkg)")
                 return
             }
-            HLog.w(TAG, "own pkg freeform options null (B4: no eligibility?) → plain launch")
+            HLog.w(
+                TAG,
+                "own pkg freeform options null for both ${context.packageName} and $MODULE_PACKAGE " +
+                    "(B4: no eligibility?) → plain launch"
+            )
         } catch (e: Throwable) {
             HLog.w(TAG, "own activity freeform failed: ${e.message} → plain launch")
         }

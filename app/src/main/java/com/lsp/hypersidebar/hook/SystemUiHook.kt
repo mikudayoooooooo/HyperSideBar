@@ -87,10 +87,30 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
      * 必须过契约校验，否则会把"名字还在但接口变了"的类当适配器 stash 起来，
      * 让点击链路在更深处才失败（更难定位）。
      *
-     * 契约（两版本共同满足）：
-     *   ① 声明字段 `interactor`（实例非 null —— 它是点击链路的入口）
-     *   ② 声明方法 `createTile(String):QSTile`
-     *   ③ `interactor` 上存在 `getCurrentQSTiles()` 或 `getCurrentTilesSpecs()` 之一
+     * 契约（**只在 adapter 自身可判定的范围内**，见下方"教训"）：
+     *   ① 声明方法 `createTile(String):QSTile`（点击链路必经）
+     *   ② 具备**任一**磁贴枚举来源：声明 `interactor` 字段，**或**自身声明
+     *      `getTiles()/getSpecs()/getTile(String)` 之一
+     *
+     * ⚠️ **教训（09-27 实机，本函数第一版的 bug）**：第一版契约要求
+     * "`interactor` 的**类型**上存在 `getCurrentQSTiles()`/`getCurrentTilesSpecs()`"，
+     * 结果把 merlin 上的 `qs.QSHostAdapter` **误拒**了：
+     *
+     * ```
+     * [sys/SystemUiHook] QS host adapter candidate rejected by contract: com.android.systemui.qs.QSHostAdapter
+     * [sys/SystemUiHook] QS host adapter candidate rejected by contract: com.android.systemui.qs.QSTileHost
+     * [sys/SystemUiHook] QS host adapter not found on any candidate (ROM drift?)
+     * ```
+     *
+     * 但离线核查证明该契约**在 merlin 上必然失败**：
+     * `CurrentTilesInteractorImpl` 在 merlin 的 dex 里**声明方法数为 0**
+     * （marble 上同类型有 6 个方法、含 `getCurrentTilesSpecs`）。
+     * 即"interactor 类型上找枚举方法"这一条在 merlin 上**恒为假**，
+     * 于是**任何**候选都过不了 —— 这不是 ROM 漂移，是**我把可判定条件写错了**。
+     *
+     * 修正原则：**契约只校验 adapter 自己声明的东西**，不去要求它所依赖的第三方类型
+     * （那些类型的形态随 ROM 变化）具备某个具体方法。枚举能力的两档回落已在
+     * [findPinnedTile] 里处理，本函数无需越权预判。
      *
      * 全不命中 ⇒ 返回 null，`SystemUiHook` 保持"磁贴通道不可用"（fail-closed，不比现状差）。
      */
@@ -98,24 +118,12 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
         val cl = ClassLoaderProvider.safeClassLoader
         for (name in ADAPTER_CANDIDATES) {
             val cls = runCatching { cl.loadClass(name) }.getOrNull() ?: continue
-            val ok = runCatching {
-                val tile = cls.declaredMethods.firstOrNull {
-                    it.name == "createTile" && it.parameterTypes.size == 1 &&
-                        it.parameterTypes[0] == String::class.java
-                } ?: return@runCatching false
-                val field = cls.getDeclaredField("interactor").apply { isAccessible = true }
-                val interactorType = field.type
-                val hasEnumeration = interactorType.methods.any {
-                    it.parameterCount == 0 &&
-                        (it.name == GET_CURRENT_QS_TILES || it.name == GET_CURRENT_TILES_SPECS)
-                }
-                tile.returnType.name.contains("QSTile") && hasEnumeration
-            }.getOrDefault(false)
+            val (ok, why) = QsAdapterContract.check(cls)
             if (ok) {
-                HLog.i(TAG, "QS host adapter resolved: $name")
+                HLog.i(TAG, "QS host adapter resolved: $name ($why)")
                 return cls
             }
-            HLog.i(TAG, "QS host adapter candidate rejected by contract: $name")
+            HLog.i(TAG, "QS host adapter candidate rejected by contract: $name — $why")
         }
         return null
     }
@@ -185,8 +193,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
             if (adapterClass == null) {
                 HLog.w(TAG, "adapter unavailable: no candidate passed the contract check (ROM drift?)")
                 return null
-            }
-            // 到这里说明：类解析没问题，但构造器从未被调用过 ⇒ QS 自启动以来没被打开过
+            }            // 到这里说明：类解析没问题，但构造器从未被调用过 ⇒ QS 自启动以来没被打开过
             HLog.w(
                 TAG,
                 "adapter not stashed: ${adapterClass!!.name} has not been constructed yet " +

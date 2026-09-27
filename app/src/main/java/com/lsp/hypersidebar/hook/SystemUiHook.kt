@@ -177,29 +177,10 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                 }
             val spec = toSpec.invoke(null, cn) as? String ?: return@runCatching 0
 
-            // P0-2：两段式枚举。**旧路径一律优先** —— OS3/OS4 行为零变化（base 已实机验证），
-            // 仅当 `getCurrentQSTiles()` 不存在（OS2）才走 spec 列表。
+            // P0-2：磁贴定位。**旧路径一律优先**（OS3/OS4 行为零变化），
+            // 逐档回落到本 ROM 真正存在的那条（见 findPinnedTile 的 ROM 矩阵）。
             var isPinned = false
-            val tile = currentTileObjects(interactor)
-                ?.firstOrNull { t ->
-                    t != null && runCatching {
-                        t.javaClass.methods
-                            .firstOrNull { it.name == "getTileSpec" && it.parameterCount == 0 }
-                            ?.invoke(t) == spec
-                    }.getOrNull() == true
-                }?.also { isPinned = true }
-                // OS2 路径：spec 在当前列表 ⇒ 经适配器取实例
-                ?: run {
-                    if (spec in currentTileSpecs(interactor)) {
-                        // 只有**真的取到实例**才认 pinned —— 尚未创建的固定磁贴
-                        // getTile 会返回 null，此时不能谎报 pinned：下方 createTile
-                        // 现场创建的实例走 click(null) 实测无效（见 21:45 对照实验），
-                        // 必须落进 addWindowToken + mService.onClick 投递路径。
-                        pinnedTile(adapter, spec)?.also { isPinned = true }
-                    } else {
-                        null
-                    }
-                }
+            val tile = findPinnedTile(adapter, interactor, spec)?.also { isPinned = true }
                 ?: createdTiles.get(spec)
                 ?: run {
                     // 未固定磁贴：现场创建（createTile 返回 null 则彻底不可触发）
@@ -393,27 +374,84 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                 obj.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(obj)
             }
 
-    // ===== P0-2：当前磁贴枚举的两条通道（旧路径优先） =====
+    // ===== P0-2：磁贴枚举（逐档回落；旧路径优先） =====
 
     /**
-     * OS3/OS4 路径：`interactor.getCurrentQSTiles():List<QSTile>`。
-     * 返回 null = 接口不存在（OS2）或调用失败 ⇒ 调用方回落 [currentTileSpecs]。
+     * 找"**已固定**"磁贴的实例；返回 `null` = 未固定（或固定但拿不到实例）⇒ 调用方走
+     * `createTile` 现场创建 + `addWindowToken`/`onClick` 投递路径。
+     *
+     * 三档来源按"旧路径优先"依次回落。**下面的 ROM 矩阵是 2026-09-26 从真机/固件实测的**
+     * （`tools/qs_anchor_check.py`、`tools/merlin_tile_probe.py`）：
+     *
+     * | ROM（Android） | `interactor.getCurrentQSTiles()` | `interactor.getCurrentTilesSpecs()` | `adapter.getTiles()/getSpecs()/getTile()` |
+     * |---|---|---|---|
+     * | OS3.318 / OS4（A16/A17） | ✅ | ✅ | getTiles/getSpecs（**无 getTile**） |
+     * | marble OS2.0.215（**A15**） | ❌ | ✅ | ✅ 三者齐全 |
+     * | **merlin OS2.0.7.0（A14）** | ❌ | ❌ **都没有** | ✅ 三者齐全 |
+     *
+     * ⇒ 关键事实：**`adapter` 上的 `getTiles()/getSpecs()/getTile()` 是唯一跨全部 ROM 都存在的**，
+     * 而 `interactor` 的枚举方法在 merlin（Android 14 底包的 HyperOS 2）上**一个都没有**
+     * —— 只按 interactor 枚举会在 merlin 上完全失效。
+     *
+     * ⚠️ 只有**真的取到实例**才算 pinned：固定但尚未创建的磁贴，`getTile(spec)` 返回 null，
+     * 此时不能谎报 pinned —— `createTile` 现场创建的实例走 `click(null)` 实测无效
+     * （21:45 对照实验），必须落进 `addWindowToken` + `mService.onClick` 投递路径。
      */
-    private fun currentTileObjects(interactor: Any): List<*>? = runCatching {
-        interactor.javaClass.methods
-            .firstOrNull { it.name == GET_CURRENT_QS_TILES && it.parameterCount == 0 }
-            ?.invoke(interactor) as? List<*>
-    }.getOrNull().also { if (it != null) HLog.i(TAG, "clickTile: current tiles=${it.size}") }
+    private fun findPinnedTile(adapter: Any, interactor: Any, spec: String): Any? {
+        // ① OS3/OS4：interactor.getCurrentQSTiles() 直接给实例列表（旧路径）
+        tilesOf(interactor, GET_CURRENT_QS_TILES)?.firstOrNull { tileSpecOf(it) == spec }
+            ?.let { return it }
+        // ② 通用：adapter.getTiles()（OS2 A14/A15 都靠这条；OS3/OS4 也有）
+        tilesOf(adapter, "getTiles")?.firstOrNull { tileSpecOf(it) == spec }?.let { return it }
+        // ③ spec 列表判定 + adapter.getTile(spec)
+        //    spec 来源：interactor.getCurrentTilesSpecs()（OS3/OS4/marble-OS2）
+        //             → adapter.getSpecs()（**merlin 唯一可用的**）
+        if (spec in currentTileSpecs(adapter, interactor)) {
+            pinnedTile(adapter, spec)?.let { return it }
+        }
+        return null
+    }
+
+    /** `getTileSpec():String`（QSTile 的 spec 标识），失败返回 null */
+    private fun tileSpecOf(tile: Any?): String? = tile?.let {
+        runCatching {
+            it.javaClass.methods
+                .firstOrNull { m -> m.name == "getTileSpec" && m.parameterCount == 0 }
+                ?.invoke(it) as? String
+        }.getOrNull()
+    }
+
+    /** 反射取 `name():Collection/List`，非集合或调用失败返回 null */
+    private fun tilesOf(owner: Any, method: String): List<*>? = runCatching {
+        owner.javaClass.methods
+            .firstOrNull { it.name == method && it.parameterCount == 0 }
+            ?.invoke(owner) as? Collection<*>
+    }.getOrNull()?.toList()?.also {
+        if (it.isNotEmpty()) HLog.i(TAG, "clickTile: $method -> ${it.size} tiles")
+    }
 
     /**
-     * OS2 路径：`interactor.getCurrentTilesSpecs():List<String>`。
-     * 失败返回空表 ⇒ 视作"未固定" ⇒ 走 createTile（与现状降级路径一致）。
+     * 当前磁贴的 spec 字符串列表。两条来源逐档回落：
+     * `interactor.getCurrentTilesSpecs()` → **`adapter.getSpecs()`**（merlin 上前者不存在）。
+     * 失败返回空表 ⇒ 视作"未固定" ⇒ 走 createTile（与既有降级路径一致）。
      */
-    private fun currentTileSpecs(interactor: Any): List<String> = runCatching {
-        interactor.javaClass.methods
-            .firstOrNull { it.name == GET_CURRENT_TILES_SPECS && it.parameterCount == 0 }
-            ?.invoke(interactor) as? List<*>
-    }.getOrNull()?.filterIsInstance<String>().orEmpty()
+    private fun currentTileSpecs(adapter: Any, interactor: Any): List<String> {
+        val fromInteractor = runCatching {
+            interactor.javaClass.methods
+                .firstOrNull { it.name == GET_CURRENT_TILES_SPECS && it.parameterCount == 0 }
+                ?.invoke(interactor) as? List<*>
+        }.getOrNull()?.filterIsInstance<String>()
+        if (!fromInteractor.isNullOrEmpty()) return fromInteractor
+        val fromAdapter = runCatching {
+            adapter.javaClass.methods
+                .firstOrNull { it.name == "getSpecs" && it.parameterCount == 0 }
+                ?.invoke(adapter) as? List<*>
+        }.getOrNull()?.filterIsInstance<String>().orEmpty()
+        if (fromAdapter.isNotEmpty()) {
+            HLog.i(TAG, "clickTile: specs via adapter.getSpecs -> ${fromAdapter.size}")
+        }
+        return fromAdapter
+    }
 
     /**
      * OS2 路径：`adapter.getTile(spec):QSTile`。
@@ -421,7 +459,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
      */
     private fun pinnedTile(adapter: Any, spec: String): Any? = runCatching {
         adapter.javaClass.methods
-            .firstOrNull { it.name == "getTile" && it.parameterCount == 1 }
+            .firstOrNull { m -> m.name == "getTile" && m.parameterCount == 1 }
             ?.invoke(adapter, spec)
     }.getOrNull().also {
         if (it == null) HLog.i(TAG, "clickTile: getTile(spec) returned null, will createTile: $spec")

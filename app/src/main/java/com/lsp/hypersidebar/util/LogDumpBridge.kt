@@ -13,8 +13,12 @@ import com.lsp.hypersidebar.prefs.PrefKeys
  * 广播，本进程接收器把 HLog 环形缓冲 JSON + 进程状态快照（熔断等）以
  * [PrefKeys.LOG_DUMP_REPLY] 定向回传。模块 App 前台=活进程，必收。
  *
- * 注册点：EdgeGestureHook（launcher）/FreeformRelayHook（:ui）的 Application.attach，
- * 与探针接收器同款生命周期。
+ * 注册点：EdgeGestureHook（launcher）/FreeformRelayHook（:ui）/ **SystemUiHook（sys）**
+ * 的 Application.attach，与探针接收器同款生命周期。
+ *
+ * ⚠️ **新增 hook 进程时必须同时在此注册** —— 否则该进程日志不进自检报告。
+ * 09-27 报告即为此盲区的实例：SystemUI 未注册，磁贴通道全盲（无法判断 hook 是否加载、
+ * 适配器是否解析、点击走到哪一档），排查只能靠猜。
  */
 object LogDumpBridge {
 

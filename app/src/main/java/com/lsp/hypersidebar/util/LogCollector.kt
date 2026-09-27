@@ -82,7 +82,7 @@ object LogCollector {
         }
     }.getOrDefault(emptyList())
 
-    /** 三进程全量快照合并（自检 v2/导出用），按进程分段、段内时间升序。 */
+    /** 四进程全量快照合并（自检 v2/导出用），按进程分段、段内时间升序。 */
     fun mergedForExport(): Map<String, List<HLog.Entry>> = logs.toMap()
 
     /** IO 线程拉取并等待回传（自检 v2 用）：请求后短暂等待各进程 REPLY 落账。 */

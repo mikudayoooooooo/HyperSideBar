@@ -18,6 +18,7 @@ import io.github.kyuubiran.ezxhelper.core.finder.MethodFinder
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHook
 import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfterHooks
 import com.lsp.hypersidebar.util.HLog
+import com.lsp.hypersidebar.util.LogDumpBridge
 
 /**
  * SystemUI 进程 hook（批次 3，2026-09-05 定稿）：QS 磁贴数据层直点桥。
@@ -45,6 +46,9 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
     /** dagger 单例，构造于 SystemUI 启动期——构造即 stash 供接收器使用 */
     @Volatile private var hostAdapter: Any? = null
 
+    /** 已解析的适配器类（契约校验通过的候选）；供 [obtainAdapter] 惰性构造复用 */
+    @Volatile private var adapterClass: Class<*>? = null
+
     /** P0-3：本轮 ROM 是否提供 `CustomTileExt.exemptTemporarily()`（OS2 无 ⇒ 已知降级） */
     @Volatile private var exemptionSupported: Boolean? = null
 
@@ -68,6 +72,7 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
             HLog.w(TAG, "QS host adapter not found on any candidate (ROM drift?)")
             return
         }
+        this.adapterClass = adapterClass
         adapterClass.declaredConstructors.toList().createAfterHooks { param ->
             hostAdapter = param.thisObjectOrNull
             HLog.i(TAG, "QS host adapter stashed: ${adapterClass.name}")
@@ -144,7 +149,51 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                 HLog.i(TAG, "qs tile click receiver registered (via Application.attach)")
                     com.lsp.hypersidebar.anchor.AnchorResolver.completeWithContext(ctx)
                     HLog.i(TAG, "anchor after attach: ${com.lsp.hypersidebar.anchor.AnchorResolver.stateLine()}")
+                // 日志回传接收器（09-27 修复观测盲区）：此前只有 launcher/:ui 注册了
+                // LogDumpBridge，**SystemUI 进程的日志永远收不到** —— 自检报告里磁贴通道
+                // 等于全盲（27 日报告：[ui] 段是 securitycenter:ui，SystemUiHook 的日志
+                // 一行都没有，无法判断 hook 是否加载、适配器是否解析成功、点击走到哪一档）。
+                // 本进程不注册 CircuitBreaker/StatsRecorder，只回传 HLog 缓冲。
+                runCatching { LogDumpBridge.register(ctx) }
+                    .onFailure { HLog.w(TAG, "log dump register failed: ${it.message}") }
             }
+    }
+
+    /**
+     * 取 QS 宿主适配器**实例**。
+     *
+     * 背景（09-27 报告 `delivered=false` 的候选死因之一）：`hostAdapter` 只由
+     * `hookAdapterStash()` 在 **构造器被调用时**填充，而适配器是 dagger 单例
+     * —— **只在 SystemUI 首次需要 QS（例如首次下拉状态栏）时才构造**。装完模块重启
+     * SystemUI 后若从未下拉过状态栏就直接点磁贴，`hostAdapter` 仍是 null ⇒ 点击必失败。
+     *
+     * ⚠️ **不能靠"反射 new 一个适配器"兜底**（已核查 merlin/marble 的构造器）：
+     * `<init>(QSTileHost, CurrentTilesInteractorImpl, Context, TileServiceRequestController$Builder,
+     * CoroutineScope|Flags, DumpManager)` —— 多数参数无法从外部构造，用 null 填充只会得到
+     * `interactor == null` 的**废实例**，点击走到更深处才失败，比直接返回 null 更难排查。
+     *
+     * 因此这里只做**快路径 + 明确可诊断的失败**：拿不到就返回 null，调用方 fail-closed
+     * 返回 0 并回落 root 兜底（行为不比现状差），日志明确指出"QS 从未打开过"。
+     * 真正的根治办法是**让用户在下拉一次状态栏之后再点磁贴**（构造器 hook 会立刻 stash），
+     * 或改由 SystemUI 组件初始化时主动取单例 —— 前者零代码，后者需真机验证组件可达性。
+     */
+    private fun obtainAdapter(context: Context): Any? {
+        hostAdapter?.let { return it }
+        synchronized(this) {
+            hostAdapter?.let { return it }
+            if (adapterClass == null) adapterClass = resolveAdapterClass()
+            if (adapterClass == null) {
+                HLog.w(TAG, "adapter unavailable: no candidate passed the contract check (ROM drift?)")
+                return null
+            }
+            // 到这里说明：类解析没问题，但构造器从未被调用过 ⇒ QS 自启动以来没被打开过
+            HLog.w(
+                TAG,
+                "adapter not stashed: ${adapterClass!!.name} has not been constructed yet " +
+                    "(QS never opened since SystemUI start?) — falling back to root"
+            )
+            return null
+        }
     }
 
     /** 数据层直点磁贴；返回 1=磁贴已定位（点击异步），0=未就绪/未找到/异常。
@@ -161,8 +210,8 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
      *
      *  绑定那一半在下方「预热①」里已按方案 B 重写（见该处注释），不再无条件 unbind。 */
     private fun resolveAndClick(context: Context, cn: ComponentName, prebind: Boolean): Int {
-        val adapter = hostAdapter ?: run {
-            HLog.w(TAG, "clickTile: adapter not stashed yet")
+        val adapter = obtainAdapter(context) ?: run {
+            HLog.w(TAG, "clickTile: adapter unavailable (not stashed and could not obtain one)")
             return 0
         }
         return runCatching {

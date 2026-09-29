@@ -51,15 +51,21 @@ private const val SCREEN_MARGIN_DP = 72f
 /** 横屏边距：短轴空间紧张（1080px 内 72dp 边距+扇形投影+快捷栏超出全高），派生值按方向缩至 24dp。 */
 private const val LANDSCAPE_SCREEN_MARGIN_DP = 24f
 
-/** 底角扇形下缘离水平轴留出的夹角：约束来自屏幕底边/手势条（末项外缘须离底 ≥ 半图标+手势条约
- *  24dp）。弧带视觉外缘≈355dp < 竖屏宽 393dp，左右边撞不到，故下缘可压到 12° 换更大张角。 */
-internal const val CORNER_BOTTOM_GAP_DEG = 12f
-
 /** 底角扇形上缘离竖直轴的留白：顶端贴近竖直（6°），把张角尽量撑开像 Flyme 四分之一弧。 */
 internal const val CORNER_TOP_GAP_DEG = 6f
 
-/** 底角扇形弧张角（向上象限去掉上 6°/下 12° 留白 = 72°）：布局 sheet 弦长上限与几何分支同源。 */
-internal const val CORNER_SPAN_DEG = 90f - CORNER_BOTTOM_GAP_DEG - CORNER_TOP_GAP_DEG
+/** 底角下缘动态 gap 的 sin 上限（≈15°）：半径滑到很小时 asin 会把张角挤塌，封顶保底张角。 */
+internal const val CORNER_BOTTOM_GAP_MAX_SIN = 0.26f
+
+/** 布局 sheet 弦长收缩口径：默认底角配置（380dp 半径 / 48dp 图标）下的张角，与几何公式同源。 */
+internal fun cornerDefaultSpanDeg(): Float {
+    val cfg = FanConfig()
+    val safePx = cfg.cornerIconSizeDp / 2f + FanVisuals.BAND_EDGE_PAD_DP
+    val gap = Math.toDegrees(
+        Math.asin((safePx / cfg.cornerOuterRadiusDp).coerceIn(0f, CORNER_BOTTOM_GAP_MAX_SIN).toDouble())
+    ).toFloat()
+    return 90f - CORNER_TOP_GAP_DEG - gap
+}
 
 /**
  * 扇形几何（1B 修订 2026-08-30，用户定稿原始设想）：碰到屏幕边缘调展开角，不缩半径。
@@ -140,11 +146,20 @@ fun computeFanGeometry(
     val spanAngle: Float
     if (cornerAnchor) {
         // 底角专用几何（N1）：贴底角 + 用底角独立样式键（半径/图标/数量，默认=竖屏值）：
-        // 弧只占向上象限 [-90°+gap, -gap]（RIGHT），半径固定不收窄；下缘留 gap 防末项贴屏底。
-        // 数量保持全部，图标由下方 fitIconSize 按弧长自动缩小（用户接受图标变小）。
+        // 弧只占向上象限，半径固定不收窄；数量保持全部，图标由下方 fitIconSize 按弧长自动
+        // 缩小（用户接受图标变小）。
+        // 下缘 gap 动态=末项外缘（半图标+板外扩）恰好贴锚点水平轴——anchor 由触发端定为
+        // 手势条上沿（EdgeGestureHook.gestureSafeBottomY），固定角度在 heightPixels 语义不同
+        // 的设备上（全屏高 vs 可视高）必然一头越手势区、一头留白过大（2026-09-29 双机实锤）。
+        // iconSize 取配置值=保守上界（fitIcon 只会缩小）。
+        val safePx = config.cornerIconSizeDp * density / 2f +
+            FanVisuals.BAND_EDGE_PAD_DP * density
+        val bottomGapDeg = Math.toDegrees(
+            Math.asin((safePx / outerRadius).coerceIn(0f, CORNER_BOTTOM_GAP_MAX_SIN).toDouble())
+        ).toFloat()
         val upper = 90f - CORNER_TOP_GAP_DEG
-        spanAngle = CORNER_SPAN_DEG
-        startAngle = if (direction == FanDirection.RIGHT) -upper else 180f + CORNER_BOTTOM_GAP_DEG
+        spanAngle = 90f - CORNER_TOP_GAP_DEG - bottomGapDeg
+        startAngle = if (direction == FanDirection.RIGHT) -upper else 180f + bottomGapDeg
     } else {
         val roomAbove = (anchor.y - marginPx).coerceAtLeast(0f)
         val roomBelow = (height - marginPx - estBarBlockPx - anchor.y).coerceAtLeast(0f)
@@ -199,7 +214,9 @@ fun computeFanGeometry(
         innerRadius = outerRadius * 0.75f
     }
 
-    val settledAnchor = Offset(anchor.x, anchor.y)
+    // 窗口高度随导航条避让状态漂移（marble 实测同机 2262/2306 两种），锚点钳回窗口内，
+    // 防触发端与渲染端的坐标系错位把图标/板放到窗外。
+    val settledAnchor = Offset(anchor.x, anchor.y.coerceAtMost(height))
 
     var iconSizeDp = when {
         cornerAnchor -> config.cornerIconSizeDp

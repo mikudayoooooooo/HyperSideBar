@@ -23,7 +23,7 @@ import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.SettingsRepository
-import com.lsp.hypersidebar.ui.fan.CORNER_SPAN_DEG
+import com.lsp.hypersidebar.ui.fan.cornerDefaultSpanDeg
 import com.lsp.hypersidebar.ui.fan.FanVisuals
 import com.lsp.hypersidebar.ui.fan.effectiveIconSizeDp
 import top.yukonga.miuix.kmp.basic.Card
@@ -108,7 +108,7 @@ private class LayoutSpec(
     val defOuter: Float,
     val defOuterCount: Int,
     val defInnerCount: Int,
-    /** 弦长收缩口径的张角：竖 150 / 横 75 / 底角 76（=CORNER_SPAN_DEG） */
+    /** 弦长收缩口径的张角：竖 150 / 横 75 / 底角=cornerDefaultSpanDeg()（动态公式默认配置值） */
     val capSpanDeg: Float,
     /** 内/外圈半径滑条量程：底角默认半径(175/250)远大于竖/横屏(110/150)，量程须按方向分开，
      *  否则默认值落在量程外滑条显示不对。步进统一 10dp，steps=(max-min)/step-1。 */
@@ -180,7 +180,7 @@ private fun layoutSpec(orientation: LayoutOrientation): LayoutSpec = when (orien
         defOuter = LayoutDefaults.CORNER_OUTER_RADIUS,
         defOuterCount = LayoutDefaults.CORNER_MAX_APPS_OUTER,
         defInnerCount = LayoutDefaults.CORNER_MAX_APPS_INNER,
-        capSpanDeg = CORNER_SPAN_DEG,
+        capSpanDeg = cornerDefaultSpanDeg(),
         innerRadiusRange = 180f..360f,
         innerRadiusSteps = 17,
         outerRadiusRange = 240f..520f,

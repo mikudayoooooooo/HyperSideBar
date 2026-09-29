@@ -802,7 +802,15 @@ class EdgeGestureHook(
         }
         val dm = ctx.resources.displayMetrics
         val anchorX = if (downX < dm.widthPixels / 2f) 0f else dm.widthPixels.toFloat()
-        val anchorY = dm.heightPixels.toFloat()
+        // 锚点 y 只要 ≥ 渲染端窗口底即可，最终位置由 FanGeometry 的窗口钳制定——
+        // 窗口底=手势条 pill 上沿（merlin 0929 实机确认观感），才是真正的视觉安全线；
+        // heightPixels/navigationBars insets 的语义都随设备漂移（marble=全屏高 2400、
+        // merlin=可视高 2196、merlin 桌面 insets 被消费返回 0），且手势触摸区上沿≠pill
+        // 上沿，按它们贴线会一头越 pill、一头留白回退。
+        val anchorY = maxOf(
+            gestureSafeBottomY(view) ?: 0f,
+            dm.heightPixels.toFloat()
+        )
         HLog.i(TAG, "showFan(corner): anchor=($anchorX, $anchorY) downX=$downX")
         val postAtMs = android.os.SystemClock.uptimeMillis()
         val r = Runnable {
@@ -812,6 +820,18 @@ class EdgeGestureHook(
         }
         pendingShow = r
         mainHandler.post(r)
+    }
+
+    /** 手势条上沿（屏幕 y）：宿主窗口底 − navigationBars insets 底部；拿不到 insets 返回 null。 */
+    private fun gestureSafeBottomY(view: View?): Float? {
+        val root = view?.rootView ?: return null
+        val insets = runCatching { root.rootWindowInsets }.getOrNull() ?: return null
+        val barBottom = runCatching {
+            insets.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom
+        }.getOrDefault(0)
+        val loc = IntArray(2)
+        runCatching { root.getLocationOnScreen(loc) }.onFailure { return null }
+        return (loc[1] + root.height - barBottom).toFloat()
     }
 
     /**

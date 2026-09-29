@@ -34,10 +34,11 @@ class FanGeometryCornerTest {
         val anchor = Offset(10f, 2390f)
         val geometry = compute(anchor, cornerAnchor = true)
 
+        val gap = expectedBottomGapDeg()
         assertEquals(FanDirection.RIGHT, geometry.direction)
         assertEquals(-84f, geometry.startAngle, 0.001f)
-        assertEquals(-12f, geometry.endAngle, 0.001f)
-        assertEquals(CORNER_SPAN_DEG, geometry.spanAngle, 0.001f)
+        assertEquals(-gap, geometry.endAngle, 0.001f)
+        assertEquals(90f - 6f - gap, geometry.spanAngle, 0.001f)
         assertEquals(config.cornerOuterRadiusDp * density, geometry.outerRadius, 0.001f)
         assertEquals(config.cornerInnerRadiusDp * density, geometry.innerRadius, 0.001f)
     }
@@ -47,12 +48,24 @@ class FanGeometryCornerTest {
         val anchor = Offset(1070f, 2390f)
         val geometry = compute(anchor, cornerAnchor = true)
 
+        val gap = expectedBottomGapDeg()
         assertEquals(FanDirection.LEFT, geometry.direction)
-        assertEquals(192f, geometry.startAngle, 0.001f)
+        assertEquals(180f + gap, geometry.startAngle, 0.001f)
         assertEquals(264f, geometry.endAngle, 0.001f)
-        assertEquals(CORNER_SPAN_DEG, geometry.spanAngle, 0.001f)
+        assertEquals(90f - 6f - gap, geometry.spanAngle, 0.001f)
         assertEquals(config.cornerOuterRadiusDp * density, geometry.outerRadius, 0.001f)
         assertEquals(config.cornerInnerRadiusDp * density, geometry.innerRadius, 0.001f)
+    }
+
+    /** 下缘动态 gap 期望值：末项外缘（半图标+板外扩）贴锚点水平轴，与几何公式同源。 */
+    private fun expectedBottomGapDeg(): Float {
+        val safePx = config.cornerIconSizeDp * density / 2f + FanVisuals.BAND_EDGE_PAD_DP * density
+        return Math.toDegrees(
+            Math.asin(
+                (safePx / (config.cornerOuterRadiusDp * density))
+                    .coerceIn(0f, CORNER_BOTTOM_GAP_MAX_SIN).toDouble()
+            )
+        ).toFloat()
     }
 
     @Test

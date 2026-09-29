@@ -388,10 +388,12 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
                             }
                         }.onFailure { HLog.w(TAG, "addWindowToken failed: ${it.message}") }
                         val svc = readField(tile, "mService") ?: error("mService field is null")
-                        svc.javaClass.methods
+                        val onClick = svc.javaClass.methods
                             .firstOrNull { it.name == "onClick" && it.parameterCount == 1 }
-                            ?.invoke(svc, token)
                             ?: error("onClick method not found")
+                        // onClick 是 void：invoke 成功也返回 null，elvis 若挂在整个链上
+                        // 会把成功误报成 "not found"（2026-09-28 merlin 实锤）
+                        onClick.invoke(svc, token)
                         HLog.i(TAG, "clickTile: direct onClick delivered $spec")
                     }.onFailure { HLog.w(TAG, "direct onClick failed: ${it.message}") }
                 }
@@ -409,15 +411,19 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
      *  TileLifecycleManager 排队，服务连上后由 handlePendingMessages 按序冲刷投递。
      *
      *  lifecycle 用于投递后诊断：hasPendingClick()=true 说明这次点击只是入队、尚未送达
-     *  （要等下一次绑定才冲刷），=false 说明已直连或已冲刷送达。 */
+     *  （要等下一次绑定才冲刷），=false 说明已直连或已冲刷送达。
+     *  OS2 的 TileLifecycleManager 没有 hasPendingClick()，退看排队消息集合
+     *  （mQueuedMessages 非空=绑定链上还有未冲刷消息，含 listening，仅供诊断）。 */
     private fun scheduleClick(lifecycle: Any?, clickAction: Runnable) {
         val h = Handler(Looper.getMainLooper())
         h.post(clickAction)
         h.postDelayed({
             val pending = runCatching {
-                lifecycle?.javaClass?.methods
-                    ?.firstOrNull { it.name == "hasPendingClick" && it.parameterCount == 0 }
-                    ?.invoke(lifecycle) as? Boolean
+                val lc = lifecycle ?: return@runCatching null
+                lc.javaClass.methods
+                    .firstOrNull { it.name == "hasPendingClick" && it.parameterCount == 0 }
+                    ?.invoke(lc) as? Boolean
+                    ?: (readField(lc, "mQueuedMessages") as? Set<*>)?.isNotEmpty()
             }.getOrNull()
             HLog.i(TAG, "clickTile: post-delivery pendingClick=$pending")
         }, DELIVERY_DIAG_DELAY_MS)

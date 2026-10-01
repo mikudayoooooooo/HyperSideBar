@@ -46,6 +46,23 @@ class FanMenuController(
         private set
     private var host: ComposeFanHost? = null
 
+    // ===== 常驻扇形（fanPersistentOnRelease，13.1 同批新增） =====
+    // 呼出后松手不收起：扇形进入"点选"态（released）——点图标启动、点空白收起（吞点击）、
+    // 10s 看门狗兜底。releasedOnArrival 服务"fan 装配中就松手"的竞态：hook 先标记，
+    // showInternal 落地后转发给 host（消费即清，dismiss 兜清，防跨呼出残留）。
+    @Volatile private var releasedOnArrival = false
+
+    /** 常驻模式：fan 装配中松手 → 落地后直接进点选态（不收起）。 */
+    fun markReleasedOnArrival() {
+        releasedOnArrival = true
+    }
+
+    /** 常驻模式：进行中的手势在 fan 展示中结束（未提交选中）→ 转入点选态。
+     *  post 到主线程并运行时读 host——若 UP 提交了选中（LAUNCHED 收起竞态在先）则空操作。 */
+    fun onGestureEnded() {
+        mainHandler.post { host?.setReleased(true) }
+    }
+
     // ===== 数据记录（§11.3） =====
     private var showStartElapsed = 0L
     @Volatile private var exitAfterLaunch = false
@@ -128,6 +145,10 @@ class FanMenuController(
             val fanHost = obtainHost()
             host = fanHost
             fanHost.show(anchorX, anchorY, data.apps, data.allQuick, isLandscape, cornerAnchor)
+            // 常驻模式：装配中已松手（markReleasedOnArrival）→ 落地即进点选态；消费即清
+            val release = releasedOnArrival
+            releasedOnArrival = false
+            fanHost.setReleased(release)
             touchHeartbeat()
             // 数据记录（§11.3）：呼出次数/响应时间/两次呼出间隔；通道与 assembleFanData 同构派生
             exitAfterLaunch = false
@@ -310,6 +331,8 @@ class FanMenuController(
                 isShowing = false
                 host = null
             }
+            // 常驻点选态：点空白（未命中任何图标/快捷项）→ 收起并吞掉该次点击（用户拍板）
+            onOutsideTap = { dismiss(DismissCause.TAP_OUTSIDE) }
             idleHost = this
         }
     }
@@ -361,6 +384,7 @@ class FanMenuController(
 
     private fun doDismiss(via: String, cause: DismissCause) {
         cancelWatchdog()
+        releasedOnArrival = false
         val h = host
         if (h == null) {
             isShowing = false

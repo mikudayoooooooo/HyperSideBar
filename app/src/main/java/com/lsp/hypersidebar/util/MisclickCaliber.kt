@@ -10,8 +10,9 @@ package com.lsp.hypersidebar.util
 /** 触发通道（由 showInternal 的 isLandscape / cornerAnchor 派生，与 assembleFanData 同构） */
 enum class FanChannel { EDGE, STRIP, CORNER }
 
-/** 收起原因（doDismiss 的 cause 透传）；来电/切窗/冻结无事件源，只能以 WATCHDOG 近似 */
-enum class DismissCause { USER_UP, LAUNCHED, WATCHDOG, PREEMPTED }
+/** 收起原因（doDismiss 的 cause 透传）；来电/切窗/冻结无事件源，只能以 WATCHDOG 近似。
+ *  TAP_OUTSIDE=常驻模式（13.1 同批新增）下点空白主动收起——用户故意动作，不计误触。 */
+enum class DismissCause { USER_UP, LAUNCHED, WATCHDOG, PREEMPTED, TAP_OUTSIDE }
 
 /** 松手时指尖所在区（UP 现场判定，非事后推导） */
 enum class CancelZone { NONE, DEAD, INNER, OUTER, IN_BAND }

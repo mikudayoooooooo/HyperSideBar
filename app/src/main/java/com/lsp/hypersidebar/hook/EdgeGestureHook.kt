@@ -488,7 +488,12 @@ class EdgeGestureHook(
             }
             fanController.dispatchTouchEvent(ev)
             if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
-                fanController.dismiss()
+                // 常驻模式：松手未提交选中 → 转点选态（窗口保留）；现状=立即收起。
+                // UP 已提交选中时 LAUNCHED 收起在先、isShowing=false，两分支都自然跳过
+                if (fanController.isShowing) {
+                    if (fanPersistentOnRelease()) fanController.onGestureEnded()
+                    else fanController.dismiss()
+                }
                 resetGesture()
             }
             return true
@@ -568,8 +573,12 @@ class EdgeGestureHook(
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 val consume = cornerTrigger.onEnd() == CornerTrigger.Action.CONSUME
-                // 未展示前松手（触发后主线程装配尚未落地）：撤销排队的 show（"未预选松手即收起"）
-                if (consume && !fanController.isShowing) cancelPendingShow()
+                // 未展示前松手（触发后主线程装配尚未落地）：撤销排队的 show（"未预选松手即收起"）；
+                // 常驻模式改为照常落地并进点选态（同边缘通道 stallFired 分支）
+                if (consume && !fanController.isShowing) {
+                    if (fanPersistentOnRelease() && pendingShow != null) fanController.markReleasedOnArrival()
+                    else cancelPendingShow()
+                }
                 vlog("c#$cornerSeq UP/CANCEL consume=$consume shown=${fanController.isShowing}")
                 cornerTrigger.reset()
                 return consume
@@ -660,7 +669,12 @@ class EdgeGestureHook(
             }
             fanController.dispatchTouchEvent(ev)
             if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
-                fanController.dismiss()
+                // 常驻模式：松手未提交选中 → 转点选态（窗口保留）；现状=立即收起。
+                // UP 已提交选中时 LAUNCHED 收起在先、isShowing=false，两分支都自然跳过
+                if (fanController.isShowing) {
+                    if (fanPersistentOnRelease()) fanController.onGestureEnded()
+                    else fanController.dismiss()
+                }
                 resetGesture()
             }
             return true
@@ -767,10 +781,21 @@ class EdgeGestureHook(
                 vlog("g#$gestureSeq UP stallFired=$stallFired shown=${fanController.isShowing}")
                 cancelStallTimer()
                 if (stallFired) {
-                    cancelPendingShow()
-                    // 实测轮七：fan 已落地而手指未预选即松手 → 立即收起。
-                    // 此前只重置手势状态——fan 失去唯一驱动源后常驻（PRD"未预选松手→立即收起"）
-                    if (fanController.isShowing) fanController.dismiss()
+                    if (fanController.isShowing) {
+                        // 常驻模式：松手未提交选中 → 转点选态（窗口保留）；现状=立即收起。
+                        // 实测轮七的旧语义：fan 失去手势驱动源后会常驻——常驻模式下这正是
+                        // 期望行为，看门狗（10s）兜底收起
+                        if (fanPersistentOnRelease()) fanController.onGestureEnded()
+                        else {
+                            cancelPendingShow()
+                            fanController.dismiss()
+                        }
+                    } else if (fanPersistentOnRelease() && pendingShow != null) {
+                        // fan 装配中就松手：照常落地并直接进点选态（呼出后常驻的边界场景）
+                        fanController.markReleasedOnArrival()
+                    } else {
+                        cancelPendingShow()
+                    }
                     resetGesture()
                     return true
                 }
@@ -1040,6 +1065,13 @@ class EdgeGestureHook(
     /** 总开关（设置页"启用超级侧边栏"，PrefKeys.ENABLED）：关闭=本 hook 停止一切侵入。 */
     private fun moduleEnabled(): Boolean =
         runCatching { remotePrefs.getBoolean(PrefKeys.ENABLED, true) }.getOrDefault(true)
+
+    /** 常驻扇形（设置页"呼出后常驻"，PrefKeys.FAN_PERSISTENT_ON_RELEASE）：
+     *  开=松手未提交选中时扇形转点选态常驻；关=现状（未预选松手立即收起）。 */
+    private fun fanPersistentOnRelease(): Boolean =
+        runCatching {
+            remotePrefs.getBoolean(PrefKeys.FAN_PERSISTENT_ON_RELEASE, LayoutDefaults.FAN_PERSISTENT_ON_RELEASE)
+        }.getOrDefault(false)
 
     /** 底角斜滑开关（N1，默认关）：关闭=底角手势完全透传原生。 */
     private fun cornerSwipeEnabled(): Boolean = runCatching {

@@ -30,6 +30,11 @@ object PrefKeys {
     /** 底角斜滑触发开关（N1，仅竖屏）：默认关（opt-in）。开=底部两角斜向内上滑呼出扇形。 */
     const val CORNER_SWIPE_ENABLED = "cornerSwipeEnabled"
 
+    /** 常驻扇形（呼出后松手不收起，13.1 同批新增）：开=松手后扇形停留，点图标启动、
+     *  点空白收起（吞点击）、10s 无操作看门狗自动收起；关=现状（未预选松手立即收起）。
+     *  同时是 OS4 R1-J（securitycenter 侧改道点选模式）的交互地基。 */
+    const val FAN_PERSISTENT_ON_RELEASE = "fanPersistentOnRelease"
+
     /** 底角斜滑扇形独立样式（N1，仅竖屏）：默认值=竖屏布局值，故开箱与竖屏效果一致、可独立微调。 */
     const val CORNER_ICON_SIZE = "cornerIconSize"
     const val CORNER_INNER_RADIUS = "cornerInnerRadius"
@@ -256,6 +261,9 @@ object LayoutDefaults {
 
     /** 底角斜滑触发默认开关（N1）：默认关，用户显式开启后才接管底角手势。 */
     const val CORNER_SWIPE_ENABLED = false
+
+    /** 常驻扇形默认开关：默认关=现状交互（未预选松手立即收起）。 */
+    const val FAN_PERSISTENT_ON_RELEASE = false
 
     /** 底角斜滑扇形样式默认值：图标沿用竖屏（32dp），半径与数量独立定档（仿 Flyme 大半径
      *  四分之一弧，双环 13 图标不挤在小弧上）。0922 起数量不再跟竖屏联动。

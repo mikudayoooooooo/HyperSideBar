@@ -104,6 +104,10 @@ class SettingsRepository(val prefs: SharedPreferences) {
         prefs.getFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
     fun fanDimEnabled(): Boolean =
         prefs.getBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)
+
+    /** 常驻扇形开关（呼出后松手不收起，点选交互；13.1 同批新增）。 */
+    fun fanPersistentOnRelease(): Boolean =
+        prefs.getBoolean(PrefKeys.FAN_PERSISTENT_ON_RELEASE, LayoutDefaults.FAN_PERSISTENT_ON_RELEASE)
     /** 背景模糊来源（auto / dialog / wallpaper / behind / off）；非法或缺失值一律回 auto */
     fun fanBlurSource(): String =
         prefs.getString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT)
@@ -191,6 +195,7 @@ class SettingsRepository(val prefs: SharedPreferences) {
             putInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
             putFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
             putBoolean(PrefKeys.CORNER_SWIPE_ENABLED, LayoutDefaults.CORNER_SWIPE_ENABLED)
+            putBoolean(PrefKeys.FAN_PERSISTENT_ON_RELEASE, LayoutDefaults.FAN_PERSISTENT_ON_RELEASE)
             putFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
             putBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)
             putString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT)

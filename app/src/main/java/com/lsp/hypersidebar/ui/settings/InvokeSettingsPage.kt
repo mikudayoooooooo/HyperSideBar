@@ -26,6 +26,7 @@ import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.preference.SliderPreference
+import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 /**
@@ -94,6 +95,18 @@ internal fun InvokeSettingsPage(prefs: SharedPreferences, modifier: Modifier = M
                         },
                         onValueChangeFinished = {
                             repo.save(PrefKeys.TRIGGER_DWELL_MS, dwellMs)
+                        }
+                    )
+                    var persistent by remember(effectivePrefs, repo.revision) {
+                        mutableStateOf(repo.fanPersistentOnRelease())
+                    }
+                    SwitchPreference(
+                        title = stringResource(R.string.fan_persistent_title),
+                        summary = stringResource(R.string.fan_persistent_summary),
+                        checked = persistent,
+                        onCheckedChange = {
+                            persistent = it
+                            repo.save(PrefKeys.FAN_PERSISTENT_ON_RELEASE, it)
                         }
                     )
                 }

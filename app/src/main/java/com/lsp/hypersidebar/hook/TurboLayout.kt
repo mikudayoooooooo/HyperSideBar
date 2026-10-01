@@ -199,7 +199,12 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             }
             fanController.dispatchTouchEvent(ev)
             if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
-                fanController.dismiss()
+                // 常驻模式：松手未提交选中 → 转点选态（窗口保留）；现状=立即收起。
+                // UP 已提交选中时 LAUNCHED 收起在先、isShowing=false，两分支都自然跳过
+                if (fanController.isShowing) {
+                    if (fanPersistentOnRelease()) fanController.onGestureEnded()
+                    else fanController.dismiss()
+                }
                 resetStripGesture()
             }
             return
@@ -299,9 +304,19 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 vlog("s#$sGestureSeq UP stallFired=$sStallFired shown=${fanController.isShowing}")
                 cancelStallTimer()
                 if (sStallFired) {
-                    cancelPendingStripShow()
-                    // fan 已落地而手指未预选即松手 → 立即收起（PRD"未预选松手→立即收起"）
-                    if (fanController.isShowing) fanController.dismiss()
+                    if (fanController.isShowing) {
+                        // 常驻模式：松手未提交选中 → 转点选态（窗口保留）；现状=立即收起
+                        if (fanPersistentOnRelease()) fanController.onGestureEnded()
+                        else {
+                            cancelPendingStripShow()
+                            fanController.dismiss()
+                        }
+                    } else if (fanPersistentOnRelease() && sPendingShow != null) {
+                        // fan 装配中就松手：照常落地并直接进点选态（呼出后常驻的边界场景）
+                        fanController.markReleasedOnArrival()
+                    } else {
+                        cancelPendingStripShow()
+                    }
                 }
                 resetStripGesture()
             }
@@ -392,6 +407,12 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
      */
     private fun moduleEnabled(): Boolean =
         runCatching { remotePrefs.getBoolean(PrefKeys.ENABLED, true) }.getOrDefault(true)
+
+    /** 常驻扇形（设置页"呼出后常驻"，PrefKeys.FAN_PERSISTENT_ON_RELEASE）：同 EdgeGestureHook。 */
+    private fun fanPersistentOnRelease(): Boolean =
+        runCatching {
+            remotePrefs.getBoolean(PrefKeys.FAN_PERSISTENT_ON_RELEASE, LayoutDefaults.FAN_PERSISTENT_ON_RELEASE)
+        }.getOrDefault(false)
 
     fun getStats(): String {
         return "controller=${fanController.getStats()}, cover=$coverCtorCount"

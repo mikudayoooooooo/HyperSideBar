@@ -63,6 +63,8 @@
     <string name="state_off">关</string>
     <string name="trigger_dwell_title">呼出停顿</string>
     <string name="trigger_dwell_summary">贴边停顿达此时长后展开扇形；改动即时生效</string>
+    <string name="fan_persistent_title">呼出后常驻</string>
+    <string name="fan_persistent_summary">松手后扇形不自动收起：点图标启动、点空白收起；10 秒无操作自动收起</string>
     <string name="corner_swipe_title">底角斜滑呼出</string>
     <string name="corner_swipe_summary">从屏幕左下/右下角斜向内上滑，直接呼出扇形（仅竖屏）；与停顿呼出并存，默认关闭</string>
     <string name="fan_fog_title">板材质浓度</string>

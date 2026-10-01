@@ -174,6 +174,16 @@ class ComposeFanHost(
     var onQuickAppSelected: ((FanAppInfo) -> Unit)? = null
     var onDismiss: (() -> Unit)? = null
 
+    /** 常驻点选态（fanPersistentOnRelease，13.1 同批新增）：由 [FanMenuController] 在
+     *  "手势结束未提交选中"或"装配中已松手"时置位。released 态下：UP 提交跳过 150ms
+     *  预选门（点按节奏远快于滑选），DOWN 未命中任何图标=点空白 → onOutsideTap 收起。 */
+    @Volatile private var released = false
+    var onOutsideTap: (() -> Unit)? = null
+
+    fun setReleased(v: Boolean) {
+        released = v
+    }
+
     private class GeometryInput(
         val anchorX: Float,
         val anchorY: Float,
@@ -423,6 +433,15 @@ class ComposeFanHost(
                         val (fanSel, quickSel) = resolveSelection(
                             x, y, dx, dy, dist, deadZonePx, geometry
                         )
+                        // 常驻点选态：未命中任何图标/快捷项=点空白 → 收起并吞掉该次点击
+                        //（用户拍板"点外收起+吞点击"，防误触底层）。窗口全屏，常驻期间
+                        // 底层收不到任何触摸；收起后下一次触摸自然回归底层。
+                        if (released && fanSel == -1 && quickSel == -1) {
+                            Log.d(TAG, "persistent tap outside → dismiss")
+                            touchState.value = FanTouchState(x, y, 2, -1, -1)
+                            onOutsideTap?.invoke()
+                            return true
+                        }
                         if (fanSel != -1 || quickSel != -1) {
                             selectedSince = SystemClock.uptimeMillis()
                             StatsRecorder.onFanPreselected()
@@ -502,15 +521,18 @@ class ComposeFanHost(
                         val dwellTime = if (selectedSince == 0L) 0L else SystemClock.uptimeMillis() - selectedSince
                         val anySelected = fanSel in geometry.items.indices
                         val anyQuick = quickSel in geometry.quickApps.indices
+                        // 常驻点选态：跳过 150ms 预选门——点按的 DOWN→UP 间隔远小于滑选
+                        // 预选时长，门槛会把"明明点中了"判成"dwell too short"拒启动
+                        val commitGate = if (released) 0L else DWELL_MS
 
                         when {
                             !anySelected && !anyQuick -> {
                                 handleQuickBarTap(x, y, geometry, config, density)
                             }
-                            anySelected && dwellTime < DWELL_MS -> {
+                            anySelected && dwellTime < commitGate -> {
                                 Log.d(TAG, "dwell too short: ${dwellTime}ms, not launching")
                             }
-                            anyQuick && dwellTime < DWELL_MS -> {
+                            anyQuick && dwellTime < commitGate -> {
                                 Log.d(TAG, "dwell too short: ${dwellTime}ms, not launching")
                             }
                             anySelected -> {

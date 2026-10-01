@@ -165,7 +165,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private var sSwipeConfirmed = false
     private var sAnchorX = 0f
     private var sAnchorY = 0f
-    private var sAnchorT = -1L
     private var sStallFired = false
 
     /** 速度窗口基准时刻（与竖屏通道同源；基准位置复用 sAnchorX/Y） */
@@ -173,6 +172,16 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private var sGestureSeq = 0
     private var sFanSeen = false
     private var sPendingShow: Runnable? = null
+
+    // ===== 停顿定时器（13.1，与 EdgeGestureHook 对称）：判定从"事件到达时评估"改为
+    // "定时器主动开火"——手指静止后无 MOVE，旧判定整段失联（设定 250ms 实测 900ms+，
+    // dwell 滑条调参不可信）。:ui 条上触摸在主线程，定时器直接挂 mainHandler；
+    // fire 无需合成 UP（原生侧边栏从未收到事件，无收尾必要）。
+    private var sStallTimer: Runnable? = null
+    private var sStallTimerSeq = -1
+    /** fire 快照：postShowStripFan 已不依赖事件对象，此处仅日志/未来扩展留位 */
+    private var sLastRawX = 0f
+    private var sLastRawY = 0f
 
     // 滑动确认/重置阈值（px）：滑动距离设置项换算缓存，DOWN 时刷新（与竖屏通道同键同滞回）
     private var sConfirmPx = GestureThresholds.SWIPE_CONFIRM_PX
@@ -205,7 +214,6 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 sGestureSeq++
                 sSwipeConfirmed = false
                 sStallFired = false
-                sAnchorT = -1L
                 sFanSeen = false
                 // 内滑轴：DOWN 点就近角落的对角线（指向屏幕内部）
                 val dm = view.context.resources.displayMetrics
@@ -260,15 +268,19 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         sSwipeConfirmed = true
                         sAnchorX = ev.rawX
                         sAnchorY = ev.rawY
-                        sAnchorT = ev.eventTime
                         sSpeedWinT = ev.eventTime
                         vlog("s#$sGestureSeq swipe confirmed: travel=${travel.toInt()}px (>= ${sConfirmPx.toInt()}) angle=${angle.toInt()}")
+                        // 13.1：确认即挂停顿定时器（取代旧 sAnchorT 基准+事件内评估）
+                        armStallTimer(view)
                     }
                 }
 
                 if (sSwipeConfirmed && !sStallFired) {
+                    // fire 快照（对称竖屏通道；当前仅日志/扩展留位）
+                    sLastRawX = ev.rawX
+                    sLastRawY = ev.rawY
                     // 速度判据（0915 三轮实测定案，与竖屏通道同款）：只有"窗内平均速度仍高于
-                    // 阈值"才重新计时。位移式判据会被缓慢持续漂移周期性触发，把 dwell 整轮重置
+                    // 阈值"才重启定时器。位移式判据会被缓慢持续漂移周期性触发，把 dwell 整轮重置
                     // ——本通道实测「确认→STALL」均值 661ms，且数值是 250ms 的整数倍
                     // （s#9=1270≈250×5、s#10=768≈250×3）。
                     val dt = ev.eventTime - sSpeedWinT
@@ -277,22 +289,15 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         sAnchorX = ev.rawX
                         sAnchorY = ev.rawY
                         sSpeedWinT = ev.eventTime
-                        if (speed > GestureThresholds.STALL_MAX_SPEED_PX_S) {
-                            sAnchorT = ev.eventTime
-                        }
+                        if (speed > GestureThresholds.STALL_MAX_SPEED_PX_S) restartStallTimer(view)
                     }
-                    // 达标判定独立于速度：本帧刚重新计时时 sAnchorT==eventTime，差值 0 天然不误触发
-                    if (ev.eventTime - sAnchorT >= stripDwellMs()) {
-                        sStallFired = true
-                        StatsRecorder.onStall()
-                        vlog("s#$sGestureSeq STALL ${stripDwellMs()}ms anchor=(${sAnchorX.toInt()},${sAnchorY.toInt()})")
-                        postShowStripFan(view)
-                    }
+                    // 达标判定在定时器 fire（fireStall）：手指静止后无 MOVE 也照常触发
                 }
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 vlog("s#$sGestureSeq UP stallFired=$sStallFired shown=${fanController.isShowing}")
+                cancelStallTimer()
                 if (sStallFired) {
                     cancelPendingStripShow()
                     // fan 已落地而手指未预选即松手 → 立即收起（PRD"未预选松手→立即收起"）
@@ -333,9 +338,42 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private fun resetStripGesture() {
         sSwipeConfirmed = false
         sStallFired = false
-        sAnchorT = -1L
         sSpeedWinT = 0L
         sFanSeen = false
+        cancelStallTimer()
+    }
+
+    // ===== 停顿定时器（13.1，与 EdgeGestureHook 对称；:ui 条上触摸在主线程）=====
+
+    private fun armStallTimer(view: View) {
+        cancelStallTimer()
+        sStallTimerSeq = sGestureSeq
+        val dwell = stripDwellMs()
+        val r = Runnable { fireStall(view) }
+        sStallTimer = r
+        mainHandler.postDelayed(r, dwell)
+    }
+
+    /** 速度窗内超速=手指仍在主动移动：dwell 全额重启（语义同旧 sAnchorT=eventTime 重置）。 */
+    private fun restartStallTimer(view: View) {
+        armStallTimer(view)
+        vlog("s#$sGestureSeq STALL-TIMER restart ${stripDwellMs()}ms (speed > ${GestureThresholds.STALL_MAX_SPEED_PX_S.toInt()}px/s)")
+    }
+
+    private fun cancelStallTimer() {
+        sStallTimer?.let { mainHandler.removeCallbacks(it) }
+        sStallTimer = null
+    }
+
+    private fun fireStall(view: View) {
+        if (sStallTimer == null) return  // removeCallbacks 与在途任务竞态：已取消则静默退出
+        sStallTimer = null
+        if (sStallTimerSeq != sGestureSeq || !sSwipeConfirmed || sStallFired) return
+        if (DataDeadState.dead || !moduleEnabled()) return
+        sStallFired = true
+        StatsRecorder.onStall()
+        vlog("s#$sGestureSeq STALL-TIMER fire ${stripDwellMs()}ms anchor=(${sAnchorX.toInt()},${sAnchorY.toInt()})")
+        postShowStripFan(view)
     }
 
     private fun stripDwellMs(): Long = try {

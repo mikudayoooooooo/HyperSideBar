@@ -296,9 +296,24 @@ private fun LayoutSheetContent(
             .heightIn(max = contentMaxHeight)
             .verticalScroll(rememberScrollState())
     ) {
+        // 实时预览置顶（用户拍板 2026-10-02：预览是 sheet 的主视觉，参数都在它后面）：
+        // 含快捷栏（扇形+胶囊完整构图，拖滑条时整体反馈更直观）
+        Card(modifier = Modifier.fillMaxWidth()) {
+            FanStaticPreview(
+                config = config,
+                isLandscape = isLandscape,
+                prefs = repo.prefs,
+                corner = isCorner,
+                includeQuickBar = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(FanVisuals.PREVIEW_SHEET_HEIGHT)
+            )
+        }
+
         // 底角：触发开关与样式同 sheet、同草稿（✕ 全撤 / ✓ 全存，语义与滑条一致）
         if (isCorner) {
-            Card(modifier = Modifier.fillMaxWidth()) {
+            Card(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 SwitchPreference(
                     title = stringResource(R.string.corner_swipe_title),
                     summary = stringResource(R.string.corner_swipe_summary),
@@ -377,24 +392,6 @@ private fun LayoutSheetContent(
                     }
                 )
             }
-        }
-
-        // 实时预览：含快捷栏（扇形+胶囊完整构图，拖滑条时整体反馈更直观）
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = if (isCorner) 8.dp else 0.dp)
-        ) {
-            FanStaticPreview(
-                config = config,
-                isLandscape = isLandscape,
-                prefs = repo.prefs,
-                corner = isCorner,
-                includeQuickBar = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(FanVisuals.PREVIEW_SHEET_HEIGHT)
-            )
         }
 
         // 5 项样式：miuix SliderPreference（标题左 / 数值右 / 滑条下，HyperOS 标准长相），

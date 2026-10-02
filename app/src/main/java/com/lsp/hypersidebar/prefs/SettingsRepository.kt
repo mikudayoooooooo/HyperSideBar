@@ -100,6 +100,17 @@ class SettingsRepository(val prefs: SharedPreferences) {
         prefs.getBoolean(PrefKeys.CORNER_SWIPE_ENABLED, LayoutDefaults.CORNER_SWIPE_ENABLED)
     }
 
+    /** 底角触发参数（防误触收紧 2026-10-01，底角 sheet 滑条）。draft-aware 同开关。 */
+    fun cornerWidthRatio(): Float = getDraft(PrefKeys.CORNER_WIDTH_RATIO) {
+        prefs.getFloat(PrefKeys.CORNER_WIDTH_RATIO, LayoutDefaults.CORNER_WIDTH_RATIO)
+    }
+    fun cornerMinAngleDeg(): Int = getDraft(PrefKeys.CORNER_MIN_ANGLE_DEG) {
+        prefs.getInt(PrefKeys.CORNER_MIN_ANGLE_DEG, LayoutDefaults.CORNER_MIN_ANGLE_DEG)
+    }
+    fun cornerMaxAngleDeg(): Int = getDraft(PrefKeys.CORNER_MAX_ANGLE_DEG) {
+        prefs.getInt(PrefKeys.CORNER_MAX_ANGLE_DEG, LayoutDefaults.CORNER_MAX_ANGLE_DEG)
+    }
+
     fun fanFogIntensity(): Float =
         prefs.getFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
     fun fanDimEnabled(): Boolean =
@@ -195,6 +206,9 @@ class SettingsRepository(val prefs: SharedPreferences) {
             putInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
             putFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
             putBoolean(PrefKeys.CORNER_SWIPE_ENABLED, LayoutDefaults.CORNER_SWIPE_ENABLED)
+            putFloat(PrefKeys.CORNER_WIDTH_RATIO, LayoutDefaults.CORNER_WIDTH_RATIO)
+            putInt(PrefKeys.CORNER_MIN_ANGLE_DEG, LayoutDefaults.CORNER_MIN_ANGLE_DEG)
+            putInt(PrefKeys.CORNER_MAX_ANGLE_DEG, LayoutDefaults.CORNER_MAX_ANGLE_DEG)
             putBoolean(PrefKeys.FAN_PERSISTENT_ON_RELEASE, LayoutDefaults.FAN_PERSISTENT_ON_RELEASE)
             putFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
             putBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)

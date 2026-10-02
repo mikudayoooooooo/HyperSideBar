@@ -23,16 +23,25 @@ object GestureThresholds {
     const val MAX_SWIPE_ANGLE_DEG = 60f
 
     /**
-     * 底角触发区宽度占比（N1 底角斜滑，仅竖屏）：左右各 W×此值。
-     * 0.2 = W/5，实机 spike（S1）在 W=1080 下 cornerW=216px 判定正确。
+     * 底角触发区宽度占比 / 角度锥上下沿（默认值见 LayoutDefaults.CORNER_*，2026-10-01 起
+     * 用户可配置：底角 sheet 滑条，hook 经 remotePrefs 读取）——触发参数已迁出常量区。
      */
-    const val CORNER_WIDTH_RATIO = 0.2f
 
-    /** 底角斜滑接受锥下限（度）：与内滑轴夹角低于此=水平尾巴，接管但静默忽略。 */
-    const val CORNER_MIN_ANGLE_DEG = 20f
+    /**
+     * 内滑绝对量下限（dp，2026-10-01 新增）：角度是纯方向量不含幅度——起手贴边+
+     * 微小内漂即可凑出锥内角度。要求内滑分量达到此绝对值才可能命中，双条件锁死
+     * "贴边竖直滑"。
+     */
+    const val CORNER_INWARD_MIN_DP = 12f
 
-    /** 底角斜滑接受锥上限（度）：高于此=竖直尾巴，接管但静默忽略。 */
-    const val CORNER_MAX_ANGLE_DEG = 82f
+    /**
+     * 连续帧数：锥内命中/竖直判定都要求连续 N 帧一致——单帧瞬时角度被持指抖动主导
+     * （对齐边缘通道的速度窗思路；OS4 gesture_pause_detector 亦为多采样一致性）。
+     */
+    const val CORNER_CONFIRM_FRAMES = 2
+
+    /** 竖直判定余量（度）：deg > 锥上限+此值 连续 N 帧 = 明确竖直意图 → 重放透传。 */
+    const val CORNER_ABANDON_EXTRA_DEG = 3f
 
     /** 底角热区高度兜底（dp）：反射 NavStubView.getHotSpaceHeight() 失败时使用。 */
     const val CORNER_BAND_DP = 25f

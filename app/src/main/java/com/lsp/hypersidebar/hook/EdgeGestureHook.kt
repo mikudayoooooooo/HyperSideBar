@@ -153,6 +153,19 @@ class EdgeGestureHook(
     private var hotMethod: java.lang.reflect.Method? = null
     private var cornerSeq = 0
 
+    /** 底角事件快照：锥外早退时按原时序合成重放给原生（DOWN+MOVE，原生从未见过它们
+     *  ——hook 消费发生在 onTouchEvent 之前，重放=给处理器一个干净的新手势起点）。 */
+    private data class CornerEventSnapshot(
+        val downTime: Long,
+        val eventTime: Long,
+        val action: Int,
+        val x: Float,
+        val y: Float,
+    )
+
+    private val cornerReplayBuffer = ArrayList<CornerEventSnapshot>()
+    private var cornerReplaying = false
+
     override fun init() {
         HLog.i(TAG, "=== EdgeGestureHook init, pid=${android.os.Process.myPid()} ===")
         // 结构化锚点解析（每宿主进程一次）：本宿主也建表并写日志。
@@ -446,6 +459,8 @@ class EdgeGestureHook(
             return false
         }
         method.createBeforeHook {
+            // 重放进行中：缓冲事件经 dispatchTouchEvent 回流，本次 hook 直接放行（防递归）
+            if (cornerReplaying) return@createBeforeHook
             val ev = it.args[0] as? MotionEvent ?: return@createBeforeHook
             val view = it.thisObject as? View
             if (handleCornerTouch(ev, view)) it.result = true
@@ -535,16 +550,38 @@ class EdgeGestureHook(
                     resetPx = confirmPx * GestureThresholds.SWIPE_RESET_RATIO
                 }
                 val hot = view?.let { v -> hotSpacePx(v).toFloat() } ?: 0f
+                // 底角参数（防误触收紧 2026-10-01）：角窗宽度/角度锥全部设置项化（底角 sheet）
+                val density = dm?.density ?: 1f
+                val widthRatio = runCatching {
+                    remotePrefs.getFloat(PrefKeys.CORNER_WIDTH_RATIO, LayoutDefaults.CORNER_WIDTH_RATIO)
+                }.getOrDefault(LayoutDefaults.CORNER_WIDTH_RATIO)
+                val minDeg = runCatching {
+                    remotePrefs.getInt(PrefKeys.CORNER_MIN_ANGLE_DEG, LayoutDefaults.CORNER_MIN_ANGLE_DEG)
+                }.getOrDefault(LayoutDefaults.CORNER_MIN_ANGLE_DEG).toFloat()
+                val maxDeg = runCatching {
+                    remotePrefs.getInt(PrefKeys.CORNER_MAX_ANGLE_DEG, LayoutDefaults.CORNER_MAX_ANGLE_DEG)
+                }.getOrDefault(LayoutDefaults.CORNER_MAX_ANGLE_DEG).toFloat()
+                val inwardMinPx = GestureThresholds.CORNER_INWARD_MIN_DP * density
                 val claimed = cornerTrigger.onDown(
                     ev.rawX, ev.rawY, w, h, hot,
-                    w * GestureThresholds.CORNER_WIDTH_RATIO,
+                    w * widthRatio,
                     confirmPx,
-                    GestureThresholds.CORNER_MIN_ANGLE_DEG,
-                    GestureThresholds.CORNER_MAX_ANGLE_DEG
+                    inwardMinPx,
+                    minDeg,
+                    maxDeg,
+                    GestureThresholds.CORNER_ABANDON_EXTRA_DEG,
+                    GestureThresholds.CORNER_CONFIRM_FRAMES
                 )
+                if (claimed) {
+                    cornerReplayBuffer.clear()
+                    cornerReplayBuffer += CornerEventSnapshot(
+                        ev.downTime, ev.eventTime, ev.actionMasked, ev.rawX, ev.rawY
+                    )
+                }
                 vlog(
                     "c#$cornerSeq DOWN raw=(${ev.rawX.toInt()},${ev.rawY.toInt()}) " +
-                        "screen=(${w.toInt()},${h.toInt()}) hot=${hot.toInt()} claimed=$claimed"
+                        "screen=(${w.toInt()},${h.toInt()}) hot=${hot.toInt()} claimed=$claimed " +
+                        "width=${(w * widthRatio).toInt()} cone=[$minDeg,$maxDeg] inwardMin=${inwardMinPx.toInt()}"
                 )
                 return claimed
             }
@@ -557,13 +594,27 @@ class EdgeGestureHook(
                             "c#$cornerSeq corner swipe SHOW raw=(${ev.rawX.toInt()},${ev.rawY.toInt()})"
                         )
                         StatsRecorder.onStall()
+                        cornerReplayBuffer.clear()
                         fanSeenThisGesture = false
                         // 底角专用几何：锚点=精确底角、半径固定取竖屏设置、弧占向上象限、
                         // 快捷栏在上缘之上（N1 option B，用户定案）
                         postShowFanCorner(view)
                         return true
                     }
-                    CornerTrigger.Action.CONSUME -> return true
+                    CornerTrigger.Action.ABANDON_REPLAY -> {
+                        // 明确竖直（非斜滑意图）：把缓冲的 DOWN+MOVE 按原时序重放给原生
+                        // （合成事件经 dispatchTouchEvent 回流，hook 侧 cornerReplaying 放行；
+                        // 重放失败安全回退=保持消费）。之后实时事件经 abandoned→PASS 透传。
+                        replayCornerGesture(view)
+                        return false
+                    }
+                    CornerTrigger.Action.CONSUME -> {
+                        // 判定中：缓冲快照（重放用）；触发成功时清空（扇形已接管后续）
+                        cornerReplayBuffer += CornerEventSnapshot(
+                            ev.downTime, ev.eventTime, ev.actionMasked, ev.rawX, ev.rawY
+                        )
+                        return true
+                    }
                     CornerTrigger.Action.PASS -> return false
                 }
             }
@@ -572,22 +623,52 @@ class EdgeGestureHook(
                 return cornerTrigger.onPointerDown() == CornerTrigger.Action.CONSUME
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                val consume = cornerTrigger.onEnd() == CornerTrigger.Action.CONSUME
+                // 已重放（竖直尾巴）：native 正在处理重放手势，UP 自然透传完成它
+                val replayed = cornerTrigger.abandoned && !cornerTrigger.consumedToEnd
+                val consume = !replayed && cornerTrigger.onEnd() == CornerTrigger.Action.CONSUME
                 // 未展示前松手（触发后主线程装配尚未落地）：撤销排队的 show（"未预选松手即收起"）；
                 // 常驻模式改为照常落地并进点选态（同边缘通道 stallFired 分支）
                 if (consume && !fanController.isShowing) {
                     if (fanPersistentOnRelease() && pendingShow != null) fanController.markReleasedOnArrival()
                     else cancelPendingShow()
                 }
-                vlog("c#$cornerSeq UP/CANCEL consume=$consume shown=${fanController.isShowing}")
+                vlog("c#$cornerSeq UP/CANCEL consume=$consume replayed=$replayed shown=${fanController.isShowing}")
                 cornerTrigger.reset()
+                cornerReplayBuffer.clear()
                 return consume
             }
 
             // 已接管手势的其余事件（POINTER_UP 等）一律消费，绝不中途放行
-            else -> return cornerTrigger.claimed
+            else -> return cornerTrigger.claimed && !cornerTrigger.abandoned
         }
-        return cornerTrigger.claimed
+        return cornerTrigger.claimed && !cornerTrigger.abandoned
+    }
+
+    /**
+     * 锥外早退重放（2026-10-01）：把缓冲的 DOWN+MOVE 按原时序合成后喂回 NavStubView。
+     * 原生处理器从未见过这些事件（hook 消费发生在 onTouchEvent 之前），收到的是干净的
+     * 新手势起点——修复"底角起手的竖直上滑被吞、回桌面/后台白做"。重放事件经
+     * dispatchTouchEvent 回流时由 [cornerReplaying] 标志放行（防 BeforeHook 递归）；
+     * 失败安全回退=保持消费（现状行为，手势仍会丢但不至于撕裂）。
+     */
+    private fun replayCornerGesture(view: View?) {
+        val v = view ?: run {
+            cornerReplayBuffer.clear()
+            return
+        }
+        cornerReplaying = true
+        try {
+            for (s in cornerReplayBuffer) {
+                val e = MotionEvent.obtain(s.downTime, s.eventTime, s.action, s.x, s.y, 0)
+                try { v.dispatchTouchEvent(e) } finally { e.recycle() }
+            }
+            HLog.i(TAG, "c#$cornerSeq replay ${cornerReplayBuffer.size} buffered events to native (vertical tail)")
+        } catch (e: Throwable) {
+            HLog.w(TAG, "corner replay failed: ${e.message} — falling back to consume-to-end")
+        } finally {
+            cornerReplayBuffer.clear()
+            cornerReplaying = false
+        }
     }
 
     /**

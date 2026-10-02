@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import kotlin.math.roundToInt
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -303,6 +304,77 @@ private fun LayoutSheetContent(
                     summary = stringResource(R.string.corner_swipe_summary),
                     checked = repo.cornerSwipeEnabled(),
                     onCheckedChange = { repo.putDraft(PrefKeys.CORNER_SWIPE_ENABLED, it) }
+                )
+            }
+            // 触发判定参数（防误触收紧 2026-10-01）：角窗宽度 + 角度锥上下沿
+            Card(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                val cornerParamsActive = repo.cornerSwipeEnabled()
+                val wMinPct = (LayoutDefaults.CORNER_WIDTH_RATIO_MIN * 100).roundToInt()
+                val wMaxPct = (LayoutDefaults.CORNER_WIDTH_RATIO_MAX * 100).roundToInt()
+                val wStepPct = (LayoutDefaults.CORNER_WIDTH_RATIO_STEP * 100).roundToInt()
+                var widthPct by remember { mutableStateOf((repo.cornerWidthRatio() * 100).roundToInt()) }
+                SliderPreference(
+                    title = stringResource(R.string.corner_width_title),
+                    summary = stringResource(R.string.corner_width_summary),
+                    valueText = "$widthPct %",
+                    value = widthPct.toFloat(),
+                    valueRange = wMinPct.toFloat()..wMaxPct.toFloat(),
+                    steps = sliderSteps(wMinPct.toFloat(), wMaxPct.toFloat(), wStepPct.toFloat()),
+                    enabled = cornerParamsActive,
+                    onValueChange = {
+                        widthPct = quantizeToStep(
+                            it, wMinPct.toFloat(), wMaxPct.toFloat(), wStepPct.toFloat()
+                        ).roundToInt()
+                        repo.putDraft(PrefKeys.CORNER_WIDTH_RATIO, widthPct / 100f)
+                    }
+                )
+                var minDeg by remember { mutableStateOf(repo.cornerMinAngleDeg()) }
+                SliderPreference(
+                    title = stringResource(R.string.corner_min_angle_title),
+                    summary = stringResource(R.string.corner_min_angle_summary),
+                    valueText = "$minDeg °",
+                    value = minDeg.toFloat(),
+                    valueRange = LayoutDefaults.CORNER_MIN_ANGLE_MIN.toFloat()..
+                        LayoutDefaults.CORNER_MIN_ANGLE_MAX.toFloat(),
+                    steps = sliderSteps(
+                        LayoutDefaults.CORNER_MIN_ANGLE_MIN.toFloat(),
+                        LayoutDefaults.CORNER_MIN_ANGLE_MAX.toFloat(),
+                        LayoutDefaults.CORNER_ANGLE_STEP.toFloat()
+                    ),
+                    enabled = cornerParamsActive,
+                    onValueChange = {
+                        minDeg = quantizeToStep(
+                            it,
+                            LayoutDefaults.CORNER_MIN_ANGLE_MIN.toFloat(),
+                            LayoutDefaults.CORNER_MIN_ANGLE_MAX.toFloat(),
+                            LayoutDefaults.CORNER_ANGLE_STEP.toFloat()
+                        ).roundToInt()
+                        repo.putDraft(PrefKeys.CORNER_MIN_ANGLE_DEG, minDeg)
+                    }
+                )
+                var maxDeg by remember { mutableStateOf(repo.cornerMaxAngleDeg()) }
+                SliderPreference(
+                    title = stringResource(R.string.corner_max_angle_title),
+                    summary = stringResource(R.string.corner_max_angle_summary),
+                    valueText = "$maxDeg °",
+                    value = maxDeg.toFloat(),
+                    valueRange = LayoutDefaults.CORNER_MAX_ANGLE_MIN.toFloat()..
+                        LayoutDefaults.CORNER_MAX_ANGLE_MAX.toFloat(),
+                    steps = sliderSteps(
+                        LayoutDefaults.CORNER_MAX_ANGLE_MIN.toFloat(),
+                        LayoutDefaults.CORNER_MAX_ANGLE_MAX.toFloat(),
+                        LayoutDefaults.CORNER_ANGLE_STEP.toFloat()
+                    ),
+                    enabled = cornerParamsActive,
+                    onValueChange = {
+                        maxDeg = quantizeToStep(
+                            it,
+                            LayoutDefaults.CORNER_MAX_ANGLE_MIN.toFloat(),
+                            LayoutDefaults.CORNER_MAX_ANGLE_MAX.toFloat(),
+                            LayoutDefaults.CORNER_ANGLE_STEP.toFloat()
+                        ).roundToInt()
+                        repo.putDraft(PrefKeys.CORNER_MAX_ANGLE_DEG, maxDeg)
+                    }
                 )
             }
         }

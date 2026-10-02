@@ -67,6 +67,12 @@
     <string name="fan_persistent_summary">松手后扇形不自动收起：点图标启动、点空白收起；10 秒无操作自动收起</string>
     <string name="corner_swipe_title">底角斜滑呼出</string>
     <string name="corner_swipe_summary">从屏幕左下/右下角斜向内上滑，直接呼出扇形（仅竖屏）；与停顿呼出并存，默认关闭</string>
+    <string name="corner_width_title">底角触发宽度</string>
+    <string name="corner_width_summary">左右底角各占屏宽的比例；越窄越不易误触，但起手位置要求越准</string>
+    <string name="corner_min_angle_title">斜滑角度下限</string>
+    <string name="corner_min_angle_summary">低于此角度视为水平滑动，不触发</string>
+    <string name="corner_max_angle_title">斜滑角度上限</string>
+    <string name="corner_max_angle_summary">高于此角度视为竖直上滑（回桌面/后台），自动让路给系统手势</string>
     <string name="fan_fog_title">板材质浓度</string>
     <string name="fan_fog_summary">统一驱动板的混色、提亮与颗粒（0 = 板材质全关，只剩弧线与图标；若背景模糊来源已开启，模糊本身仍在，板不会变透明）；改动下次呼出生效</string>
     <string name="fan_dim_title">背景压暗</string>

@@ -321,7 +321,68 @@ private fun LayoutSheetContent(
                     onCheckedChange = { repo.putDraft(PrefKeys.CORNER_SWIPE_ENABLED, it) }
                 )
             }
-            // 触发判定参数（防误触收紧 2026-10-01）：角窗宽度 + 角度锥上下沿
+        }
+
+        // 5 项样式：miuix SliderPreference（标题左 / 数值右 / 滑条下，HyperOS 标准长相），
+        // 收进一张 Card（不加显式分割线——HyperOS 现行观感不用），取代旧手搓 SettingsSliderItem 裸堆
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp)
+        ) {
+            SliderPreference(
+                title = stringResource(R.string.icon_size),
+                summary = iconSummary,
+                valueText = "${iconSize.toInt()} dp",
+                // 存量值可能落在新量程之外（如旧值 48 而上限 31.5）→ 显示时钳进量程
+                value = iconSize.coerceIn(iconMin, iconMax),
+                valueRange = iconMin..iconMax,
+                enabled = iconSliderActive,
+                onValueChange = { putIcon(it) },
+                onValueChangeFinished = {}
+            )
+            SliderPreference(
+                title = stringResource(R.string.inner_radius),
+                valueText = "${innerRadius.toInt()} dp",
+                value = innerRadius.coerceIn(spec.innerRadiusRange),
+                valueRange = spec.innerRadiusRange,
+                steps = spec.innerRadiusSteps,
+                onValueChange = { putInnerWithClamp(it) },
+                onValueChangeFinished = {}
+            )
+            SliderPreference(
+                title = stringResource(R.string.outer_radius_max),
+                valueText = "${outerRadius.toInt()} dp",
+                value = outerRadius.coerceIn(spec.outerRadiusRange),
+                valueRange = spec.outerRadiusRange,
+                steps = spec.outerRadiusSteps,
+                onValueChange = { putOuterWithClamp(it) },
+                onValueChangeFinished = {}
+            )
+            // 内圈应用数（用户 2026-09-04：顺序置于外圈应用数之前）。实际可摆数受"外圈先挑走
+            // 应用"约束：内圈=总数−外圈，外圈调大内圈跟着变小
+            SliderPreference(
+                title = stringResource(R.string.inner_apps_count),
+                valueText = innerCount.toString(),
+                value = innerCount.toFloat(),
+                valueRange = spec.innerCountRange,
+                steps = spec.innerCountSteps,
+                onValueChange = { putInnerCount(it.toInt()) },
+                onValueChangeFinished = {}
+            )
+            SliderPreference(
+                title = stringResource(R.string.outer_apps_count),
+                valueText = outerCount.toString(),
+                value = outerCount.toFloat(),
+                valueRange = spec.outerCountRange,
+                steps = spec.outerCountSteps,
+                onValueChange = { putOuterCount(it.toInt()) },
+                onValueChangeFinished = {}
+            )
+        }
+
+        // 触发判定参数（防误触收紧 2026-10-01）：角窗宽度 + 角度锥上下沿（排样式之后）
+        if (isCorner) {
             Card(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
                 val cornerParamsActive = repo.cornerSwipeEnabled()
                 val wMinPct = (LayoutDefaults.CORNER_WIDTH_RATIO_MIN * 100).roundToInt()
@@ -392,64 +453,6 @@ private fun LayoutSheetContent(
                     }
                 )
             }
-        }
-
-        // 5 项样式：miuix SliderPreference（标题左 / 数值右 / 滑条下，HyperOS 标准长相），
-        // 收进一张 Card（不加显式分割线——HyperOS 现行观感不用），取代旧手搓 SettingsSliderItem 裸堆
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp)
-        ) {
-            SliderPreference(
-                title = stringResource(R.string.icon_size),
-                summary = iconSummary,
-                valueText = "${iconSize.toInt()} dp",
-                // 存量值可能落在新量程之外（如旧值 48 而上限 31.5）→ 显示时钳进量程
-                value = iconSize.coerceIn(iconMin, iconMax),
-                valueRange = iconMin..iconMax,
-                enabled = iconSliderActive,
-                onValueChange = { putIcon(it) },
-                onValueChangeFinished = {}
-            )
-            SliderPreference(
-                title = stringResource(R.string.inner_radius),
-                valueText = "${innerRadius.toInt()} dp",
-                value = innerRadius.coerceIn(spec.innerRadiusRange),
-                valueRange = spec.innerRadiusRange,
-                steps = spec.innerRadiusSteps,
-                onValueChange = { putInnerWithClamp(it) },
-                onValueChangeFinished = {}
-            )
-            SliderPreference(
-                title = stringResource(R.string.outer_radius_max),
-                valueText = "${outerRadius.toInt()} dp",
-                value = outerRadius.coerceIn(spec.outerRadiusRange),
-                valueRange = spec.outerRadiusRange,
-                steps = spec.outerRadiusSteps,
-                onValueChange = { putOuterWithClamp(it) },
-                onValueChangeFinished = {}
-            )
-            // 内圈应用数（用户 2026-09-04：顺序置于外圈应用数之前）。实际可摆数受"外圈先挑走
-            // 应用"约束：内圈=总数−外圈，外圈调大内圈跟着变小
-            SliderPreference(
-                title = stringResource(R.string.inner_apps_count),
-                valueText = innerCount.toString(),
-                value = innerCount.toFloat(),
-                valueRange = spec.innerCountRange,
-                steps = spec.innerCountSteps,
-                onValueChange = { putInnerCount(it.toInt()) },
-                onValueChangeFinished = {}
-            )
-            SliderPreference(
-                title = stringResource(R.string.outer_apps_count),
-                valueText = outerCount.toString(),
-                value = outerCount.toFloat(),
-                valueRange = spec.outerCountRange,
-                steps = spec.outerCountSteps,
-                onValueChange = { putOuterCount(it.toInt()) },
-                onValueChangeFinished = {}
-            )
         }
 
         if (clampedHint) {

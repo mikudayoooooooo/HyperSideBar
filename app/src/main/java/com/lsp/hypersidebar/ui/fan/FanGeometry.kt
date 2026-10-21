@@ -68,15 +68,18 @@ internal fun cornerDefaultSpanDeg(): Float {
 }
 
 /**
- * 扇形几何（1B 修订 2026-08-30，用户定稿原始设想）：碰到屏幕边缘调展开角，不缩半径。
+ * 扇形几何（1B 修订 2026-08-30；竖屏张角 2026-10-21 改固定，见下）。
  *
  * - 圆心 = 呼出位置（竖屏=初始触摸点高度；横屏由 B 路线通道固定为条中心，见 TurboLayout）
- * - 展开角自适应：默认以锚点水平轴上下对称（竖 ±75°/横 ±37.5°）；触碰屏幕边缘的一侧
- *   收窄至可容纳、另一侧放宽补足总角——弧长与图标间距不变，扇形向空侧倾斜
- *   （0.x 轮五"平移圆心保形"与 1A"半径收窄"两条路均废弃）
- * - 半径 = 用户设置（不再主动收窄）；仅双侧同时受限且总角塌缩至配置 60% 以下时
- *   兜底收缩并按上下可容纳空间比例分配剩余总角
- * - 单侧上限 acos(半图标/半径)：图标不得越过锚点后方（x 投影 ≥ 半图标）
+ * - **竖屏张角 = 配置值、以锚点水平轴对称**（默认 ±75°）：触发带 [H/3, 2H/3] 已把锚点限制在
+ *   屏中部，扇形本就放得下，故**不做**"按上下房间收窄 + 预算补到另一侧"的自适应——那套在
+ *   带两端（及大半径/大图标极端配置）会把一侧削掉、扇形歪向另一侧留出一段空白（用户实测反馈）。
+ *   唯一保留的收窄是**对称**的单侧角上限 acos(半图标/半径)：图标不得越过锚点后方
+ *   （x 投影 ≥ 半图标），否则大图标 + 小半径会把最外侧图标画到屏外。
+ * - **横屏仍按上沿房间倾斜**：圆心固定在条中心 56dp（贴屏顶），±37.5° 对称必然越顶，
+ *   受限侧让出的预算补到下方（总角守恒，弧长/图标间距不变）。
+ * - 半径 = 用户设置（竖屏不再收窄；横屏仅在双侧同时受限且总角塌缩至配置 60% 以下时兜底）
+ * - 快捷栏默认在扇形下方；下方放不下（会被钳制 ⇒ 与末项重叠）且上方放得下时整条翻到上缘之上
  * - 快捷栏图标跟随扇形图标实际生效尺寸（PRD §9.5"与扇形应用图标大小一致，跟随"）
  */
 fun computeFanGeometry(
@@ -131,9 +134,10 @@ fun computeFanGeometry(
         }
     )
 
-    // 快捷栏占位估算（供下侧房间预留）：跟随用户图标尺寸设置——快捷栏图标=扇形生效尺寸
-    // （PRD §9.5"与扇形应用图标大小一致，跟随"），拟合只会缩小 ⇒ 配置值=保守上界，
-    // 预留偏大不偏小。旧值固定 36dp 在大图标设置下预留不足，快捷栏顶到扇形下缘
+    // 快捷栏占位估算（**仅横屏用**：横屏圆心贴屏顶，下侧房间要扣掉快捷栏块才不越底；
+    // 竖屏已改为固定张角 + 快捷栏按实际高度避让，不再需要这个粗估）。跟随用户图标尺寸设置——
+    // 快捷栏图标=扇形生效尺寸（PRD §9.5"与扇形应用图标大小一致，跟随"），拟合只会缩小
+    // ⇒ 配置值=保守上界，预留偏大不偏小。
     val quickList = quickApps.take(6)
     val estBarBlockPx = (if (isLandscape) config.landscapeIconSizeDp else config.iconSizeDp) *
         density * 2.6f   // barGap(0.6) + 栏高(icon+上下各 0.5 padding)
@@ -161,51 +165,63 @@ fun computeFanGeometry(
         spanAngle = 90f - CORNER_TOP_GAP_DEG - bottomGapDeg
         startAngle = if (direction == FanDirection.RIGHT) -upper else 180f + bottomGapDeg
     } else {
-        val roomAbove = (anchor.y - marginPx).coerceAtLeast(0f)
-        val roomBelow = (height - marginPx - estBarBlockPx - anchor.y).coerceAtLeast(0f)
-
         // 单侧角上限：图标不得越过锚点后方（x 投影 ≥ 半图标），另设 85° 硬顶
         val halfIconPx = (if (isLandscape) config.landscapeIconSizeDp else config.iconSizeDp) * density / 2f
         fun sideCap(r: Float): Float = Math.toDegrees(
             Math.acos((halfIconPx / r).coerceIn(0.02f, 0.98f).toDouble())
         ).toFloat().coerceAtMost(85f)
 
-        // 该半径下单侧可容纳的最大角（房间投影）
-        fun sideMax(room: Float, r: Float): Float = if (r <= 1f) 0f else
-            Math.toDegrees(Math.asin((room / r).coerceIn(0f, 1f).toDouble())).toFloat()
+        if (isLandscape) {
+            // 横屏：圆心固定条中心 56dp（贴屏顶）⇒ ±37.5° 对称必越顶，仍按上沿房间倾斜
+            val roomAbove = (anchor.y - marginPx).coerceAtLeast(0f)
+            val roomBelow = (height - marginPx - estBarBlockPx - anchor.y).coerceAtLeast(0f)
 
-        var up = minOf(halfSpan, sideMax(roomAbove, outerRadius))
-        var dn = minOf(halfSpan, sideMax(roomBelow, outerRadius))
-        // 受限侧让出的预算补到另一侧（总角守恒 → 弧长/图标间距不变）
-        if (up < halfSpan) {
-            dn = minOf(span - up, sideMax(roomBelow, outerRadius), sideCap(outerRadius))
-        } else if (dn < halfSpan) {
-            up = minOf(span - dn, sideMax(roomAbove, outerRadius), sideCap(outerRadius))
-        }
+            // 该半径下单侧可容纳的最大角（房间投影）
+            fun sideMax(room: Float, r: Float): Float = if (r <= 1f) 0f else
+                Math.toDegrees(Math.asin((room / r).coerceIn(0f, 1f).toDouble())).toFloat()
 
-        // 双侧同时受限兜底：总角塌缩（< 配置 60%）时收缩半径，按房间比例恢复最小总角
-        val minTotal = span * 0.6f
-        if (up + dn < minTotal && roomAbove + roomBelow > 0f) {
-            val fracUp = roomAbove / (roomAbove + roomBelow)
-            val wantUp = (minTotal * fracUp).coerceIn(2f, minTotal - 2f)
-            val wantDn = minTotal - wantUp
-            val rFit = minOf(
-                roomAbove / degSin(wantUp),
-                roomBelow / degSin(wantDn)
-            )
-            outerRadius = minOf(outerRadius, rFit).coerceAtLeast(config.minRadiusDp * density)
-            up = minOf(wantUp, sideMax(roomAbove, outerRadius))
-            dn = minOf(wantDn, sideMax(roomBelow, outerRadius))
-        }
-        // 房间数据异常的极端防御：退回对称默认
-        if (up + dn < 4f) {
-            up = halfSpan
-            dn = halfSpan
-        }
+            var up = minOf(halfSpan, sideMax(roomAbove, outerRadius))
+            var dn = minOf(halfSpan, sideMax(roomBelow, outerRadius))
+            // 受限侧让出的预算补到另一侧（总角守恒 → 弧长/图标间距不变）
+            if (up < halfSpan) {
+                dn = minOf(span - up, sideMax(roomBelow, outerRadius), sideCap(outerRadius))
+            } else if (dn < halfSpan) {
+                up = minOf(span - dn, sideMax(roomAbove, outerRadius), sideCap(outerRadius))
+            }
 
-        // 上下不对称展开角 → 起止角（RIGHT：[-up, +dn]；LEFT：[180-dn, 180+up]）
-        startAngle = if (direction == FanDirection.RIGHT) -up else 180f - dn
-        spanAngle = up + dn
+            // 双侧同时受限兜底：总角塌缩（< 配置 60%）时收缩半径，按房间比例恢复最小总角
+            val minTotal = span * 0.6f
+            if (up + dn < minTotal && roomAbove + roomBelow > 0f) {
+                val fracUp = roomAbove / (roomAbove + roomBelow)
+                val wantUp = (minTotal * fracUp).coerceIn(2f, minTotal - 2f)
+                val wantDn = minTotal - wantUp
+                val rFit = minOf(
+                    roomAbove / degSin(wantUp),
+                    roomBelow / degSin(wantDn)
+                )
+                outerRadius = minOf(outerRadius, rFit).coerceAtLeast(config.minRadiusDp * density)
+                up = minOf(wantUp, sideMax(roomAbove, outerRadius))
+                dn = minOf(wantDn, sideMax(roomBelow, outerRadius))
+            }
+            // 房间数据异常的极端防御：退回对称默认
+            if (up + dn < 4f) {
+                up = halfSpan
+                dn = halfSpan
+            }
+
+            // 上下不对称展开角 → 起止角（RIGHT：[-up, +dn]；LEFT：[180-dn, 180+up]）
+            startAngle = if (direction == FanDirection.RIGHT) -up else 180f - dn
+            spanAngle = up + dn
+        } else {
+            // 竖屏：张角 = 配置值，恒以锚点水平轴对称（默认 ±75°）。
+            // **不再按上下房间收窄/倾斜**（2026-10-21 用户实测反馈）：触发带 [H/3, 2H/3] 已把
+            // 锚点限制在屏中部，扇形本就放得下；旧自适应在带两端（以及大半径/大图标等极端配置下
+            // 连中间位置）会把受限侧削掉、预算补到另一侧，表现就是"靠上/靠下留一段空白"。
+            // 唯一保留的收窄是**对称**的图标防越界上限（图标不得越过锚点后方）。
+            val half = minOf(halfSpan, sideCap(outerRadius))
+            startAngle = if (direction == FanDirection.RIGHT) -half else 180f - half
+            spanAngle = half * 2f
+        }
     }
     val endAngle = startAngle + spanAngle
 
@@ -249,10 +265,18 @@ fun computeFanGeometry(
     val effBarHeight = effQuickIconPx + effPadding * 2f
     val fanLeftX = settledAnchor.x + outerRadius * minCos
     val fanRightX = settledAnchor.x + outerRadius * maxCos
-    val baseY = if (cornerAnchor) {
-        settledAnchor.y + outerRadius * minSin - effBarHeight - effQuickIconPx * 0.6f
-    } else {
-        settledAnchor.y + outerRadius * maxSin + effQuickIconPx * 0.6f
+    val barGap = effQuickIconPx * 0.6f
+    val belowY = settledAnchor.y + outerRadius * maxSin + barGap
+    val aboveY = settledAnchor.y + outerRadius * minSin - effBarHeight - barGap
+    // 下方优先（PRD"快捷方式入口在半圆的下面"）；底角扇形向上展开，恒在上方。
+    // 竖屏固定张角后，靠触发带下沿 + 大半径/大图标会把下方顶穿（钳制后与末项/手势条重叠）⇒
+    // 此时整条翻到扇形上缘之上（用户 2026-10-21 定案：挤压就移快捷栏，不再改张角）。
+    // 判据用 72dp 安全边距而非屏底：下方虽在屏内但压进手势条时同样该翻上去。
+    val baseY = when {
+        cornerAnchor -> aboveY
+        belowY + effBarHeight <= height - marginPx -> belowY
+        aboveY >= effPadding -> aboveY
+        else -> belowY   // 上下都放不下（极端配置）：保留下方，交给钳制
     }
     val baseX = (fanLeftX + fanRightX) / 2f - effBarWidth / 2f
 

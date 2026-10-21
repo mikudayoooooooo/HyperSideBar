@@ -50,7 +50,9 @@ android {
         // 2.2.0 = 底角斜滑新触发通道 + 设置页信息架构收敛 + 误触率口径 v2。
         // 2.3.0 = OS4 快捷方式选择器（桌面 Rust 化后改走 root 枚举）+ 配置恢复通道
         //         + 快捷方式保存防整表覆盖；均无包名断代，2.2.0 用户可直接覆盖安装
-        versionName = "2.3.0"
+        // 2.3.1 = OS4 侧滑停顿以系统返回手势已认领为前提（系统手势门）
+        //         + 竖屏扇形张角固定为配置值（修靠上/靠下留白）；无包名断代，可直接覆盖安装
+        versionName = "2.3.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

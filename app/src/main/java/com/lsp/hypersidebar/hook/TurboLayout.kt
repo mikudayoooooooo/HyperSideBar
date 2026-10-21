@@ -252,9 +252,16 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
      * View——横竖屏由转发方判定传入（spy 无 View 可读），上下文=:ui 进程任一 context。
      * 门控由调用方（sink: b2Enabled）负责；本函数只做判定与驱动。
      * （2026-10-13 清理）原「是否 spy 流」旗标随 pilfer 一并删除：不再有抢占指令。
+     *
+     * **2026-10-21（用户口径）：本入口必须带"系统返回手势已认领"的证据才允许呼出。**
+     * spy 是全局 monitor，看得到系统根本不当作返回手势的触摸（状态栏高度以内起手、
+     * IME、手势排除区…）；旧行为按自己的 dwell 定时器直接呼出 ⇒ 与"共用系统原生返回
+     * 手势"的初衷相悖。现在 `requireSystem=true`：呼出前必须读到 native 在
+     * `handle_back_gesture` 里发的 seq=0 握手（=系统手势链路认领了这条流）。
+     * 条上 ROM 视图（`handleStripGesture`）本身就是系统手势链路的一部分，不设此门。
      */
     fun feedStripGesture(ctx: Context, landscape: Boolean, ev: MotionEvent) {
-        handleStripGestureCore(ctx, landscape, ev)
+        handleStripGestureCore(ctx, landscape, ev, requireSystem = true)
     }
 
     /** B2 sink 侧总门控（isOs4 + 退路面）：sink 是竖屏唯一驱动源，恒开（实验开关已删）。 */
@@ -264,7 +271,12 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     /** sink 回传令牌读取用（RelayGestureSink.requestPilfer 读 :ui 侧 remotePrefs）。 */
     internal val b2Prefs: SharedPreferences get() = remotePrefs
 
-    private fun handleStripGestureCore(ctx: Context, landscape: Boolean, ev: MotionEvent) {
+    private fun handleStripGestureCore(
+        ctx: Context,
+        landscape: Boolean,
+        ev: MotionEvent,
+        requireSystem: Boolean = false,
+    ) {
         // fan 展示中：转发驱动；手势中途落地先合成 DOWN 起始选择状态（边缘通道同款：
         // showInternal 主线程阻塞期间丢 DOWN 会导致窗口原点/选中起点全部失效）。
         // 派发期间置 B2 流驱动旗标：ComposeFanHost 孤儿防护对转发流的 DOWN/UP 放行
@@ -308,6 +320,11 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 sNativeStrict = nativeStrict()   /* 中间态档位：只在本手势 DOWN 读一次 */
                 sAuthSeen = false
                 sAuthSightDt = null
+                sAuthDt = ev.downTime
+                // 系统手势门（2026-10-21）：只有 spy 驱动的竖屏条需要额外证据；横屏的
+                // spy 流 native 侧不判（hsb_band_geom 横屏 fail-closed，不发握手）
+                sRequireSystem = requireSystem && !landscape && sysGateEnabled()
+                cancelSysGatePoll()
                 // 内滑轴：横屏条=就近角落的对角线（OS2/3 定稿，60° 锥容纳竖直/水平
                 // 内滑）；OS4 竖屏条=右缘中带，轴改水平向内——对角线轴对水平内滑有
                 // 0.707 投影衰减+锥倾斜（正是实测"横屏响应不如竖屏"的主因），竖屏
@@ -419,6 +436,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // 系统手势门的等待随流结束一起收（等不到就不呼出；结束=不可能再等）
+                cancelSysGatePoll()
                 // act / dur 是分诊的关键两个字段（2026-10-14 10:43 日志）：
                 //   CANCEL + 很短的 dur = **这条流被别的窗口抢走了**（桌面的手势窗口 pilfer ⇒
                 //   系统给观察副本发 CANCEL），不是用户抬手 ⇒ "抬手太快"那个判词会骗人；
@@ -502,15 +521,22 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         sFanSeen = false
         sAuthSightDt = null
         sAuthDt = 0L
+        sRequireSystem = false
         cancelStallTimer()
         cancelAuthPoll()
+        cancelSysGatePoll()
     }
 
     // ===== 中间态：native 判定 → :ui 呼出授权（2026-10-13，用户 m03327）=====
-    // strict=1 时本条链**优先**认 native 通过通道发布的 `<seq>:<downTime>:<x>:<y>`
-    // （native 侧 hsb_publish_evoke，每手势一次）；native 看不到这条流时由**回退支**
-    // 按 :ui 自判呼出。候选名字必须与 native 侧 kPubProps 顺序一致（native 自选 winner
-    // 并缓存）。默认 strict=0 ⇒ 行为与现状完全相同（本段全部路径不生效）。
+    // native 通过通道发布 `<seq>:<downTime>:<x>:<y>`（native 侧 hsb_publish_evoke，每手势一次）：
+    //   seq=0  = **系统返回手势链路已认领这条流**（握手）——2026-10-21 起这是**呼出的必要条件**
+    //            （系统手势门，见 fireStall；不看 strict 档，也不看抑制档）；
+    //   seq≥1  = native 自己的停顿判定成立（授权）——strict=1 时优先用它决定呼出时机。
+    // 候选名字必须与 native 侧 kPubProps 顺序一致（native 自选 winner 并缓存）。
+    //
+    // strict=0（默认）：呼出时机仍由 :ui 的 dwell 决定，但**必须有握手**；没有握手=系统没把
+    // 这条流当返回手势 ⇒ 不呼出（2026-10-21 用户口径，见 SYSTEM GATE）。
+    // strict=1：断言 native 的授权优先，等不到时（已握手）才回退 :ui 自判。
     //
     // 回退支的判据（2026-10-14e 重写，别再改回"最后一次 MOVE"）：与 native **同一条**
     // 停顿定时器 —— 确认即挂、速度窗内超速（> STALL_MAX_SPEED_PX_S）才重启，
@@ -525,8 +551,9 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     /**
      * native 未授权时的回退宽限：回退支在 `dwell + 该值` 之后落地（速度窗判据见上）。
      * 依据（真机 m03522）：左上角 y≈110/162 起手的两条停顿手势 `:ui` 判了、native
-     * **一次都没进** `handle_back_gesture`（系统把状态栏高度以内的边缘流不算返回手势）
-     * ⇒ strict 档下会"手势有效却不出扇形"（能用优先于判定单源，§25.10.5）。
+     * **一次都没进** `handle_back_gesture`（系统把状态栏高度以内的边缘流不算返回手势）。
+     * ⚠ 2026-10-21 起这一类流**直接不呼出**（系统手势门），不再靠这条宽限"抢救"——
+     * 本宽限现在只用于"已握手、但 native 的 dwell 授权慢于宽限"的那一段。
      * 取 200ms 是给 native 的"发布 → 25ms 轮询命中"留余量（实测延迟 1–12ms）；它同时
      * 覆盖"native 只在事件到达时才评估 dwell"这一拍（抖动事件间隔约 8ms）。
      */
@@ -564,6 +591,22 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     /** 取证：轮询里见过的**任意**发布（不筛 dt），回退日志用它区分"通道静默"与"覆盖差距"。 */
     private var sAuthLastAny: String? = null
     private var sStrictLogged = false
+
+    // ===== 系统手势门（2026-10-21）=====
+    /** 本流是否必须由系统返回手势链路认领（spy 驱动的竖屏条=是；DOWN 时定） */
+    private var sRequireSystem = false
+    /** 等系统握手的 25ms 轮询与起点（**只等握手**，不重复等 dwell：dwell 已成立） */
+    private var sSysGatePoll: Runnable? = null
+    private var sSysGateStartAt = 0L
+
+    /** 等系统握手的上限：真机实测 native 的入场滞后 290–914ms（见 native 侧 seq=0 注释），
+     *  这里只兜住"系统压根没认领"的那一类（超时=不呼出，不是延迟呼出）。 */
+    private val SYS_GATE_WAIT_CAP_MS = 1500L
+
+    /** 系统手势门总闸（默认开）。`setprop debug.hsb.strip.sysgate 0` = 退回 2026-10-21 前的
+     *  "自判即呼出"（诊断用；会让扇形重新出现在系统不当返回手势的流上，别用作出厂档）。 */
+    private fun sysGateEnabled(): Boolean =
+        sysPropGet(PropNames.STRIP_SYSGATE).trim() != "0"
 
     /** 读系统属性（2026-10-18 收口：实现搬进 `util.SysProps`，本文件只留委托）。 */
     private fun sysPropGet(key: String): String = SysProps.get(key)
@@ -679,6 +722,60 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         sAuthPoll = null
     }
 
+    // ===== 系统手势门（2026-10-21）：等 native 的"系统已认领这条流"握手 =====
+
+    /**
+     * dwell 已成立、但还没有系统认领的证据 ⇒ 25ms 一次读通道，最多 [SYS_GATE_WAIT_CAP_MS]。
+     *
+     * 语义：**只等握手**（seq=0）。dwell 是我们自己已经成立的条件，不再重复计时；
+     * 握手一到就按原路呼出。超时=系统没把这条流当返回手势 ⇒ 不呼出（quiet，只记一行）。
+     * 唯一例外是 strict 档：握手后仍可继续等 native 的停顿授权（由 [authArrive] 负责），
+     * 这里只负责"先放行到系统已认领"这一层。
+     */
+    private fun armSysGatePoll(ctx: Context, landscape: Boolean) {
+        if (sSysGatePoll != null) return
+        sSysGateStartAt = android.os.SystemClock.uptimeMillis()
+        val seq = sGestureSeq
+        val dt = sAuthDt
+        val r = object : Runnable {
+            override fun run() {
+                if (sSysGatePoll !== this) return
+                if (sGestureSeq != seq || sStallFired) {
+                    cancelSysGatePoll()
+                    return
+                }
+                when (pollNativeAuth(dt)) {
+                    AUTH_NONE -> {
+                        if (android.os.SystemClock.uptimeMillis() - sSysGateStartAt >= SYS_GATE_WAIT_CAP_MS) {
+                            cancelSysGatePoll()
+                            HLog.w(
+                                TAG,
+                                "s#$seq 系统手势门：${SYS_GATE_WAIT_CAP_MS}ms 内未见系统返回手势认领 ⇒ 不呼出" +
+                                    "（${authChannelHint()}）"
+                            )
+                        } else {
+                            mainHandler.postDelayed(this, 25L)
+                        }
+                    }
+                    else -> {
+                        cancelSysGatePoll()
+                        sAuthSightDt = dt
+                        HLog.i(TAG, "s#$seq 系统手势门：系统返回手势已认领（seq=0 握手，dt=$dt）⇒ 呼出")
+                        fireStall(ctx, landscape)
+                    }
+                }
+            }
+        }
+        sSysGatePoll = r
+        mainHandler.postDelayed(r, 25L)
+        vlog("s#$seq 系统手势门：dwell 已成立，等系统返回手势认领（≤${SYS_GATE_WAIT_CAP_MS}ms，等不到就不呼出）")
+    }
+
+    private fun cancelSysGatePoll() {
+        sSysGatePoll?.let { mainHandler.removeCallbacks(it) }
+        sSysGatePoll = null
+    }
+
     // ===== 停顿定时器（13.1，与 EdgeGestureHook 对称；:ui 条上触摸在主线程）=====
 
     private fun armStallTimer(ctx: Context, landscape: Boolean) {
@@ -718,18 +815,34 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         // 呼出与抢占交给 native，由它经 p7 哨兵把起手坐标送回。
         // native 侧的借道触发（hsb_evoke_try + 全部附锚点）已随"判死档清理"整段删除 ⇒ 置 1 会变成
         // **谁都不呼出**，故开关与分支一并删除：本条链恒为 :ui 自判（native 只负责抑制与收箭头）。
+        //
+        // ===== 系统手势门（2026-10-21，用户口径）=====
+        // spy 驱动的竖屏条：dwell 成立还不够 —— 必须已有"系统自己的返回手势链路认领了这条流"
+        // 的证据（native 在 `handle_back_gesture` 里发的 seq=0 握手）。系统没把它当返回手势
+        // （状态栏高度以内起手 / IME / 手势排除区…）⇒ native 那条链根本收不到 ⇒ 不呼出。
+        // 等不到就 **fail-closed**：宁可这一下不出，也不在"系统不认为是返回手势"的流上出扇形。
+        // 判据只认 downTime 匹配（见 pollNativeAuth），跨手势的旧发布不会被误认。
+        if (sRequireSystem && sAuthSightDt == null && !sAuthSeen) {
+            when (pollNativeAuth(sAuthDt)) {
+                AUTH_NONE -> {
+                    armSysGatePoll(ctx, landscape)
+                    return
+                }
+                else -> sAuthSightDt = sAuthDt   // 握手或授权 = 系统已认领
+            }
+        }
         sStallFired = true
         StatsRecorder.onStall()
         if (sNativeStrict) {
-            // strict 档：native 的 dwell 点已过 + 宽限 200ms 仍无授权 ⇒ 视作"native 没把这条流
-            // 当返回手势"，按 :ui 自判呼出（能用优先于判定单源）。判词带上通道证据，见 authChannelHint()。
+            // strict 档：native 的 dwell 点已过 + 宽限仍无授权。到这一步**系统手势门已经过了**
+            // （上面的等待只放行"握过手"的流），所以下面只决定"再等 native 的停顿授权还是自判"。
+            // 旧行为在"native 从未握手"时也自判呼出 —— 那正是本门要禁掉的分叉，已删。
             cancelAuthPoll()   // 已落地，别再多打 25ms 一轮的通道读
             com.lsp.hypersidebar.util.HLog.w(
                 TAG,
                 "s#$sGestureSeq AUTH 未等到 native 授权（停止移动 ${stripDwellMs()}ms+" +
-                    "${authGraceMs()}ms，dt=$sAuthDt" +
-                    (if (sAuthSightDt == null) "，native 未曾握手" else "，native 已握手后仍无授权") +
-                    "）⇒ 回退 :ui 自判呼出（${authChannelHint()}）"
+                    "${authGraceMs()}ms，dt=$sAuthDt，native 已握手）⇒ 回退 :ui 自判呼出" +
+                    "（${authChannelHint()}）"
             )
             postShowStripFan(ctx, landscape)
             return

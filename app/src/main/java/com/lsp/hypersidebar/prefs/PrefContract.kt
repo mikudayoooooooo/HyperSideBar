@@ -322,6 +322,8 @@ object PropNames {
     const val BGPROBE = "debug.hsb.bgprobe"
     const val B0_VISIBLE = "debug.hsb.b0.visible"
     const val NATIVE_STRICT = "debug.hsb.native.strict"
+    /** 系统手势门总闸（默认开；'0' = 退回"自判即呼出"，诊断用，见 TurboLayout.sysGateEnabled）。 */
+    const val STRIP_SYSGATE = "debug.hsb.strip.sysgate"
     const val NATIVE_HOOK = "debug.hsb.native.hook"
     val EVOKE_PROPS = arrayOf(
         "debug.hsb.evoke", "sys.hsb.evoke", "vendor.hsb.evoke",

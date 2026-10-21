@@ -1478,6 +1478,33 @@ static int hsb_suppress_swallow(const HsbBackEv *e, uint64_t now_ms) {
     if (!hsb_band_in(e->x, e->y)) return 0;
     g_supp.in_band++;
 
+    /*
+     * 「我看到了这条流」握手（seq=0）——**必须与抑制档无关**（2026-10-21 用户口径）。
+     *
+     * 语义（这是 :ui 呼出门的唯一判据）：能走到 `handle_back_gesture` 里、且落在触发带内
+     * ⇒ **系统自己的返回手势链路已经认领了这条流**。:ui 侧据此才允许呼出扇形；
+     * 系统没当返回手势的流（状态栏高度以内起手 / IME / 手势排除区 / 锁屏…）这里根本不经过
+     * ⇒ 不发布 ⇒ 不呼出。这就是「没有触发系统返回手势就不许呼出」的落点。
+     *
+     * 为什么要与抑制档解耦：抑制档（`debug.hsb.native.suppress`）只决定"吞不吞"，
+     * 而呼出判据不该随诊断档变化——否则 `suppress=0`（纯观测）会让呼出静默失效。
+     *
+     * payload 首段用 **seq=0**（判定成立的授权用 seq≥1），走同一条通道、同一个属性；
+     * 每条带内手势只写一次（不是每事件）。
+     *
+     * 时序依据（真机 10:54:52.916 / 10:54:53.830，逐条时间戳见 plan §26.7）：
+     *   spy（:ui 视角）DOWN t=52.916 → :ui 确认 ≈53.147；而 native 的**首个**事件
+     *   `back_event #1 act=0 dt=34728177` 落在 **53.830**（晚 914ms）——桌面手势窗口开始
+     *   收这条流本身就晚（拿到的是积压事件）。实测入场滞后 290~914ms ⇒ :ui 侧任何**固定**
+     *   宽限都追不上 ⇒ 改成事件驱动的握手（:ui 侧 `pollNativeAuth` 按 downTime 匹配，
+     *   见 TurboLayout.SYS_GATE_WAIT_CAP_MS）。
+     */
+    {
+        char payload[64];
+        snprintf(payload, sizeof(payload), "0:%lld:%.1f:%.1f", e->dt, e->x, e->y);
+        hsb_publish_evoke(payload);
+    }
+
     int mode = hsb_suppress_value();
     if (mode <= 0) {
         /* 观测档：零行为变化。每条带内起手都打一行（每手势最多一行，便于逐条对账）。 */
@@ -1501,29 +1528,8 @@ static int hsb_suppress_swallow(const HsbBackEv *e, uint64_t now_ms) {
     g_supp_stream.down_y = e->y;
     /* 内滑轴：与 :ui 的 OS4 竖屏条一致 —— 起手在屏幕左半 ⇒ 向内=+x，否则 -x */
     g_supp_stream.in_ux = (e->x < g_band_scr_w * 0.5f) ? 1.0f : -1.0f;
-    /*
-     * 「我看到了这条流」握手（2026-10-14 夜，用户 m0xxxxx 的真机时序逼出来的）——
-     * payload 首段用 **seq=0**（判定成立的授权用 seq≥1），走同一条通道、同一个属性。
-     *
-     * 为什么必须有这一枪（真机 10:54:52.916 / 10:54:53.830，逐条时间戳见 plan §26.7）：
-     *   spy（:ui 视角）DOWN t=52.916 → :ui 确认 ≈53.147 → 回退点 53.597
-     *   而 native 的**首个**事件 `back_event #1 act=0 dt=34728177` 落在 **53.830**（晚 914ms），
-     *   它的确认/dwell 都以"事件到达时刻"起算 ⇒ 授权 54.081（native 确认 +246ms）。
-     *   即：native 不是"判定慢"，而是**桌面手势窗口开始收这条流本身就晚**
-     *   （桌面只拿到 DOWN 之后的积压事件，原始事件时刻已经过去）。实测三条手势的入场滞后
-     *   在 290~914ms 之间浮动 ⇒ :ui 侧任何**固定**宽限都追不上（200ms 追不上 914ms，
-     *   而放宽到 1s 又会让"native 真的看不到这条流"的覆盖差距重新变成长延迟）。
-     *   ⇒ 改成事件驱动的握手：native 一进流就发 seq=0；:ui 收到后把回退截止点从
-     *     "确认+宽限" 推到 "**native 见到我** + dwell + 宽限" —— 此后 native 的授权
-     *     必然落在同一把尺子的 +dwell 处，宽限只需覆盖"发布→25ms 轮询命中"（实测 1–12ms）。
-     * 零成本：每条带内手势只多一次属性写（不是每事件），且 seq=0 让 `getprop debug.hsb.evoke`
-     * 多出一条判据 —— "native 见到这条流了吗"（这是此前只能靠猜的那件事）。
-     */
-    {
-        char payload[64];
-        snprintf(payload, sizeof(payload), "0:%lld:%.1f:%.1f", e->dt, e->x, e->y);
-        hsb_publish_evoke(payload);
-    }
+    /* 「系统已认领这条流」的 seq=0 握手在带内判定后**无条件**发布（见上方），
+     * 这里不再重复发——同一手势只写一次属性。 */
     return 0;
 }
 

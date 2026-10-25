@@ -125,18 +125,21 @@ object CornerGeomBridge {
         if (changeKey == lastW) return
         lastW = changeKey
 
-        // 免 root 那一路先写（真机更正：/data/local/tmp 对 app 是 EACCES ⇒ 这里内部走 su；
-        // 好处仍是不受属性长度限制 + 原子替换），写完哪怕 setprop 失败，native 也能从文件读到同一份值
-        ConfigFileBridge.pushScalars(
+        // 免 root 文件通道是主路（2026-10-24 迁址媒体目录；2026-10-25 起**成功即跳过 su**——
+        // native 读取顺序本就是 文件→属性→缺省，属性只剩文件失败时的兜底）。
+        val fileOk = ConfigFileBridge.pushScalars(
             linkedMapOf(
                 PROP_W_RATIO to wStr,
                 PROP_HOT_PCT to hStr,
                 PROP_CORNER_SUPP to suppStr,
-            ),
-            context
+            )
         )
 
         exec().execute {
+            if (fileOk) {
+                HLog.i(TAG, "corner geom 文件通道已送达 ⇒ 跳过 su 属性: w_ratio=$wStr hot_pct=$hStr supp=$suppStr")
+                return@execute
+            }
             val ok = runCatching {
                 // 一次 su 写三个属性（每条 su 都有进程开销，合并省开销）。命令是纯数字/0-1，无注入面。
                 val cmd = "setprop $PROP_W_RATIO $wStr; setprop $PROP_HOT_PCT $hStr; " +
@@ -324,6 +327,12 @@ object CornerGeomBridge {
         lastBand = key
 
         exec().execute {
+            // 免 root 文件通道（主路，2026-10-25）：成功 ⇒ 跳过 su 属性；失败 ⇒ su 兜底。
+            val fileOk = ConfigFileBridge.pushScalars(values.associate { it })
+            if (fileOk) {
+                HLog.i(TAG, "band geom 文件通道已送达 ⇒ 跳过 su 属性")
+                return@execute
+            }
             val cmd = values.joinToString("; ") { "setprop ${it.first} ${it.second}" }
             val ok = runCatching {
                 val p = ProcessBuilder("su", "-c", cmd).start()

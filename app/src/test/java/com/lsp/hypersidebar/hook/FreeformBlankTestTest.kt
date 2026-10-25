@@ -83,6 +83,21 @@ class FreeformBlankTestTest {
     }
 
     @Test
+    fun pinnedIconAreaIsNotBlankForUs() {
+        // 2026-10-25 乱跳修复：点挂起图标（pin 过渡后 ROM `setBounds` 的图标矩形）必须穿透
+        // 给 ROM 原生展开链 ⇒ isBlank 要说"非空白"；移植的那个仍按 ROM 语义跳过 pinned（不判"在里面"）。
+        val pin = win(pinned = true)
+        assertFalse(FreeformBlankTest.isBlank(500f, 600f, false, listOf(pin)))
+        assertFalse(FreeformBlankTest.isTouchedInFreeformWindow(500f, 600f, false, listOf(pin)))
+    }
+
+    @Test
+    fun pinnedOutsideIconStillBlank() {
+        // 图标矩形之外仍是空白（若有正常态小窗在场，这片区域的空白动作照常工作）。
+        assertTrue(FreeformBlankTest.isBlank(50f, 50f, false, listOf(win(pinned = true))))
+    }
+
+    @Test
     fun invisibleWindowIsSkipped() {
         assertFalse(
             FreeformBlankTest.isTouchedInFreeformWindow(

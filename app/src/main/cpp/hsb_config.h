@@ -2,11 +2,13 @@
 /*
  * 配置读取（native 侧）：**文件优先 → 系统属性 → 编译期缺省**。
  *
- * 为什么要有文件这一路（2026-10-17）：属性通道的两个硬伤——
+ * 为什么要有文件这一路（2026-10-17 引入；2026-10-24 迁址）：属性通道的两个硬伤——
  *   ① 写属性必须 root（模块 App 目前靠 `su setprop`）⇒ 权限链长、失败静默；
  *   ② 属性值长度受限、且 `debug.*` 重启即清。
- * `/data/local/tmp/hsb.conf` 是**全域可读写**的普通文件：模块 App 不需要 root 就能原子替换
- * （写 .tmp → rename），key/value 行式、可注释、想放多少放多少。
+ * 落点 = 模块 App 的**应用专属媒体目录** `Android/media/<applicationId>/hsb.conf`
+ * （app 免权限、免 root 可写；本侧按多候选路径读并打命中日志，见 `kCfgPaths[]`，
+ * 与 gate marker 同款自证）。原 `/data/local/tmp` 落点对 app 是 EACCES（2026-10-17
+ * 真机实测，当时靠 su 落盘），已降为 @tmp 候选（手工 su 写仍有效）。
  *
  * 键名约定：文件里用**短名**（去掉 `persist.hsb.` 前缀），例如 `corner.hot_pct=8`；
  * 调用方按完整属性名传参（`persist.hsb.corner.hot_pct`），内部自动剥前缀查找。

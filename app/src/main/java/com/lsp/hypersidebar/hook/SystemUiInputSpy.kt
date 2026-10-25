@@ -573,6 +573,14 @@ object SystemUiInputSpy {
             HLog.i(TAG, "takeover: 小窗动画中 ⇒ 不抢流")
             return@runCatching false
         }
+        // 挂起窗几何缺失（2026-10-25 乱跳修复的 fail-open 门）：isBlank 的 pinned 非空白
+        // 排除只对有几何的窗生效，几何缺失的挂起窗图标仍会被判"空白"⇒ 点它=抢流消费=
+        // 动作打到别的窗（用户实测"乱跳不展开"）。宁可本轮不接管（点击全穿透给 ROM）。
+        val pinNoGeom = h.pinnedWithoutGeometry()
+        if (pinNoGeom > 0) {
+            HLog.i(TAG, "takeover: $pinNoGeom 只挂起窗几何缺失 ⇒ 不抢流（fail-open）")
+            return@runCatching false
+        }
         val mode = prefs?.getString(
             com.lsp.hypersidebar.prefs.PrefKeys.FREEFORM_BLANK_TAP_MODE,
             com.lsp.hypersidebar.prefs.LayoutDefaults.FREEFORM_BLANK_TAP_MODE_DEFAULT

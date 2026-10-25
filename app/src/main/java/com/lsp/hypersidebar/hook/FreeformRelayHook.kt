@@ -101,6 +101,56 @@ class FreeformRelayHook(
             .onFailure { HLog.w(TAG, "stats init failed: ${it.message}") }
     }
 
+    /**
+     * LauncherApps 直查（模块 App 请求，2026-10-25 免 root 化 spike）。null = 查询被拒
+     *（SecurityException = "Caller can't access shortcut information"，"默认桌面"检查
+     * 不放行 uid 1000——成败这行日志就是判词）。查询与 JSON 形状照搬 launcher 桥
+     * （EdgeGestureHook.registerManifestShortcutsBridge 的两遍式，逐字段一致），模块侧零改动。
+     */
+    private fun queryShortcutsJson(ctx: Context): String? = runCatching {
+        val la = ctx.getSystemService(android.content.pm.LauncherApps::class.java)
+            ?: return null
+        val arr = org.json.JSONArray()
+        val seen = java.util.HashSet<String>()
+        val user = android.os.Process.myUserHandle()
+        fun query(flags: Int, isManifest: Boolean) {
+            val q = android.content.pm.LauncherApps.ShortcutQuery().setQueryFlags(flags)
+            la.getShortcuts(q, user).orEmpty().forEach { si ->
+                val key = si.`package` + "/" + si.id
+                if (!seen.add(key)) return@forEach
+                val label = si.longLabel?.toString() ?: si.shortLabel?.toString().orEmpty()
+                if (isManifest) {
+                    val cn = si.activity ?: return@forEach
+                    arr.put(
+                        org.json.JSONObject()
+                            .put("p", cn.packageName)
+                            .put("c", cn.className)
+                            .put("l", label)
+                            .put("t", "m")
+                    )
+                } else {
+                    arr.put(
+                        org.json.JSONObject()
+                            .put("p", si.`package`)
+                            .put("s", si.id)
+                            .put("l", label)
+                            .put("t", "d")
+                    )
+                }
+            }
+        }
+        query(android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST, true)
+        query(
+            android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or
+                android.content.pm.LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED,
+            false
+        )
+        arr.toString()
+    }.onFailure {
+        HLog.w(TAG, "shortcut :ui query FAILED: ${it.javaClass.simpleName}: ${it.message} " +
+            "（spike 判词=此路死 ⇒ 模块照旧落 root 兜底）")
+    }.getOrNull()
+
     private fun registerReceiver(context: Context, via: String) {
         if (registered) return
         registered = true
@@ -155,6 +205,27 @@ class FreeformRelayHook(
                         }
                         return
                     }
+                    // 快捷方式 :ui 直查（2026-10-25 免 root 化）：模块 App 请求 → 本进程后台
+                    // 线程 LauncherApps 直查 → MANIFEST_SHORTCUTS_REPLY 同款 JSON 显式回带
+                    // ShortcutRelayReceiver（复用其 onReply 转发，模块侧零改动）。
+                    // 成败判词各一行日志（SecurityException = spike 判死，模块 1.5s 后照旧
+                    // 落 root 兜底，零回归）。
+                    if (intent.action == PrefKeys.SHORTCUT_QUERY_UI_ACTION) {
+                        if (isOrderedBroadcast) resultCode = 1
+                        Thread {
+                            val json = queryShortcutsJson(ctx) ?: return@Thread
+                            val out = Intent(PrefKeys.MANIFEST_SHORTCUTS_REPLY)
+                                .setClassName(
+                                    com.lsp.hypersidebar.util.FreeformLauncher.MODULE_PACKAGE,
+                                    com.lsp.hypersidebar.ShortcutRelayReceiver::class.java.name
+                                )
+                                .putExtra(PrefKeys.MANIFEST_SHORTCUTS_EXTRA, json)
+                            RelayToken.attach(out, RelayToken.read(remotePrefs))
+                            runCatching { ctx.sendBroadcast(out) }
+                                .onFailure { HLog.w(TAG, "shortcut reply send failed: ${it.message}") }
+                        }.start()
+                        return
+                    }
                     // 有序广播存活探测标记（1C，PRD §9.4 ":ui 不存活→toast"）：launcher 发
                     // ordered broadcast，初始 code=0，本接收器置 1；最终回调读 0 = 本进程
                     // 已死或接收器未注册。普通 sendBroadcast（如 AllAppsActivity 面板内启动）
@@ -192,6 +263,7 @@ class FreeformRelayHook(
                 IntentFilter().apply {
                     addAction(ACTION_FAN_LAUNCH)
                     addAction(PrefKeys.ACTION_REQUEST_SUGGESTIONS)
+                    addAction(PrefKeys.SHORTCUT_QUERY_UI_ACTION)
                 },
                 Context.RECEIVER_EXPORTED
             )

@@ -466,6 +466,12 @@ private fun buildShortcutSummary(shortcut: ShortcutAction, unsetUri: String, too
             val pkg = shortcut.packageName ?: "?"
             "$pkg/#${shortcut.shortcutId ?: "?"}"
         }
+        // 组摘要：子项 label 串（N 项）——与 C8 组编辑页的成员展示同语义
+        ShortcutKind.GROUP -> {
+            val n = shortcut.children?.size ?: 0
+            val labels = shortcut.children.orEmpty().joinToString("、") { it.label }
+            "${n}项：$labels"
+        }
     }
     return if (raw.length > 40) raw.take(38) + "…" else raw
 }

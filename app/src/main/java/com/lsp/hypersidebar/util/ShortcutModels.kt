@@ -19,6 +19,8 @@ private const val TAG = "ShortcutModels"
  *   无须固定在控制中心，2026-09-05 定稿；hook 缺席时自动回退 root 兜底）
  * - SHORTCUT_ID: 动态/固定快捷方式（微信扫一扫等 runtime 推送项，2026-09-08 定稿）——
  *   仅默认桌面可 startShortcut，经 launcher 进程桥代发（B2 归档结论因桌面桥的存在过时）
+ * - GROUP: 快捷方式组（类文件夹，2~3 子项，悬停展开；计划 §B0/B1，2026-10-25）——
+ *   组占一个上栏位置，子项不进根栏；不可嵌套、工具箱不可入组
  */
 enum class ShortcutKind {
     COMPONENT,
@@ -27,7 +29,8 @@ enum class ShortcutKind {
     TOOLBOX,
     SERVICE,
     QS_TILE,
-    SHORTCUT_ID
+    SHORTCUT_ID,
+    GROUP
 }
 
 /**
@@ -43,6 +46,8 @@ enum class ShortcutSource {
 /**
  * 统一快捷方式数据模型。
  * 持久化时只存结构化字段 / 原始 intentUri 文本，不持久化 Intent 对象。
+ * GROUP 条目的 children 仅一层（归一化强制，见 [ShortcutGroups]）；旧版本模块读到
+ * kind="GROUP" 会经 valueOf 失败回落 ACTIVITY 空条目（计划 §B1 明文降级副作用）。
  */
 data class ShortcutAction(
     val id: String,
@@ -56,7 +61,8 @@ data class ShortcutAction(
     val intentUri: String? = null,
     val iconPackageName: String? = null,
     val shortcutId: String? = null,
-    val order: Int = 0
+    val order: Int = 0,
+    val children: List<ShortcutAction>? = null
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -71,6 +77,9 @@ data class ShortcutAction(
         putOpt("iconPackageName", iconPackageName)
         putOpt("shortcutId", shortcutId)
         put("order", order)
+        children?.takeIf { it.isNotEmpty() }?.let { kids ->
+            putOpt("children", JSONArray().apply { kids.forEach { put(it.toJson()) } })
+        }
     }
 
     companion object {
@@ -88,8 +97,77 @@ data class ShortcutAction(
             intentUri = json.optString("intentUri", "").ifEmpty { null },
             iconPackageName = json.optString("iconPackageName", "").ifEmpty { null },
             shortcutId = json.optString("shortcutId", "").ifEmpty { null },
-            order = json.optInt("order", 0)
+            order = json.optInt("order", 0),
+            children = runCatching {
+                json.optJSONArray("children")?.let { arr ->
+                    (0 until arr.length()).mapNotNull { i ->
+                        runCatching { fromJson(arr.getJSONObject(i)) }.getOrNull()
+                    }.takeIf { it.isNotEmpty() }
+                }
+            }.getOrNull()
         )
+    }
+}
+
+/**
+ * 快捷方式组纯核心（计划 §B0/B1，2026-10-25）：校验、配额、加载归一化。
+ * 所有规则在此单点，UI（C8）与扇形装配（C7）只消费结果。
+ */
+object ShortcutGroups {
+
+    /** 组内子项数量上下限（PRD：类文件夹，可同时装入 3 个快捷方式；至少 2 个成组） */
+    const val MIN_CHILDREN = 2
+    const val MAX_CHILDREN = 3
+
+    /**
+     * 建组校验：数量 2~3、子项 kind 合法（非 GROUP 不可嵌套、非 TOOLBOX 不可入组）、
+     * id 非空且不重复。UI 建组前调用；扇形装配不再校验（加载时已归一化）。
+     */
+    fun validateChildren(children: List<ShortcutAction>): Boolean {
+        if (children.size < MIN_CHILDREN || children.size > MAX_CHILDREN) return false
+        val ids = HashSet<String>()
+        for (c in children) {
+            if (c.kind == ShortcutKind.GROUP || c.kind == ShortcutKind.TOOLBOX) return false
+            if (c.id.isBlank() || !ids.add(c.id)) return false
+        }
+        return true
+    }
+
+    /**
+     * 存储配额口径（计划 §B1）：组占一个上栏位置，但子项仍计入
+     * [ShortcutStore.MAX_STORED_SHORTCUTS]——两组×3 子 + 2 单选 = 10 用满。
+     */
+    fun storageUnits(list: List<ShortcutAction>): Int =
+        list.sumOf { 1 + (if (it.kind == ShortcutKind.GROUP) it.children?.size ?: 0 else 0) }
+
+    /**
+     * 加载时归一化（不靠 UI 兜，计划 §B1）：
+     * - 组缺 children / <2 子 / 全部 disabled ⇒ **解散**（子项提升回顶层普通条目，
+     *   保持原相对顺序）
+     * - 子项里嵌套 GROUP / TOOLBOX / 重复 id / 空 id ⇒ 剥除该子项（其余保留）
+     * - 剥除后不足 MIN_CHILDREN 的组同样解散
+     * 顶层非组条目原样透传；GROUP kind 但 children=null 的孤儿条目按普通条目透传
+     * （不加 children 它就是个无动作空壳，扇形装配按防御分支处理）。
+     */
+    fun normalize(list: List<ShortcutAction>): List<ShortcutAction> {
+        val out = ArrayList<ShortcutAction>(list.size)
+        for (item in list) {
+            if (item.kind != ShortcutKind.GROUP) {
+                out.add(item)
+                continue
+            }
+            val cleaned = item.children.orEmpty()
+                .filter { it.kind != ShortcutKind.GROUP && it.kind != ShortcutKind.TOOLBOX && it.id.isNotBlank() }
+                .distinctBy { it.id }
+            val dissolved = cleaned.size < MIN_CHILDREN || cleaned.all { !it.enabled }
+            if (dissolved) {
+                // 解散：子项提升为顶层（继承组的 enabled 兜底——子项自身 disabled 的仍 disabled）
+                cleaned.forEach { out.add(it.copy(source = ShortcutSource.USER)) }
+            } else {
+                out.add(item.copy(children = cleaned))
+            }
+        }
+        return out
     }
 }
 
@@ -139,7 +217,8 @@ object ShortcutStore {
                     list.add(item)
                 }
             }
-            list.sortedBy { it.order }
+            // 组归一化（§B1）：解散不合法组/剥非法子项——排序后做，解散子项保持在原组位置附近
+            ShortcutGroups.normalize(list.sortedBy { it.order })
         } catch (e: Exception) {
             HLog.e(TAG, "loadUserShortcuts: parse failed", e)
             emptyList()

@@ -229,6 +229,11 @@ internal fun ShortcutEditPage(
                         ShortcutKind.TOOLBOX -> {
                             Text(text = stringResource(R.string.shortcut_toolbox_desc))
                         }
+                        // 组不经本页编辑（§B0/B2）：组编辑走 GroupEditPage（C8）；
+                        // 此分支仅防旧入口把 GROUP 条目误送进来（加载归一化后理论不可达）
+                        ShortcutKind.GROUP -> {
+                            Text(text = stringResource(R.string.shortcut_toolbox_desc))
+                        }
                         ShortcutKind.SERVICE -> {
                             Text(text = stringResource(R.string.shortcut_package_optional), style = MiuixTheme.textStyles.body1)
                             Spacer(Modifier.height(8.dp))

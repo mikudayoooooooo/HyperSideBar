@@ -861,6 +861,10 @@ object ShortcutLauncher {
         ShortcutKind.TOOLBOX -> BuildIntentResult.Failure(
             FailureReason.INVALID_CONFIG, "TOOLBOX cannot be built as Intent"
         )
+        // 组不是启动单元（§B0）：扇形层展开、子项各自走 actionHandle，不经 Intent/root 通道
+        ShortcutKind.GROUP -> BuildIntentResult.Failure(
+            FailureReason.INVALID_CONFIG, "GROUP is expanded in fan overlay, not launched as Intent"
+        )
     }
 
     /**
@@ -1305,6 +1309,8 @@ object ShortcutLauncher {
             }
             ShortcutKind.TOOLBOX -> null
             ShortcutKind.SHORTCUT_ID -> null
+            // 组不是启动单元（§B0）：root 兜底通道不适用（同 buildIntent 注释）
+            ShortcutKind.GROUP -> null
         }
     }
 }

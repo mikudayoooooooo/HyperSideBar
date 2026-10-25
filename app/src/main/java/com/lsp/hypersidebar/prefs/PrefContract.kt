@@ -220,6 +220,12 @@ object PrefKeys {
     /** 配置拉取应答（模块 App → hook 宿主 Messenger）data 键（ConfigPullService 写、ConfigPullBridge 读） */
     const val CONFIG_PULL_EXTRA_MAP = "map"
 
+    // ===== 条件式推荐上下文记录（2026-10-24 计划 §A3）=====
+    /** Settings.Secure 自建键：source→target→时间戳（7 天窗）。:ui 单写
+     *  （WRITE_SECURE_SETTINGS 平台签名特权），全进程只读。扁平命名空间 hsb_ 前缀
+     *  防撞（与 persist.hsb.* 属性约定对齐）。禁入 ConfigSync（运行时记录非配置）。 */
+    const val SECURE_CONTEXT_LAUNCH_LOG = "hsb_context_launch_log"
+
     // ===== manifest 快捷方式 launcher 桥（批次 3）=====
     // 背景（2026-09-05 实锤）：LauncherApps.getShortcuts 对非默认桌面应用抛
     // SecurityException（Caller can't access shortcut information）——模块 App 无法直查。

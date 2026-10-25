@@ -35,6 +35,19 @@ object DataLoader {
     private const val BACKSTOP_INTERVAL_MS = 5 * 60_000L
     private const val DISK_PREFS_NAME = PrefsFiles.DATA
     private const val DISK_KEY_SUGGESTIONS = "suggestions"
+    /** v2 分数表落盘键（JSON 对象 pkg→score）；旧 DISK_KEY_SUGGESTIONS 数组只为升级兼容读 */
+    private const val DISK_KEY_SCORES = "suggestion_scores"
+    /** 兜底 legacy 序上限（与今日扇形可见量级一致；纯防御，正常远小于此） */
+    private const val LEGACY_ORDER_LIMIT = 64
+
+    // ===== 原料仓（2026-10-24 计划 §A2：原料（分数/上下文）与成品（有序列表）分离，
+    // 成品每次呼出按当前来源在 [rankedApps] 现算——纯内存查表，呼出热路径零 binder）=====
+    /** ROM 分数表；null=未就绪（新反射路径未成功过）⇒ rankedApps 走 legacyOrder */
+    @Volatile private var romScores: Map<String, Int>? = null
+    /** 上下文计数表 source→target→count（ContextLaunchLog 剪枝后）；空=无信号 */
+    @Volatile private var contextCounts: Map<String, Map<String, Int>> = emptyMap()
+    /** 降级序：旧路径产物或旧盘数据（无分数），= 今日行为 */
+    @Volatile private var legacyOrder: List<String> = emptyList()
 
     /**
      * 数据源死亡回调（迭代四 §1.3，PRD §9.4 用户加强：获取失败→取消所有 hook、
@@ -79,6 +92,35 @@ object DataLoader {
             refreshAsync(appContext)
         }
         return cachedResult ?: emptyList()
+    }
+
+    /**
+     * 单一出口（计划 §A2）：按当前来源排序的推荐列表。
+     * 分数未就绪 ⇒ 返回 legacyOrder（= 今日行为，冷启动首呼出与旧版逐字节一致）；
+     * 就绪 ⇒ SuggestionRanker 条件加权（source null/未知 = 纯 ROM 序）。
+     * 纯内存查表，呼出热路径零 binder。
+     */
+    fun rankedApps(context: Context, source: String?): List<String> {
+        val appContext = context.applicationContext
+        startBackstop(appContext)
+        val now = System.currentTimeMillis()
+        if (romScores == null || (now - lastFetchTime) >= CACHE_TTL_MS) {
+            refreshAsync(appContext)
+        }
+        val scores = romScores ?: return legacyOrder
+        return SuggestionRanker.rank(
+            scores, contextCounts, source,
+            com.lsp.hypersidebar.prefs.LayoutDefaults.REC_CTX_WEIGHT,
+            com.lsp.hypersidebar.prefs.LayoutDefaults.REC_CTX_CAP
+        )
+    }
+
+    /**
+     * 上下文记录落库后的本进程同步（:ui 写读同进程零延迟；launcher 侧靠周期刷新）。
+     * 由 FreeformLauncher 记录点调用（C3），本提交先立接口。
+     */
+    fun updateContextCounts(counts: Map<String, Map<String, Int>>) {
+        contextCounts = counts
     }
 
     /** hook init 时调用：进程存活期间提前把推荐列表拉进缓存，并启动周期兜底循环。 */
@@ -148,15 +190,41 @@ object DataLoader {
             try {
                 hydrateFromDisk(context)
                 val t0 = android.os.SystemClock.elapsedRealtime()
-                val suggestion = loadSuggestionApps(context)
+                // 原料仓刷新（§A2）：新路径拿 romScores；任一环异常降级旧路径=legacyOrder
+                val scores = runCatching { loadRomScores(context) }
+                    .onFailure { HLog.w(TAG, "romScores path failed, fallback legacy: ${it.message}") }
+                    .getOrNull()
+                // 上下文记录装载（搭现有周期车，不新增线程/循环）：读+剪枝进内存
+                runCatching {
+                    val now = System.currentTimeMillis()
+                    contextCounts = ContextLaunchLog.countsAll(
+                        ContextLaunchLog.prune(ContextLaunchLog.read(context.contentResolver), now)
+                    )
+                }.onFailure { HLog.w(TAG, "context load failed: ${it.message}") }
+
+                val suggestion: List<String>
+                if (scores != null) {
+                    romScores = scores
+                    suggestion = SuggestionRanker.rank(
+                        scores, contextCounts, null,
+                        com.lsp.hypersidebar.prefs.LayoutDefaults.REC_CTX_WEIGHT,
+                        com.lsp.hypersidebar.prefs.LayoutDefaults.REC_CTX_CAP
+                    )
+                } else {
+                    suggestion = loadSuggestionApps(context)
+                    legacyOrder = suggestion
+                }
                 cachedResult = suggestion
                 lastFetchTime = System.currentTimeMillis()
                 consecutiveFailures = 0
-                persistToDisk(context, suggestion)
+                persistToDisk(context, scores, suggestion)
                 // label 预热（1C P3）：扇形呼出主线程逐 pkg 调 AppMetaCache.label，miss 即
                 // PM binder（首呼出最多 14 次）——后台刷新顺带灌缓存，呼出路径恒命中
-                suggestion.forEach { AppMetaCache.label(context, it) }
-                HLog.i(TAG, "refreshed ${suggestion.size} suggestion apps in ${android.os.SystemClock.elapsedRealtime() - t0}ms (background)")
+                suggestion.take(LEGACY_ORDER_LIMIT).forEach { AppMetaCache.label(context, it) }
+                HLog.i(
+                    TAG,
+                    "refreshed ${suggestion.size} suggestion apps in ${android.os.SystemClock.elapsedRealtime() - t0}ms (background, scores=${scores != null}, ctx=${contextCounts.size})"
+                )
             } catch (e: Throwable) {
                 HLog.w(TAG, "refresh failed: ${e.message}")
                 consecutiveFailures++
@@ -177,8 +245,8 @@ object DataLoader {
     private const val DEAD_THRESHOLD = 5
 
     /**
-     * 盘灌缓存（迭代四 §1.2）：首次刷新前从宿主本地 prefs 读上次会话的推荐列表。
-     * 只灌 cachedResult 不设 lastFetchTime——TTL 视为过期，本次/下次刷新照常拉新覆盖。
+     * 盘灌缓存（迭代四 §1.2，C2 迁移）：优先 v2 分数表；旧数组键升级兼容——
+     * 只灌 legacyOrder/cachedResult（无分数），不设 lastFetchTime（TTL 过期必刷）。
      * executor 单线程调用，无并发。
      */
     private fun hydrateFromDisk(context: Context) {
@@ -186,32 +254,97 @@ object DataLoader {
         hydrated = true
         if (cachedResult != null) return
         runCatching {
-            val json = context.applicationContext
+            val prefs = context.applicationContext
                 .getSharedPreferences(DISK_PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(DISK_KEY_SUGGESTIONS, null)
+            val scoresJson = prefs.getString(DISK_KEY_SCORES, null)
+            val scores = RomSignals.parsePersistedScores(scoresJson)
+            if (scores != null && scores.isNotEmpty()) {
+                romScores = scores
+                val list = SuggestionRanker.rank(
+                    scores, emptyMap(), null,
+                    com.lsp.hypersidebar.prefs.LayoutDefaults.REC_CTX_WEIGHT,
+                    com.lsp.hypersidebar.prefs.LayoutDefaults.REC_CTX_CAP
+                )
+                cachedResult = list
+                lastPersistedJson = scoresJson
+                HLog.i(TAG, "hydrated ${list.size} scores from disk (stale, refresh pending)")
+                return
+            }
+            val json = prefs.getString(DISK_KEY_SUGGESTIONS, null)
             if (json != null) {
                 lastPersistedJson = json
-                val arr = org.json.JSONArray(json)
-                val list = (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
+                val list = RomSignals.parsePersistedLegacy(json)
                 if (list.isNotEmpty()) {
+                    legacyOrder = list
                     cachedResult = list
-                    HLog.i(TAG, "hydrated ${list.size} suggestions from disk (stale, refresh pending)")
+                    HLog.i(TAG, "hydrated ${list.size} suggestions from disk (legacy, stale, refresh pending)")
                 }
             }
         }.onFailure { HLog.w(TAG, "hydrate failed: ${it.message}") }
     }
 
-    /** 成功刷新落盘：列表没变不写（推荐列表日常稳定，实际写盘趋近于零）；空列表不覆盖。 */
-    private fun persistToDisk(context: Context, list: List<String>) {
+    /**
+     * 成功刷新落盘（C2 迁移）：分数路径写 v2 对象键（pkg→score）；legacy 路径沿用旧
+     * 数组键。列表没变不写（推荐列表日常稳定，实际写盘趋近于零）；空列表不覆盖。
+     */
+    private fun persistToDisk(context: Context, scores: Map<String, Int>?, list: List<String>) {
         if (list.isEmpty()) return
-        val json = org.json.JSONArray(list).toString()
+        val json = if (scores != null) {
+            RomSignals.serializePersistedScores(scores)
+        } else {
+            org.json.JSONArray(list).toString()
+        }
+        val key = if (scores != null) DISK_KEY_SCORES else DISK_KEY_SUGGESTIONS
         if (json == lastPersistedJson) return
         lastPersistedJson = json
         runCatching {
             context.applicationContext
                 .getSharedPreferences(DISK_PREFS_NAME, Context.MODE_PRIVATE)
-                .edit().putString(DISK_KEY_SUGGESTIONS, json).apply()
+                .edit().putString(key, json).apply()
         }.onFailure { HLog.w(TAG, "persist failed: ${it.message}") }
+    }
+
+    /**
+     * 新反射路径（计划 §A2，三代反编译实证）：黑名单 → 只读解析 freeform_timestamps
+     * （双形态兼容+内存剪枝，**绝不写回**）→ 精确 HashMap 形参 → calFreeformSuggestionList
+     * → 分数表。任一环异常向上抛，由 refreshAsync 降级 legacy 路径。
+     *
+     * 为什么不直接调 getFreeformSuggestionList：它内部丢分数只回包名（§0
+     * `MiuiMultiWindowUtils.java:2561-2581`），条件加权需要分数本体。
+     */
+    private fun loadRomScores(context: Context): Map<String, Int> {
+        val utilsCls = Class.forName(FreeformLauncher.MIUI_MULTI_WINDOW_UTILS)
+        // ① 黑名单（必须真取：传错会经 calFreeformSuggestionList 污染进程级
+        //    sFreeformPackageNotSupport——该缓存与 ROM 自用代码共享）
+        val blacklist = runCatching {
+            val m = utilsCls.getMethod("getFreeformBlackList", Context::class.java)
+            @Suppress("UNCHECKED_CAST")
+            m.invoke(null, context) as List<String>
+        }.getOrElse {
+            val m = utilsCls.getDeclaredMethod("getFreeformBlackList", Context::class.java).apply {
+                isAccessible = true
+            }
+            @Suppress("UNCHECKED_CAST")
+            m.invoke(null, context) as List<String>
+        }
+        // ② 时间戳只读解析（String 元素实锤 + Object 防御双形态；内存剪枝语义照 ROM）
+        val timestampsJson = runCatching {
+            android.provider.Settings.Secure.getString(
+                context.contentResolver, "freeform_timestamps"
+            )
+        }.getOrNull()
+        val timestamps = RomSignals.parseFreeformTimestamps(timestampsJson, System.currentTimeMillis())
+        // ③ 计分（精确签名：getMethod 须 HashMap::class.java，invoke 传子类实例合法）
+        val adapterCls = Class.forName(FreeformLauncher.MIUI_MULTI_WINDOW_ADAPTER)
+        val calc = adapterCls.getMethod(
+            "calFreeformSuggestionList",
+            Context::class.java, List::class.java, HashMap::class.java
+        )
+        @Suppress("UNCHECKED_CAST")
+        val raw = calc.invoke(null, context, blacklist, timestamps) as? Map<String, Int>
+            ?: throw IllegalStateException("calFreeformSuggestionList returned non-map")
+        // 只留非负分数（防御 ROM 侧异常值）；准入判定已在 ROM 内完成
+        return raw.filterValues { it >= 0 }
     }
 
     /** 反射失败直接抛（1C：失败计数/兜底 toast 需要区分"拉取失败"与"合法空列表"）。 */

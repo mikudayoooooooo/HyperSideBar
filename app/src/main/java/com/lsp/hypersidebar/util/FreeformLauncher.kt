@@ -26,6 +26,7 @@ object FreeformLauncher {
 
     /** 反射靶点（本类与 DataLoader 共用；ROM 漂移时按反编译同步这里） */
     const val MIUI_MULTI_WINDOW_UTILS = "android.util.MiuiMultiWindowUtils"
+    const val MIUI_MULTI_WINDOW_ADAPTER = "android.util.MiuiMultiWindowAdapter"
     const val START_ACTIVITY_AS_USER = "startActivityAsUser"
 
     fun launch(context: Context, packageName: String) {

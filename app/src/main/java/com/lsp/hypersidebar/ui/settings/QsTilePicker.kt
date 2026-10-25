@@ -197,6 +197,16 @@ object ManifestShortcutsBridge {
             RelayToken.attach(intent, RelayToken.current())
             context.sendBroadcast(intent)
         }.onFailure { Log.w(TAG, "manifest bridge request failed: ${it.message}") }
+        // :ui 直查（2026-10-25 免 root 化）：OS4 上 launcher 桥结构性缺席，:ui（uid 1000）
+        // 若能过 LauncherApps 的"默认桌面"检查就免 root 拿到清单；失败静默（:ui 侧已打
+        // 判词日志）⇒ 下方 1.5s root 兜底照旧。应答复用 MANIFEST_SHORTCUTS_REPLY 通路
+        //（ShortcutRelayReceiver → onReply），本函数零新状态。
+        runCatching {
+            val uiIntent = Intent(PrefKeys.SHORTCUT_QUERY_UI_ACTION)
+                .setPackage(HostPackages.UI_HOST)
+            RelayToken.attach(uiIntent, RelayToken.current())
+            context.sendBroadcast(uiIntent)
+        }.onFailure { Log.w(TAG, "shortcut :ui query request failed: ${it.message}") }
         scheduleRootFallback(context)
     }
 

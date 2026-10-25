@@ -237,6 +237,13 @@ object PrefKeys {
     const val MANIFEST_SHORTCUTS_REPLY = "com.lsp.hypersidebar.action.MANIFEST_SHORTCUTS_REPLY"
     const val MANIFEST_SHORTCUTS_EXTRA = "list"
 
+    // 快捷方式 :ui 直查（2026-10-25 免 root 化）：OS4 桌面无 Java ⇒ launcher 桥结构性缺席，
+    // 清单此前只能 su 反查（ShortcutRootCatalog）。:ui（uid 1000，system_app 域已实证）能否
+    // 过 LauncherApps 的"默认桌面"检查是唯一变数——查询端（FreeformRelayHook）成败各打一行
+    // 判词日志；成功则按 MANIFEST_SHORTCUTS_REPLY 同款 JSON 回带（复用 ShortcutRelayReceiver
+    // → ManifestShortcutsBridge.onReply 整条管线，模块侧零改动）。无 extra：全量查询。
+    const val SHORTCUT_QUERY_UI_ACTION = "com.lsp.hypersidebar.action.SHORTCUT_QUERY_UI"
+
     // 动态/固定快捷方式代发（2026-09-08）：startShortcut 仅默认桌面可调——launcher 进程
     // 桥代发（EdgeGestureHook 内 LauncherApps.startShortcut），有序广播回执 resultCode 1/0。
     // 调用方=模块 App（编辑页测试）与 :ui（fan 点击），令牌沿用 RELAY_LAUNCH_EXTRA_TOKEN

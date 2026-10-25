@@ -523,7 +523,7 @@ private fun Modifier.suppressRowLongPress(): Modifier = pointerInput(Unit) {
 }
 
 @Composable
-private fun SelectionCircle(checked: Boolean) {
+internal fun SelectionCircle(checked: Boolean) {
     Box(
         modifier = Modifier
             .size(22.dp)

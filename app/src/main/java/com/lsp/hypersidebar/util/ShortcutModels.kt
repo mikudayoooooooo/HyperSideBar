@@ -298,34 +298,58 @@ object ShortcutStore {
     }
 
     /**
-     * 更新指定 id 的快捷方式。Returns true if found and updated.
+     * 更新指定 id 的快捷方式（顶层或**组成员**——布局定稿 §5.1 成员可进现有编辑页，
+     * 成员嵌在组 JSON 内，只扫顶层会静默丢编辑）。Returns true if found and updated.
      * NOTE: Must be called from main thread (not thread-safe).
      */
     fun updateShortcut(prefs: SharedPreferences, updated: ShortcutAction): Boolean {
         val current = loadUserShortcuts(prefs).toMutableList()
         val idx = current.indexOfFirst { it.id == updated.id }
-        return if (idx >= 0) {
+        if (idx >= 0) {
             current[idx] = updated
             saveUserShortcuts(prefs, current)
-            true
-        } else {
-            false
+            return true
         }
+        // 组成员寻址：只替换命中的那一层，不动其它成员
+        for (i in current.indices) {
+            val g = current[i]
+            if (g.kind != ShortcutKind.GROUP) continue
+            val kids = g.children.orEmpty()
+            val kIdx = kids.indexOfFirst { it.id == updated.id }
+            if (kIdx >= 0) {
+                current[i] = g.copy(children = kids.toMutableList().also { it[kIdx] = updated })
+                saveUserShortcuts(prefs, current)
+                return true
+            }
+        }
+        return false
     }
 
     /**
-     * 删除指定 id 的快捷方式。Returns true if found and removed.
+     * 删除指定 id 的快捷方式（顶层或**组成员**——成员经编辑页删除也须命中；组内
+     * 剩余成员 <2 时由加载归一化解散兜底）。Returns true if found and removed.
      * NOTE: Must be called from main thread (not thread-safe).
      */
     fun removeShortcut(prefs: SharedPreferences, id: String): Boolean {
         val current = loadUserShortcuts(prefs)
         val newList = current.filter { it.id != id }
-        return if (newList.size < current.size) {
+        if (newList.size < current.size) {
             saveUserShortcuts(prefs, newList)
-            true
-        } else {
-            false
+            return true
         }
+        for (i in current.indices) {
+            val g = current[i]
+            if (g.kind != ShortcutKind.GROUP) continue
+            val kids = g.children.orEmpty()
+            if (kids.any { it.id == id }) {
+                newList.toMutableList().apply {
+                    this[i] = g.copy(children = kids.filter { it.id != id })
+                    saveUserShortcuts(prefs, this)
+                }
+                return true
+            }
+        }
+        return false
     }
 
     /**

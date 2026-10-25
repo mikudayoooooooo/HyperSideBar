@@ -112,6 +112,9 @@ internal fun MainScreen(
     // 保存/删除/退出时自增，两页 remember(revision) 重建即重读盘
     var shortcutRevision by remember { mutableStateOf(0) }
 
+    // 组详情顶栏＋桥（添加成员 → 页内选择器）
+    val groupEditBar = remember { GroupEditBar() }
+
     val selectAppsTitle = stringResource(R.string.select_apps)
     // miuix-nav 的 NavBackStack 元素类型是 NavKey（非泛型），取栈顶要显式收回 SettingsKey
     val currentTitle = when (val top = activeStack.last() as SettingsKey) {
@@ -192,6 +195,14 @@ internal fun MainScreen(
                             Icon(
                                 imageVector = MiuixIcons.Add,
                                 contentDescription = stringResource(R.string.shortcut_add_title)
+                            )
+                        }
+                    } else if (activeStack.last() is SettingsKey.GroupEdit) {
+                        // 组详情右上角＋（布局 §5.1）：添加现有成员（页内选择器）
+                        IconButton(onClick = { groupEditBar.onAddMember?.invoke() }) {
+                            Icon(
+                                imageVector = MiuixIcons.Add,
+                                contentDescription = stringResource(R.string.group_member_picker_title)
                             )
                         }
                     }
@@ -337,6 +348,11 @@ internal fun MainScreen(
                         group = key.group,
                         isNew = key.isNew,
                         revision = shortcutRevision,
+                        bar = groupEditBar,
+                        onEditMember = { member ->
+                            // 成员进现有编辑页（§5.1）；返回经 revision 重读盘上组数据
+                            settingsStack.add(SettingsKey.ShortcutEdit(member, isNew = false))
+                        },
                         onBack = {
                             // 组页保存/解散/取消都在页内发生——退出即自增刷新令牌（多刷无害）
                             shortcutRevision++

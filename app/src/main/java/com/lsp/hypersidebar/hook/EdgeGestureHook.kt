@@ -9,6 +9,7 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
@@ -1067,10 +1068,14 @@ class EdgeGestureHook(
         // 耗时锚点（呼出卡顿归因）：postLag=launcher 主线程繁忙度——数值大说明
         // 呼出迟到是主线程排队，而不是装配慢
         val postAtMs = android.os.SystemClock.uptimeMillis()
+        // source 冻结（C4，计划 §A3）：识别成立时刻取一次前台——launcher 进程自身
+        // 在前台（竖屏边缘条由 launcher 接管）⇒ capture 过滤 HOME 后恒 null=不记录，
+        // 第三方应用前台时才可能拿到值（binder ~1-2ms，红线明文例外）
+        val frozenSource = ForegroundSourceProbe.capture(HostPackages.HOME)
         val r = Runnable {
             pendingShow = null
             vlog("g#$gestureSeq showFan runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
-            fanController.show(ctx, anchorX, anchorY)
+            fanController.show(ctx, anchorX, anchorY, source = frozenSource)
         }
         pendingShow = r
         mainHandler.post(r)
@@ -1098,10 +1103,11 @@ class EdgeGestureHook(
         )
         HLog.i(TAG, "showFan(corner): anchor=($anchorX, $anchorY) downX=$downX")
         val postAtMs = android.os.SystemClock.uptimeMillis()
+        val frozenSource = ForegroundSourceProbe.capture(HostPackages.HOME)
         val r = Runnable {
             pendingShow = null
             vlog("c#$cornerSeq showFan(corner) runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
-            fanController.show(ctx, anchorX, anchorY, cornerAnchor = true)
+            fanController.show(ctx, anchorX, anchorY, cornerAnchor = true, source = frozenSource)
         }
         pendingShow = r
         mainHandler.post(r)

@@ -20,6 +20,12 @@ internal sealed interface SettingsKey : NavKey {
      * 被 when() 销毁、返回时从 editingShortcut 重建"的语义。
      */
     data class ShortcutEdit(val shortcut: ShortcutAction, val isNew: Boolean) : SettingsKey
+
+    /** 组编辑页（C8，计划 §B2）：建组/改名/成员勾选与调序/解散；编辑中数据随键携带（同 ShortcutEdit 语义） */
+    data class GroupEdit(val group: ShortcutAction, val isNew: Boolean) : SettingsKey
+
+    /** 添加页（布局定稿 §3）：首页右上角＋进入，四类入口的中间页 */
+    data object ShortcutAdd : SettingsKey
     data object ShortcutPicker : SettingsKey
 
     /** C3（批次 3）：QS 磁贴专属选择器（平铺全部扫到的 TileService，编辑页磁贴分支进入） */

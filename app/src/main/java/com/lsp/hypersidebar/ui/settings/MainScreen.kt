@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -44,6 +45,7 @@ import top.yukonga.miuix.kmp.basic.NavigationBarItem
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Add
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Info
@@ -105,6 +107,14 @@ internal fun MainScreen(
     var activeTab by rememberSaveable { mutableIntStateOf(0) }
     val activeStack = if (activeTab == 0) settingsStack else aboutStack
 
+    // 快捷方式列表/组编辑的刷新令牌（2026-10-25 真机反馈：子页保存返回后列表不刷新——
+    // nav3 返回时 remember 状态保活，workingList 停留旧值须重进页面）。子页
+    // 保存/删除/退出时自增，两页 remember(revision) 重建即重读盘
+    var shortcutRevision by remember { mutableStateOf(0) }
+
+    // 组详情顶栏＋桥（添加成员 → 页内选择器）
+    val groupEditBar = remember { GroupEditBar() }
+
     val selectAppsTitle = stringResource(R.string.select_apps)
     // miuix-nav 的 NavBackStack 元素类型是 NavKey（非泛型），取栈顶要显式收回 SettingsKey
     val currentTitle = when (val top = activeStack.last() as SettingsKey) {
@@ -117,6 +127,8 @@ internal fun MainScreen(
         SettingsKey.Stats -> stringResource(R.string.stats_title)
         SettingsKey.Diagnostics -> stringResource(R.string.diagnostics_entry)
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
+        is SettingsKey.GroupEdit -> stringResource(R.string.group_edit_title)
+        SettingsKey.ShortcutAdd -> stringResource(R.string.shortcut_add_title)
         SettingsKey.InvokeSettings -> stringResource(R.string.invoke_section)
         SettingsKey.FanBackground -> stringResource(R.string.fan_background_section)
     }
@@ -175,6 +187,22 @@ internal fun MainScreen(
                             Icon(
                                 imageVector = MiuixIcons.SelectAll,
                                 contentDescription = stringResource(R.string.shortcut_select_all)
+                            )
+                        }
+                    } else if (activeStack.last() == SettingsKey.ShortcutList) {
+                        // 首页右上角＋（布局定稿 §2.1）：进入添加页；批量模式不显示
+                        IconButton(onClick = { settingsStack.add(SettingsKey.ShortcutAdd) }) {
+                            Icon(
+                                imageVector = MiuixIcons.Add,
+                                contentDescription = stringResource(R.string.shortcut_add_title)
+                            )
+                        }
+                    } else if (activeStack.last() is SettingsKey.GroupEdit) {
+                        // 组详情右上角＋（布局 §5.1）：添加现有成员（页内选择器）
+                        IconButton(onClick = { groupEditBar.onAddMember?.invoke() }) {
+                            Icon(
+                                imageVector = MiuixIcons.Add,
+                                contentDescription = stringResource(R.string.group_member_picker_title)
                             )
                         }
                     }
@@ -249,10 +277,41 @@ internal fun MainScreen(
                     ShortcutListPage(
                         prefs = prefs,
                         bar = shortcutSelectionBar,
+                        revision = shortcutRevision,
                         onEdit = { shortcut ->
-                            settingsStack.add(SettingsKey.ShortcutEdit(shortcut, isNew = false))
+                            // 组走专属编辑页（C8，§B0：组不经 ShortcutEditPage）
+                            if (shortcut.kind == com.lsp.hypersidebar.util.ShortcutKind.GROUP) {
+                                settingsStack.add(SettingsKey.GroupEdit(shortcut, isNew = false))
+                            } else {
+                                settingsStack.add(SettingsKey.ShortcutEdit(shortcut, isNew = false))
+                            }
                         },
-                        onAdd = { kind ->
+                        // 多选「组成分组」（布局 §4）：已选 2~3 个普通项预填建组，
+                        // 组插入位次由 GroupEditPage 落盘逻辑定（首位成员位置）
+                        onCreateGroup = { members ->
+                            settingsStack.add(
+                                SettingsKey.GroupEdit(
+                                    com.lsp.hypersidebar.util.ShortcutAction(
+                                        id = UUID.randomUUID().toString(),
+                                        kind = com.lsp.hypersidebar.util.ShortcutKind.GROUP,
+                                        label = "",
+                                        enabled = true,
+                                        children = members
+                                    ),
+                                    isNew = true
+                                )
+                            )
+                        }
+                    )
+                }
+            }
+            entry<SettingsKey.ShortcutAdd> {
+                DetailPageContainer {
+                    ShortcutAddPage(
+                        prefs = prefs,
+                        // 选择类型即替换本页进入新建流程：保存/取消后直接回列表
+                        onAddKind = { kind ->
+                            popLast(settingsStack)
                             settingsStack.add(
                                 SettingsKey.ShortcutEdit(
                                     ShortcutAction(
@@ -264,6 +323,40 @@ internal fun MainScreen(
                                     isNew = true
                                 )
                             )
+                        },
+                        onAddGroup = {
+                            popLast(settingsStack)
+                            settingsStack.add(
+                                SettingsKey.GroupEdit(
+                                    com.lsp.hypersidebar.util.ShortcutAction(
+                                        id = UUID.randomUUID().toString(),
+                                        kind = com.lsp.hypersidebar.util.ShortcutKind.GROUP,
+                                        label = "",
+                                        enabled = true
+                                    ),
+                                    isNew = true
+                                )
+                            )
+                        }
+                    )
+                }
+            }
+            entry<SettingsKey.GroupEdit> { key ->
+                DetailPageContainer {
+                    GroupEditPage(
+                        prefs = prefs,
+                        group = key.group,
+                        isNew = key.isNew,
+                        revision = shortcutRevision,
+                        bar = groupEditBar,
+                        onEditMember = { member ->
+                            // 成员进现有编辑页（§5.1）；返回经 revision 重读盘上组数据
+                            settingsStack.add(SettingsKey.ShortcutEdit(member, isNew = false))
+                        },
+                        onBack = {
+                            // 组页保存/解散/取消都在页内发生——退出即自增刷新令牌（多刷无害）
+                            shortcutRevision++
+                            popLast(settingsStack)
                         }
                     )
                 }
@@ -284,11 +377,13 @@ internal fun MainScreen(
                             } else {
                                 ShortcutStore.updateShortcut(prefs, updated)
                             }
+                            shortcutRevision++
                             popLast(settingsStack)
                         },
                         onDelete = if (key.isNew) null else {
                             {
                                 ShortcutStore.removeShortcut(prefs, key.shortcut.id)
+                                shortcutRevision++
                                 popLast(settingsStack)
                             }
                         },

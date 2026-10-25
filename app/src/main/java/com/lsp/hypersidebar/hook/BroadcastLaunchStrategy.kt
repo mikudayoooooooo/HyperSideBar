@@ -36,12 +36,18 @@ class BroadcastLaunchStrategy(
     private val relayToken: () -> String? = { null }
 ) : FanLaunchStrategy {
 
-    override fun launchFreeform(context: Context, pkg: String) {
-        sendToRelay(context, "freeform pkg=$pkg") { putExtra(PrefKeys.FAN_EXTRA_PKG, pkg) }
+    override fun launchFreeform(context: Context, pkg: String, source: String?) {
+        sendToRelay(context, "freeform pkg=$pkg") {
+            putExtra(PrefKeys.FAN_EXTRA_PKG, pkg)
+            source?.let { putExtra(PrefKeys.FAN_EXTRA_SOURCE, it) }
+        }
     }
 
-    override fun launchAllApps(context: Context) {
-        sendToRelay(context, "allApps") { putExtra(PrefKeys.FAN_EXTRA_ALL_APPS, true) }
+    override fun launchAllApps(context: Context, source: String?) {
+        sendToRelay(context, "allApps") {
+            putExtra(PrefKeys.FAN_EXTRA_ALL_APPS, true)
+            source?.let { putExtra(PrefKeys.FAN_EXTRA_SOURCE, it) }
+        }
     }
 
     override fun launchShortcut(context: Context, shortcut: ShortcutAction) {

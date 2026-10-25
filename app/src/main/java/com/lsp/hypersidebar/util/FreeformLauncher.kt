@@ -26,9 +26,18 @@ object FreeformLauncher {
 
     /** 反射靶点（本类与 DataLoader 共用；ROM 漂移时按反编译同步这里） */
     const val MIUI_MULTI_WINDOW_UTILS = "android.util.MiuiMultiWindowUtils"
+    const val MIUI_MULTI_WINDOW_ADAPTER = "android.util.MiuiMultiWindowAdapter"
     const val START_ACTIVITY_AS_USER = "startActivityAsUser"
 
-    fun launch(context: Context, packageName: String) {
+    /**
+     * 小窗启动（三路宿主唯一漏斗：launcher 扇形广播→:ui 中继、:ui 扇形直调、AllApps
+     * 面板中继——grep 证实唯一调用方 DirectLaunchStrategy）。
+     * @param source 呼出扇形时冻结的前台应用（C3 上下文记录；null=未知/桌面/launcher，
+     *               该次不记）。记录口径 = "走到 tryMiuiMultiWindow 且 options 非空 +
+     *               invoke 未抛"（与 ROM saveStartFreeform 同源；startActivityAsUser
+     *               静默假成功无法再深检）。
+     */
+    fun launch(context: Context, packageName: String, source: String? = null) {
         val clsName = getMainActivity(context, packageName)
         if (clsName == null) {
             HLog.w(TAG, "launch: cannot resolve main activity for $packageName")
@@ -39,7 +48,7 @@ object FreeformLauncher {
         // 唯一路径：MiuiMultiWindowUtils.getActivityOptions + startActivityAsUser（实测验证）。
         // com.miui.freeform.FreeformUtil 在任何进程都 ClassNotFound——旧"优先路径"从未生效，
         // 只贡献每次启动一条异常栈噪音，已移除
-        tryMiuiMultiWindow(context, packageName, clsName)
+        tryMiuiMultiWindow(context, packageName, clsName, source)
     }
 
     /**
@@ -121,7 +130,7 @@ object FreeformLauncher {
      * 对无资格包返回 null）；注意 startActivityAsUser 对无效组件静默"成功"（-92），
      * 那条失败路径无法在此检测，只能靠数据源（准入列表）过滤。
      */
-    private fun tryMiuiMultiWindow(context: Context, packageName: String, clsName: String) {
+    private fun tryMiuiMultiWindow(context: Context, packageName: String, clsName: String, source: String?) {
         try {
             val cls = Class.forName(MIUI_MULTI_WINDOW_UTILS)
             val options = getActivityOptions(cls, context, packageName) ?: run {
@@ -147,6 +156,21 @@ object FreeformLauncher {
             )
             method.invoke(context, intent, options.toBundle(), Process.myUserHandle())
             HLog.i(TAG, "MiuiMultiWindow fallback success: $packageName/$clsName")
+            // 上下文记录（C3，计划 §A3）：getActivityOptions 非 null 且 invoke 未抛=成功口径
+            // （ROM saveStartFreeform 同源）。launcher/桌面来源在 C4 已归一为 null；这里的
+            // 双保险再滤一次模块自身。失败不阻塞启动（runCatching 内静默）。
+            if (source != null && source != MODULE_PACKAGE) {
+                val recorded = ContextLaunchLog.record(
+                    context.contentResolver, source, packageName
+                )
+                if (recorded) {
+                    // 写读同进程（:ui）零延迟同步原料；launcher 侧靠 DataLoader 周期刷新
+                    DataLoader.updateContextCounts(
+                        ContextLaunchLog.countsAll(ContextLaunchLog.read(context.contentResolver))
+                    )
+                }
+                HLog.i(TAG, "ctx recorded: $source->$packageName ok=$recorded")
+            }
         } catch (e: Exception) {
             HLog.e(TAG, "MiuiMultiWindow fallback failed: ${e.message}")
             toastOnMain(context, "小窗启动失败：$packageName")

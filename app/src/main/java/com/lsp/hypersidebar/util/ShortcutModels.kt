@@ -19,6 +19,8 @@ private const val TAG = "ShortcutModels"
  *   无须固定在控制中心，2026-09-05 定稿；hook 缺席时自动回退 root 兜底）
  * - SHORTCUT_ID: 动态/固定快捷方式（微信扫一扫等 runtime 推送项，2026-09-08 定稿）——
  *   仅默认桌面可 startShortcut，经 launcher 进程桥代发（B2 归档结论因桌面桥的存在过时）
+ * - GROUP: 快捷方式组（类文件夹，2~3 子项，悬停展开；计划 §B0/B1，2026-10-25）——
+ *   组占一个上栏位置，子项不进根栏；不可嵌套、工具箱不可入组
  */
 enum class ShortcutKind {
     COMPONENT,
@@ -27,7 +29,8 @@ enum class ShortcutKind {
     TOOLBOX,
     SERVICE,
     QS_TILE,
-    SHORTCUT_ID
+    SHORTCUT_ID,
+    GROUP
 }
 
 /**
@@ -43,6 +46,8 @@ enum class ShortcutSource {
 /**
  * 统一快捷方式数据模型。
  * 持久化时只存结构化字段 / 原始 intentUri 文本，不持久化 Intent 对象。
+ * GROUP 条目的 children 仅一层（归一化强制，见 [ShortcutGroups]）；旧版本模块读到
+ * kind="GROUP" 会经 valueOf 失败回落 ACTIVITY 空条目（计划 §B1 明文降级副作用）。
  */
 data class ShortcutAction(
     val id: String,
@@ -56,7 +61,8 @@ data class ShortcutAction(
     val intentUri: String? = null,
     val iconPackageName: String? = null,
     val shortcutId: String? = null,
-    val order: Int = 0
+    val order: Int = 0,
+    val children: List<ShortcutAction>? = null
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -71,6 +77,9 @@ data class ShortcutAction(
         putOpt("iconPackageName", iconPackageName)
         putOpt("shortcutId", shortcutId)
         put("order", order)
+        children?.takeIf { it.isNotEmpty() }?.let { kids ->
+            putOpt("children", JSONArray().apply { kids.forEach { put(it.toJson()) } })
+        }
     }
 
     companion object {
@@ -88,9 +97,85 @@ data class ShortcutAction(
             intentUri = json.optString("intentUri", "").ifEmpty { null },
             iconPackageName = json.optString("iconPackageName", "").ifEmpty { null },
             shortcutId = json.optString("shortcutId", "").ifEmpty { null },
-            order = json.optInt("order", 0)
+            order = json.optInt("order", 0),
+            children = runCatching {
+                json.optJSONArray("children")?.let { arr ->
+                    (0 until arr.length()).mapNotNull { i ->
+                        runCatching { fromJson(arr.getJSONObject(i)) }.getOrNull()
+                    }.takeIf { it.isNotEmpty() }
+                }
+            }.getOrNull()
         )
     }
+}
+
+/**
+ * 快捷方式组纯核心（计划 §B0/B1，2026-10-25）：校验、配额、加载归一化。
+ * 所有规则在此单点，UI（C8）与扇形装配（C7）只消费结果。
+ */
+object ShortcutGroups {
+
+    /** 组内子项数量上下限（PRD：类文件夹，可同时装入 3 个快捷方式；至少 2 个成组） */
+    const val MIN_CHILDREN = 2
+    const val MAX_CHILDREN = 3
+
+    /**
+     * 建组校验：数量 2~3、子项 kind 合法（非 GROUP 不可嵌套、非 TOOLBOX 不可入组）、
+     * id 非空且不重复。UI 建组前调用；扇形装配不再校验（加载时已归一化）。
+     */
+    fun validateChildren(children: List<ShortcutAction>): Boolean {
+        if (children.size < MIN_CHILDREN || children.size > MAX_CHILDREN) return false
+        val ids = HashSet<String>()
+        for (c in children) {
+            if (c.kind == ShortcutKind.GROUP || c.kind == ShortcutKind.TOOLBOX) return false
+            if (c.id.isBlank() || !ids.add(c.id)) return false
+        }
+        return true
+    }
+
+    /**
+     * 存储配额口径（计划 §B1）：组占一个上栏位置，但子项仍计入
+     * [ShortcutStore.MAX_STORED_SHORTCUTS]（=25：5 满组+5 单 / 6 满组+1 候补恰好用满）。
+     */
+    fun storageUnits(list: List<ShortcutAction>): Int =
+        list.sumOf { 1 + (if (it.kind == ShortcutKind.GROUP) it.children?.size ?: 0 else 0) }
+
+    /**
+     * 加载时归一化（不靠 UI 兜，计划 §B1；2026-10-25 布局定稿修订）：
+     * - 组缺 children / <2 子 ⇒ **解散**（子项提升回顶层普通条目，保持原相对顺序）
+     * - 子项里嵌套 GROUP / TOOLBOX / 重复 id / 空 id ⇒ 剥除该子项（其余保留）
+     * - 剥除后不足 MIN_CHILDREN 的组同样解散
+     * - **全部成员 disabled 不再解散**（布局文档 §5.3：该状态合法——隐藏整组走组开关；
+     *   扇形端由 [enabledChildren] 空即隐藏承接，见 FanMenuController 装配）
+     * 顶层非组条目原样透传。
+     */
+    fun normalize(list: List<ShortcutAction>): List<ShortcutAction> {
+        val out = ArrayList<ShortcutAction>(list.size)
+        for (item in list) {
+            if (item.kind != ShortcutKind.GROUP) {
+                out.add(item)
+                continue
+            }
+            val cleaned = item.children.orEmpty()
+                .filter { it.kind != ShortcutKind.GROUP && it.kind != ShortcutKind.TOOLBOX && it.id.isNotBlank() }
+                .distinctBy { it.id }
+            if (cleaned.size < MIN_CHILDREN) {
+                // 解散：子项提升为顶层
+                cleaned.forEach { out.add(it.copy(source = ShortcutSource.USER)) }
+            } else {
+                out.add(item.copy(children = cleaned))
+            }
+        }
+        return out
+    }
+
+    /**
+     * 组的**可展示**成员（enabled 过滤；非组返回 null）。扇形装配/组详情展开共用：
+     * 空列表=空成员组——扇形端隐藏（2026-10-25 用户拍板），组详情端由 UI 层提示。
+     */
+    fun enabledChildren(group: ShortcutAction): List<ShortcutAction>? =
+        if (group.kind != ShortcutKind.GROUP) null
+        else group.children.orEmpty().filter { it.enabled }.takeIf { it.isNotEmpty() }
 }
 
 /**
@@ -115,8 +200,20 @@ object ShortcutStore {
      */
     const val MAX_USER_SHORTCUTS = 6
 
-    /** 存储上限（§2.4 用户定值：最多可添加 10 个，超出部分仅存储不上栏）。 */
-    const val MAX_STORED_SHORTCUTS = 10
+    /**
+     * 设置页启用上限（布局定稿 2026-10-25：取面板在场时的最坏容量=5，不随 gb/vtb
+     * 动态变）：已启用顶层项达到 5 后禁止再启用（toast 原因），杜绝"候补不显示"态；
+     * 存量超额数据不强制禁用，由首页顶部提醒卡兜底。扇形运行时截断逻辑不变。
+     */
+    const val ENABLED_CAP = MAX_USER_SHORTCUTS - 1
+
+    /**
+     * 存储上限（单位=storageUnits：组占 1+子项数、单项占 1）。§2.4 原定 10；
+     * 2026-10-25 用户放宽为 25——组的占位算术（1+3）把 10 位挤得太紧，25 恰好
+     * 覆盖「5 满组+5 单项」与「6 满组+1 候补」（6=上栏槽位上限）两种满配。
+     * 仅约束存储池；上栏展示仍由 [MAX_USER_SHORTCUTS]=6 收口。
+     */
+    const val MAX_STORED_SHORTCUTS = 25
 
     /**
      * 从 SharedPreferences 读取所有用户快捷方式（按 order 排序）。
@@ -139,7 +236,8 @@ object ShortcutStore {
                     list.add(item)
                 }
             }
-            list.sortedBy { it.order }
+            // 组归一化（§B1）：解散不合法组/剥非法子项——排序后做，解散子项保持在原组位置附近
+            ShortcutGroups.normalize(list.sortedBy { it.order })
         } catch (e: Exception) {
             HLog.e(TAG, "loadUserShortcuts: parse failed", e)
             emptyList()
@@ -181,12 +279,15 @@ object ShortcutStore {
     }
 
     /**
-     * 添加一个用户快捷方式（存储上限 MAX_STORED_SHORTCUTS=10）。
+     * 添加一个用户快捷方式（存储上限按 storageUnits 计——组占 1+子项数，与
+     * GroupEditPage/设置页同口径，2026-10-25 统一）。
      * NOTE: Must be called from main thread (not thread-safe).
      */
     fun addShortcut(prefs: SharedPreferences, shortcut: ShortcutAction): Boolean {
         val current = loadUserShortcuts(prefs).toMutableList()
-        if (current.size >= MAX_STORED_SHORTCUTS) return false
+        // 组经 GroupEditPage 建（占位算术在彼处校验）；此处防御：极端情况下
+        // 直接 add 组也按 storageUnits 计
+        if (ShortcutGroups.storageUnits(current) >= MAX_STORED_SHORTCUTS) return false
         val newItem = shortcut.copy(
             source = ShortcutSource.USER,
             order = current.size
@@ -197,34 +298,58 @@ object ShortcutStore {
     }
 
     /**
-     * 更新指定 id 的快捷方式。Returns true if found and updated.
+     * 更新指定 id 的快捷方式（顶层或**组成员**——布局定稿 §5.1 成员可进现有编辑页，
+     * 成员嵌在组 JSON 内，只扫顶层会静默丢编辑）。Returns true if found and updated.
      * NOTE: Must be called from main thread (not thread-safe).
      */
     fun updateShortcut(prefs: SharedPreferences, updated: ShortcutAction): Boolean {
         val current = loadUserShortcuts(prefs).toMutableList()
         val idx = current.indexOfFirst { it.id == updated.id }
-        return if (idx >= 0) {
+        if (idx >= 0) {
             current[idx] = updated
             saveUserShortcuts(prefs, current)
-            true
-        } else {
-            false
+            return true
         }
+        // 组成员寻址：只替换命中的那一层，不动其它成员
+        for (i in current.indices) {
+            val g = current[i]
+            if (g.kind != ShortcutKind.GROUP) continue
+            val kids = g.children.orEmpty()
+            val kIdx = kids.indexOfFirst { it.id == updated.id }
+            if (kIdx >= 0) {
+                current[i] = g.copy(children = kids.toMutableList().also { it[kIdx] = updated })
+                saveUserShortcuts(prefs, current)
+                return true
+            }
+        }
+        return false
     }
 
     /**
-     * 删除指定 id 的快捷方式。Returns true if found and removed.
+     * 删除指定 id 的快捷方式（顶层或**组成员**——成员经编辑页删除也须命中；组内
+     * 剩余成员 <2 时由加载归一化解散兜底）。Returns true if found and removed.
      * NOTE: Must be called from main thread (not thread-safe).
      */
     fun removeShortcut(prefs: SharedPreferences, id: String): Boolean {
         val current = loadUserShortcuts(prefs)
         val newList = current.filter { it.id != id }
-        return if (newList.size < current.size) {
+        if (newList.size < current.size) {
             saveUserShortcuts(prefs, newList)
-            true
-        } else {
-            false
+            return true
         }
+        for (i in current.indices) {
+            val g = current[i]
+            if (g.kind != ShortcutKind.GROUP) continue
+            val kids = g.children.orEmpty()
+            if (kids.any { it.id == id }) {
+                newList.toMutableList().apply {
+                    this[i] = g.copy(children = kids.filter { it.id != id })
+                    saveUserShortcuts(prefs, this)
+                }
+                return true
+            }
+        }
+        return false
     }
 
     /**

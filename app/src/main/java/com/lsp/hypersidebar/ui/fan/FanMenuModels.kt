@@ -6,7 +6,13 @@ import androidx.compose.ui.graphics.Color
 data class FanAppInfo(
     val packageName: String,
     val appName: String = "",
-    val actionHandle: ((android.content.Context) -> Unit)? = null
+    val actionHandle: ((android.content.Context) -> Unit)? = null,
+    /**
+     * 组条目（C7，计划 §B0）：非 null = 快捷组。组本身无 actionHandle（扇形层展开
+     * 而非启动）；children 各自带 actionHandle（按单条路径装配——子项启动/统计零特殊化）。
+     * packageName = iconPackageName ?: ""（纯图标源：借用图标走 AppIconCache，拼贴时空）。
+     */
+    val group: List<FanAppInfo>? = null
 ) {
     val isAction: Boolean get() = actionHandle != null
 }

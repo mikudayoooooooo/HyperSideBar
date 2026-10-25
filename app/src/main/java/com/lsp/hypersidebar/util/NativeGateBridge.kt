@@ -142,7 +142,9 @@ object NativeGateBridge {
      * （目录不可写/没有外部存储），但失败了也只是"关不掉"，功能不受影响（native 缺省开）。
      */
     private fun writeMarker(value: String) {
-        if (HLog.proc() != BuildConfig.APPLICATION_ID) return
+        // ⚠ 2026-10-25 修：原来拿 HLog.proc()（短名，模块 App="app"）跟 applicationId 比，
+        // 恒不等 ⇒ marker 静默写不进（10-14 落地以来一直如此，只因关断从未触发而没暴露）。
+        if (HLog.proc() != HLog.PROC_APP) return
         val f = markerFile()
         if (f == null) {
             HLog.w(TAG, "gate marker 路径构造失败 ⇒ 关断通道不可用（本机没有外部存储？）")
@@ -169,7 +171,7 @@ object NativeGateBridge {
      * 这是"开"的唯一动作——**不写属性**（写 1 在 fail-open 下无意义，且真机上两条写路都被拒）。
      */
     private fun clearMarker() {
-        if (HLog.proc() != BuildConfig.APPLICATION_ID) return
+        if (HLog.proc() != HLog.PROC_APP) return
         val f = markerFile() ?: return
         if (!runCatching { f.isFile }.getOrDefault(false)) return
         val old = runCatching { f.readText().trim() }.getOrDefault("")

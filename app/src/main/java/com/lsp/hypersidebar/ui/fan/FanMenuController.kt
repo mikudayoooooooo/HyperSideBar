@@ -253,16 +253,18 @@ class FanMenuController(
             ShortcutStore.isToolboxAvailable(context),
             ShortcutStore.getToolboxLabel(context)
         )
-        val allQuick = runtimeQuick.map { sa ->
-            // 组条目翻译（C7，计划 §B0）：无 actionHandle + children 各自闭包——
-            // 子项零特殊化（启动/统计走现有 actionHandle 路径）；组图标源=iconPackageName
-            // （扇形侧首个消费该字段的场景：借用图标走 AppIconCache，拼贴时空串）
-            if (sa.kind == ShortcutKind.GROUP && !sa.children.isNullOrEmpty()) {
-                FanAppInfo(
+        val allQuick = runtimeQuick.mapNotNull { sa ->
+            // 组条目翻译（C7 §B0 + 2026-10-25 布局定稿）：无 actionHandle + children 各自
+            // 闭包——子项零特殊化；组图标源=iconPackageName。**可展示成员为空（全关/全非法）
+            // ⇒ 整组隐藏**（用户拍板：死格不如不出现）——mapNotNull 落空即隐藏
+            if (sa.kind == ShortcutKind.GROUP) {
+                val kids = com.lsp.hypersidebar.util.ShortcutGroups.enabledChildren(sa)
+                    ?: return@mapNotNull null
+                return@mapNotNull FanAppInfo(
                     packageName = sa.iconPackageName ?: "",
                     appName = sa.label,
                     actionHandle = null,
-                    group = sa.children.filter { it.enabled }.map { child ->
+                    group = kids.map { child ->
                         FanAppInfo(
                             packageName = child.iconPackageName ?: child.packageName ?: "",
                             appName = child.label,
@@ -270,7 +272,8 @@ class FanMenuController(
                         )
                     }
                 )
-            } else {
+            }
+            run {
                 FanAppInfo(
                     // 真实宿主包名（批次 2 修复）：此前用 "shortcut:${id}" 伪包名，
                     // AppIconCache.load 的 getApplicationIcon 必然 NameNotFound → bitmap=null

@@ -84,12 +84,28 @@ class ShortcutGroupModelsTest {
     }
 
     @Test
-    fun `normalize dissolves all-disabled group`() {
-        val list = listOf(
-            group("g", "G", listOf(act("a", "com.a", enabled = false), act("b", "com.b", enabled = false)))
+    fun `normalize keeps all-disabled group per layout revision`() {
+        // 2026-10-25 布局定稿：全关成员是合法状态（隐藏整组走组开关），不再自动解散；
+        // 扇形端由 enabledChildren 空=隐藏承接
+        val g = group("g", "G", listOf(act("a", "com.a", enabled = false), act("b", "com.b", enabled = false)))
+        val out = ShortcutGroups.normalize(listOf(g))
+        assertEquals(listOf("g"), out.map { it.id })
+        assertEquals(2, out[0].children?.size)
+    }
+
+    @Test
+    fun `enabledChildren filters and nulls for non-group`() {
+        val g = group(
+            "g", "G",
+            listOf(act("a", "com.a"), act("b", "com.b", enabled = false), act("c", "com.c"))
         )
-        val out = ShortcutGroups.normalize(list)
-        assertEquals(listOf("a", "b"), out.map { it.id })
+        assertEquals(listOf("a", "c"), ShortcutGroups.enabledChildren(g)?.map { it.id })
+        // 全关 ⇒ null（扇形端隐藏判据）
+        val allOff = group("g2", "G2", listOf(act("x", "com.x", enabled = false), act("y", "com.y", enabled = false)))
+        assertEquals(null, ShortcutGroups.enabledChildren(allOff))
+        // 非组 ⇒ null；无 children 的组 ⇒ null
+        assertEquals(null, ShortcutGroups.enabledChildren(act("n", "com.n")))
+        assertEquals(null, ShortcutGroups.enabledChildren(group("g3", "G3", emptyList())))
     }
 
     @Test

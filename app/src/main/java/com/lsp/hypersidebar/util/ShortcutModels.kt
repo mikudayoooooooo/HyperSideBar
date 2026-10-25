@@ -141,13 +141,13 @@ object ShortcutGroups {
         list.sumOf { 1 + (if (it.kind == ShortcutKind.GROUP) it.children?.size ?: 0 else 0) }
 
     /**
-     * 加载时归一化（不靠 UI 兜，计划 §B1）：
-     * - 组缺 children / <2 子 / 全部 disabled ⇒ **解散**（子项提升回顶层普通条目，
-     *   保持原相对顺序）
+     * 加载时归一化（不靠 UI 兜，计划 §B1；2026-10-25 布局定稿修订）：
+     * - 组缺 children / <2 子 ⇒ **解散**（子项提升回顶层普通条目，保持原相对顺序）
      * - 子项里嵌套 GROUP / TOOLBOX / 重复 id / 空 id ⇒ 剥除该子项（其余保留）
      * - 剥除后不足 MIN_CHILDREN 的组同样解散
-     * 顶层非组条目原样透传；GROUP kind 但 children=null 的孤儿条目按普通条目透传
-     * （不加 children 它就是个无动作空壳，扇形装配按防御分支处理）。
+     * - **全部成员 disabled 不再解散**（布局文档 §5.3：该状态合法——隐藏整组走组开关；
+     *   扇形端由 [enabledChildren] 空即隐藏承接，见 FanMenuController 装配）
+     * 顶层非组条目原样透传。
      */
     fun normalize(list: List<ShortcutAction>): List<ShortcutAction> {
         val out = ArrayList<ShortcutAction>(list.size)
@@ -159,9 +159,8 @@ object ShortcutGroups {
             val cleaned = item.children.orEmpty()
                 .filter { it.kind != ShortcutKind.GROUP && it.kind != ShortcutKind.TOOLBOX && it.id.isNotBlank() }
                 .distinctBy { it.id }
-            val dissolved = cleaned.size < MIN_CHILDREN || cleaned.all { !it.enabled }
-            if (dissolved) {
-                // 解散：子项提升为顶层（继承组的 enabled 兜底——子项自身 disabled 的仍 disabled）
+            if (cleaned.size < MIN_CHILDREN) {
+                // 解散：子项提升为顶层
                 cleaned.forEach { out.add(it.copy(source = ShortcutSource.USER)) }
             } else {
                 out.add(item.copy(children = cleaned))
@@ -169,6 +168,14 @@ object ShortcutGroups {
         }
         return out
     }
+
+    /**
+     * 组的**可展示**成员（enabled 过滤；非组返回 null）。扇形装配/组详情展开共用：
+     * 空列表=空成员组——扇形端隐藏（2026-10-25 用户拍板），组详情端由 UI 层提示。
+     */
+    fun enabledChildren(group: ShortcutAction): List<ShortcutAction>? =
+        if (group.kind != ShortcutKind.GROUP) null
+        else group.children.orEmpty().filter { it.enabled }.takeIf { it.isNotEmpty() }
 }
 
 /**

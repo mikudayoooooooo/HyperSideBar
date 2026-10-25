@@ -135,7 +135,7 @@ object ShortcutGroups {
 
     /**
      * 存储配额口径（计划 §B1）：组占一个上栏位置，但子项仍计入
-     * [ShortcutStore.MAX_STORED_SHORTCUTS]——两组×3 子 + 2 单选 = 10 用满。
+     * [ShortcutStore.MAX_STORED_SHORTCUTS]（=25：5 满组+5 单 / 6 满组+1 候补恰好用满）。
      */
     fun storageUnits(list: List<ShortcutAction>): Int =
         list.sumOf { 1 + (if (it.kind == ShortcutKind.GROUP) it.children?.size ?: 0 else 0) }
@@ -193,8 +193,13 @@ object ShortcutStore {
      */
     const val MAX_USER_SHORTCUTS = 6
 
-    /** 存储上限（§2.4 用户定值：最多可添加 10 个，超出部分仅存储不上栏）。 */
-    const val MAX_STORED_SHORTCUTS = 10
+    /**
+     * 存储上限（单位=storageUnits：组占 1+子项数、单项占 1）。§2.4 原定 10；
+     * 2026-10-25 用户放宽为 25——组的占位算术（1+3）把 10 位挤得太紧，25 恰好
+     * 覆盖「5 满组+5 单项」与「6 满组+1 候补」（6=上栏槽位上限）两种满配。
+     * 仅约束存储池；上栏展示仍由 [MAX_USER_SHORTCUTS]=6 收口。
+     */
+    const val MAX_STORED_SHORTCUTS = 25
 
     /**
      * 从 SharedPreferences 读取所有用户快捷方式（按 order 排序）。
@@ -260,12 +265,15 @@ object ShortcutStore {
     }
 
     /**
-     * 添加一个用户快捷方式（存储上限 MAX_STORED_SHORTCUTS=10）。
+     * 添加一个用户快捷方式（存储上限按 storageUnits 计——组占 1+子项数，与
+     * GroupEditPage/设置页同口径，2026-10-25 统一）。
      * NOTE: Must be called from main thread (not thread-safe).
      */
     fun addShortcut(prefs: SharedPreferences, shortcut: ShortcutAction): Boolean {
         val current = loadUserShortcuts(prefs).toMutableList()
-        if (current.size >= MAX_STORED_SHORTCUTS) return false
+        // 组经 GroupEditPage 建（占位算术在彼处校验）；此处防御：极端情况下
+        // 直接 add 组也按 storageUnits 计
+        if (ShortcutGroups.storageUnits(current) >= MAX_STORED_SHORTCUTS) return false
         val newItem = shortcut.copy(
             source = ShortcutSource.USER,
             order = current.size

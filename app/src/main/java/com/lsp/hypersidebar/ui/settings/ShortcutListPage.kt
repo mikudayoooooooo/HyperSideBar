@@ -152,7 +152,9 @@ internal fun ShortcutListPage(
     }
 
     val enabledCount = workingList.count { it.enabled }
-    val atStoreCap = workingList.size >= ShortcutStore.MAX_STORED_SHORTCUTS
+    // 存储上限按 storageUnits 计（组占 1+子项数，与 addShortcut/GroupEditPage 同口径）
+    val atStoreCap =
+        com.lsp.hypersidebar.util.ShortcutGroups.storageUnits(workingList) >= ShortcutStore.MAX_STORED_SHORTCUTS
 
     Box(modifier = modifier.fillMaxSize()) {
         LazyColumn(

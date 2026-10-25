@@ -169,7 +169,7 @@
     <string name="shortcut_batch_delete">删除（%d）</string>
     <string name="shortcut_select_all">全选</string>
     <string name="shortcut_batch_delete_confirm">将删除已选的 %d 个快捷方式。</string>
-    <string name="shortcuts_at_store_limit">最多可添加 %d 个快捷方式</string>
+    <string name="shortcuts_at_store_limit">已达存储上限（%d 位：组与成员各占一位）</string>
     <string name="shortcut_entry_summary">已添加 %1$d · 启用 %2$d；改动下次呼出生效</string>
     <string name="shortcut_unnamed">未命名</string>
     <string name="shortcut_enabled">启用</string>

@@ -235,6 +235,15 @@
     <string name="group_edit_invalid">成员须为 2~3 个现有快捷方式，且不可含组或工具箱</string>
     <string name="group_edit_quota">存储配额 %1$d/%2$d（组与成员各占一位）</string>
     <string name="group_edit_quota_exceeded">超出存储上限：请先删减快捷方式（组与成员各占一位）</string>
+    <string name="shortcut_add_title">添加快捷方式</string>
+    <string name="shortcut_empty_add_hint">暂无快捷方式，点击右上角＋添加</string>
+    <string name="shortcut_section_enabled">已启用 · 按扇形顺序</string>
+    <string name="shortcut_section_disabled">未启用</string>
+    <string name="shortcut_enabled_cap_toast">已启用 %d 项达上限（含面板占位），请先关闭其它项</string>
+    <string name="shortcut_overflow_card">已启用 %1$d 项，超过扇形显示上限 %2$d；超出项不会显示</string>
+    <string name="batch_create_group">组成分组</string>
+    <string name="batch_group_invalid">请选择 2~3 个普通快捷方式（组与工具箱不可入组）</string>
+    <string name="shortcut_delete_confirm_with_groups">将删除所选 %1$d 个顶层项目，其中包含 %2$d 个组及其 %3$d 个成员。此操作不会保留组成员。</string>
     <string name="qs_tile_picker_title">选择快捷开关</string>
     <string name="qs_tile_picker_search">搜索磁贴…</string>
     <string name="qs_tile_picker_loading">正在扫描磁贴服务…</string>

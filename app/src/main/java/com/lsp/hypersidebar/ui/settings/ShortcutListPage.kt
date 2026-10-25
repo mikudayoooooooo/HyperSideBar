@@ -1,11 +1,9 @@
 package com.lsp.hypersidebar.ui.settings
 
 import android.content.SharedPreferences
-import androidx.activity.compose.BackHandler
+import android.widget.Toast
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -15,20 +13,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.border
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
@@ -38,17 +32,25 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.navigationBars
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.util.ShortcutAction
+import com.lsp.hypersidebar.util.ShortcutGroups
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutStore
 import top.yukonga.miuix.kmp.basic.BasicComponent
@@ -60,6 +62,7 @@ import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.AddFolder
 import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Ok
 import top.yukonga.miuix.kmp.icon.extended.Sort
@@ -81,28 +84,40 @@ internal class ShortcutSelectionBar {
     var onToggleAll: (() -> Unit)? = null
 }
 
+/**
+ * 快捷方式首页（布局定稿 shortcut-groups-settings-layout.md §2/§4，2026-10-25）：
+ * 已启用/未启用两区混排单列表——首页顺序=扇形根栏顺序；启用上限 [ShortcutStore.ENABLED_CAP]
+ * 固定 5（面板在场最坏容量，不随 gb/vtb 动态），达到后禁止再启用（toast 原因）；
+ * 多选收底双动作：组成分组（2~3 普通项预填建组）+ 删除（含组=连成员删，确认文案区分）。
+ */
 @Composable
 internal fun ShortcutListPage(
     prefs: SharedPreferences,
     bar: ShortcutSelectionBar,
-    /** 刷新令牌（2026-10-25 真机反馈修复）：子页保存/删除/退出时自增——nav3 返回时
-     *  remember 保活导致列表停留旧值，须重进页面才能看到新加项 */
+    /** 刷新令牌：子页保存/删除/退出时自增——nav3 返回时 remember 保活须靠它重读 */
     revision: Int = 0,
     onEdit: (ShortcutAction) -> Unit,
-    onAdd: (ShortcutKind) -> Unit,
+    onCreateGroup: (List<ShortcutAction>) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 内存工作列表：拖动交换/启停只改内存并即时写盘（列表序=扇形展示序）；
-    // revision 变化（子页保存返回）重建即重新加载
+    // 内存工作列表（revision 变化重建即重读）：写入时保持"已启用在前、未启用在后"的
+    // 分区不变量（列表序=存储序；扇形端按启用序截断）
     var workingList by remember(revision) { mutableStateOf(ShortcutStore.loadUserShortcuts(prefs)) }
     // 批量选择模式（长按行进入）：顶栏变形 + 删除收底（HyperOS 闹钟批量范式）
     var selectionMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
 
     fun exitSelection() {
         selectionMode = false
         selectedIds = emptySet()
+    }
+
+    fun enterSelection(item: ShortcutAction) {
+        selectionMode = true
+        selectedIds = setOf(item.id)
     }
 
     // 顶栏桥同步（组合后写，值稳定不触发多余重组）；弹栈时清桥防顶栏残留选择态
@@ -123,13 +138,31 @@ internal fun ShortcutListPage(
         }
     }
     // 选择模式下系统返回=退出选择（不弹页）
-    BackHandler(enabled = selectionMode) { exitSelection() }
+    androidx.activity.compose.BackHandler(enabled = selectionMode) { exitSelection() }
 
+    // ===== 分区（布局 §2.2）=====
+    val enabledList = workingList.filter { it.enabled }
+    val disabledList = workingList.filter { !it.enabled }
+    val enabledCount = enabledList.size
+    // 启用上限拦截（布局定稿拍板：固定 5，超了不允许再启用，杜绝候补态）
     fun toggleEnabled(item: ShortcutAction, value: Boolean) {
-        workingList = workingList.map {
-            if (it.id == item.id) it.copy(enabled = value) else it
+        if (value && enabledCount >= ShortcutStore.ENABLED_CAP) {
+            Toast.makeText(
+                context,
+                context.getString(R.string.shortcut_enabled_cap_toast, ShortcutStore.ENABLED_CAP),
+                Toast.LENGTH_SHORT
+            ).show()
+            return
         }
-        ShortcutStore.updateShortcut(prefs, item.copy(enabled = value))
+        val rest = workingList.filter { it.id != item.id }
+        val updated = item.copy(enabled = value)
+        // 开⇒插入已启用区末尾（未启用区之前）；关⇒沉到未启用区末尾（布局 §2.2）
+        workingList = if (value) {
+            rest.filter { it.enabled } + updated + rest.filter { !it.enabled }
+        } else {
+            rest + updated
+        }
+        ShortcutStore.saveUserShortcuts(prefs, workingList)
     }
 
     fun deleteSelected() {
@@ -137,6 +170,22 @@ internal fun ShortcutListPage(
         workingList = workingList.filter { it.id !in selectedIds }
         ShortcutStore.saveUserShortcuts(prefs, workingList)
         exitSelection()
+    }
+
+    // 组成分组（布局 §4）：仅 2~3 个顶层普通项可用；点击时校验并给原因
+    fun createGroupFromSelection() {
+        val selected = workingList.filter { it.id in selectedIds }
+        val eligible = selected.all { it.kind != ShortcutKind.GROUP && it.kind != ShortcutKind.TOOLBOX }
+        if (selected.size in ShortcutGroups.MIN_CHILDREN..ShortcutGroups.MAX_CHILDREN && eligible) {
+            onCreateGroup(selected)
+            exitSelection()
+        } else {
+            Toast.makeText(
+                context,
+                context.getString(R.string.batch_group_invalid),
+                Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     val listState = rememberLazyListState()
@@ -149,15 +198,18 @@ internal fun ShortcutListPage(
     ) { from, to ->
         val fromIdx = workingList.indexOfFirst { it.id == from.key }
         val toIdx = workingList.indexOfFirst { it.id == to.key }
-        if (fromIdx >= 0 && toIdx >= 0) {
+        // 分区约束（布局 §2.2）：拖动仅限已启用区内部（顺序=扇形根栏序）；
+        // 手柄只在已启用行，此处防越界落位到未启用区
+        if (fromIdx >= 0 && toIdx >= 0 &&
+            workingList[fromIdx].enabled && workingList[toIdx].enabled
+        ) {
             workingList = workingList.toMutableList().apply { add(toIdx, removeAt(fromIdx)) }
         }
     }
 
-    val enabledCount = workingList.count { it.enabled }
-    // 存储上限按 storageUnits 计（组占 1+子项数，与 addShortcut/GroupEditPage 同口径）
-    val atStoreCap =
-        com.lsp.hypersidebar.util.ShortcutGroups.storageUnits(workingList) >= ShortcutStore.MAX_STORED_SHORTCUTS
+    val atStoreCap = ShortcutGroups.storageUnits(workingList) >= ShortcutStore.MAX_STORED_SHORTCUTS
+    // 存量超额兜底（新启用已被上限拦死；此卡只服务历史数据/外部写入，不自动禁用）
+    val overflow = enabledCount > ShortcutStore.ENABLED_CAP
 
     Box(modifier = modifier.fillMaxSize()) {
         LazyColumn(
@@ -165,7 +217,7 @@ internal fun ShortcutListPage(
             modifier = Modifier
                 .fillMaxSize()
                 .overScrollVertical(),
-            // 选择模式底部预留删除栏高度，末行不被遮挡
+            // 选择模式底部预留双动作栏高度，末行不被遮挡
             contentPadding = PaddingValues(
                 start = 16.dp,
                 end = 16.dp,
@@ -174,13 +226,26 @@ internal fun ShortcutListPage(
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (!selectionMode) {
-                item {
-                    SmallTitle(
-                        text = stringResource(
-                            R.string.shortcut_count_format, workingList.size, enabledCount
-                        )
+            item {
+                SmallTitle(
+                    text = stringResource(
+                        R.string.shortcut_count_format, workingList.size, enabledCount
                     )
+                )
+            }
+
+            if (overflow) {
+                item {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = stringResource(
+                                R.string.shortcut_overflow_card,
+                                enabledCount, ShortcutStore.ENABLED_CAP
+                            ),
+                            color = MiuixTheme.colorScheme.primary,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
                 }
             }
 
@@ -188,7 +253,7 @@ internal fun ShortcutListPage(
                 item {
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            text = stringResource(R.string.shortcuts_empty_hint),
+                            text = stringResource(R.string.shortcut_empty_add_hint),
                             modifier = Modifier.padding(16.dp),
                             color = MiuixTheme.colorScheme.onSurfaceVariantSummary
                         )
@@ -196,212 +261,146 @@ internal fun ShortcutListPage(
                 }
             }
 
-            if (workingList.isNotEmpty()) {
+            if (selectionMode) {
+                // 批量=平铺全表（含未启用项可勾选删除）
                 itemsIndexed(workingList, key = { _, shortcut -> shortcut.id }) { _, shortcut ->
-                    if (selectionMode) {
-                        val checked = shortcut.id in selectedIds
-                        BasicComponent(
-                            title = shortcut.label.ifEmpty { stringResource(R.string.shortcut_unnamed) },
-                            summary = buildShortcutSummary(
-                                shortcut,
-                                stringResource(R.string.shortcut_uri_unset),
-                                stringResource(R.string.shortcut_toolbox_desc)
-                            ),
-                            // HyperOS 批量范式：勾选圈在行尾（未选中=空心环，选中=蓝底对勾）
-                            endActions = { SelectionCircle(checked = checked) },
-                            onClick = {
-                                selectedIds = if (checked) selectedIds - shortcut.id
-                                else selectedIds + shortcut.id
-                            },
-                            modifier = Modifier.animateItem()
+                    val checked = shortcut.id in selectedIds
+                    BasicComponent(
+                        title = shortcut.label.ifEmpty { stringResource(R.string.shortcut_unnamed) },
+                        summary = buildShortcutSummary(
+                            shortcut,
+                            stringResource(R.string.shortcut_uri_unset),
+                            stringResource(R.string.shortcut_toolbox_desc)
+                        ),
+                        // HyperOS 批量范式：勾选圈在行尾（未选中=空心环，选中=蓝底对勾）
+                        endActions = { SelectionCircle(checked = checked) },
+                        onClick = {
+                            selectedIds = if (checked) selectedIds - shortcut.id
+                            else selectedIds + shortcut.id
+                        },
+                        modifier = Modifier.animateItem()
+                    )
+                }
+            } else {
+                // ===== 已启用区（有序可拖=扇形根栏序）=====
+                if (enabledList.isNotEmpty()) {
+                    item { SmallTitle(text = stringResource(R.string.shortcut_section_enabled)) }
+                    itemsIndexed(enabledList, key = { _, s -> s.id }) { _, shortcut ->
+                        ShortcutRow(
+                            shortcut = shortcut,
+                            showHandle = true,
+                            reorderState = reorderState,
+                            prefs = prefs,
+                            haptics = haptics,
+                            onEdit = onEdit,
+                            onToggle = ::toggleEnabled,
+                            onEnterSelection = ::enterSelection,
+                            workingList = workingList
                         )
-                    } else {
-                        val haptics = LocalHapticFeedback.current
-                        ReorderableItem(
-                            state = reorderState,
-                            key = shortcut.id,
-                            animateItemModifier = Modifier.animateItem()
-                        ) { isDragging ->
-                            // 拖动中的抬升感：占位方块无卡底，阴影不可见，用微放大表达"浮起"
-                            val scale by animateFloatAsState(
-                                if (isDragging) 1.03f else 1f, label = "shortcutDragScale"
-                            )
-                            val iconPkg = shortcut.iconPackageName ?: shortcut.packageName
-                            BasicComponent(
-                                title = shortcut.label.ifEmpty { stringResource(R.string.shortcut_unnamed) },
-                                summary = buildShortcutSummary(
-                                    shortcut,
-                                    stringResource(R.string.shortcut_uri_unset),
-                                    stringResource(R.string.shortcut_toolbox_desc)
-                                ),
-                                // 禁用项整行变暗（§2.4 用户拍板），不再加文字标签
-                                enabled = shortcut.enabled,
-                                startAction = if (iconPkg != null) {
-                                    { SettingsAppIcon(packageName = iconPkg, appName = shortcut.label, size = 32f) }
-                                } else null,
-                                endActions = {
-                                    // 行内启停（§2.4 用户拍板）：即时写盘即时变暗，无需进编辑页
-                                    Switch(
-                                        checked = shortcut.enabled,
-                                        onCheckedChange = { toggleEnabled(shortcut, it) }
-                                    )
-                                    // 拖动手柄：40dp 触摸热区（图标视觉 24dp）；松手一次落盘。
-                                    // suppressRowLongPress 先消费 down——手柄按下不得漏给行内长按
-                                    // （否则原地按住手柄会误入批量选择）
-                                    Box(
-                                        modifier = Modifier
-                                            .padding(start = 8.dp)
-                                            .size(40.dp)
-                                            .suppressRowLongPress()
-                                            .draggableHandle(
-                                                onDragStarted = {
-                                                    haptics.performHapticFeedback(
-                                                        HapticFeedbackType.LongPress
-                                                    )
-                                                },
-                                                onDragStopped = {
-                                                    ShortcutStore.saveUserShortcuts(prefs, workingList)
-                                                }
-                                            ),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = MiuixIcons.Sort,
-                                            contentDescription = stringResource(R.string.shortcut_drag_handle),
-                                            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                    }
-                                },
-                                modifier = Modifier
-                                    .graphicsLayer {
-                                        scaleX = scale
-                                        scaleY = scale
-                                    }
-                                    // 单击与长按必须同一节点裁决（combinedClickable）：
-                                    // foundation 1.10 的 node clickable 先消费 DOWN，外挂
-                                    // detectTapGestures 的 awaitFirstDown 只认未消费 down，
-                                    // 长按检测永远收不到手势（批量模式失效根因）。
-                                    // 禁用行仍可长按入选（批量删除禁用项），仅挡单击。
-                                    .combinedClickable(
-                                        onClick = { if (shortcut.enabled) onEdit(shortcut) },
-                                        onLongClick = {
-                                            selectionMode = true
-                                            selectedIds = setOf(shortcut.id)
-                                        }
-                                    )
-                            )
-                        }
+                    }
+                }
+                // ===== 未启用区（沉底；无扇形排序柄，保留启停与编辑）=====
+                if (disabledList.isNotEmpty()) {
+                    item { SmallTitle(text = stringResource(R.string.shortcut_section_disabled)) }
+                    itemsIndexed(disabledList, key = { _, s -> s.id }) { _, shortcut ->
+                        ShortcutRow(
+                            shortcut = shortcut,
+                            showHandle = false,
+                            reorderState = reorderState,
+                            prefs = prefs,
+                            haptics = haptics,
+                            onEdit = onEdit,
+                            onToggle = ::toggleEnabled,
+                            onEnterSelection = ::enterSelection,
+                            workingList = workingList
+                        )
                     }
                 }
             }
 
-            if (!selectionMode) {
+            if (atStoreCap) {
                 item {
-                    SmallTitle(text = stringResource(R.string.shortcuts_add_section))
-                }
-                item {
-                    Card(modifier = Modifier.fillMaxWidth()) {
-                        Column {
-                            ArrowPreference(
-                                title = stringResource(R.string.shortcuts_add_component),
-                                summary = stringResource(R.string.shortcuts_add_component_summary),
-                                onClick = { onAdd(ShortcutKind.COMPONENT) },
-                                enabled = !atStoreCap
-                            )
-                            ArrowPreference(
-                                title = stringResource(R.string.shortcuts_add_intent_uri),
-                                summary = stringResource(R.string.shortcuts_add_intent_uri_summary),
-                                onClick = { onAdd(ShortcutKind.INTENT_URI) },
-                                enabled = !atStoreCap
-                            )
-                            // C3（批次 3）：快捷开关磁贴入口（用户 2026-09-05：与上两项同级；
-                            // 将来 ShortcutManager 型应用快捷方式并入同一选择器）
-                            ArrowPreference(
-                                title = stringResource(R.string.shortcuts_add_qs_tile),
-                                summary = stringResource(R.string.shortcuts_add_qs_tile_summary),
-                                onClick = { onAdd(ShortcutKind.QS_TILE) },
-                                enabled = !atStoreCap
-                            )
-                            // 快捷组入口（C8，计划 §B2）：从现有条目装 2~3 个成组；
-                            // 可入组的单条目不足 2 个时禁用
-                            ArrowPreference(
-                                title = stringResource(R.string.shortcuts_add_group),
-                                summary = stringResource(R.string.shortcuts_add_group_summary),
-                                onClick = { onAdd(ShortcutKind.GROUP) },
-                                enabled = !atStoreCap &&
-                                    workingList.count {
-                                        it.kind != ShortcutKind.GROUP && it.kind != ShortcutKind.TOOLBOX
-                                    } >= 2
-                            )
-                        }
-                    }
-                }
-
-                if (atStoreCap) {
-                    item {
-                        Text(
-                            text = stringResource(
-                                R.string.shortcuts_at_store_limit, ShortcutStore.MAX_STORED_SHORTCUTS
-                            ),
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                        )
-                    }
-                }
-
-                // 启用项超出扇形展示上限时提示（存储上限 10，§2.4 解耦）
-                if (enabledCount > ShortcutStore.MAX_USER_SHORTCUTS) {
-                    item {
-                        Text(
-                            text = stringResource(
-                                R.string.shortcut_display_overflow, enabledCount, ShortcutStore.MAX_USER_SHORTCUTS
-                            ),
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                        )
-                    }
+                    Text(
+                        text = stringResource(
+                            R.string.shortcuts_at_store_limit, ShortcutStore.MAX_STORED_SHORTCUTS
+                        ),
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
                 }
             }
         }
 
         if (selectionMode) {
-            // HyperOS 闹钟批量范式：删除收底（居中垃圾桶+文字，未选中变灰不可点）
+            // 双动作收底（布局 §4）：组成分组 | 删除（HyperOS 批量收底位）
             val deleteEnabled = selectedIds.isNotEmpty()
             val deleteTint = if (deleteEnabled) {
                 MiuixTheme.colorScheme.onSurface
             } else {
                 MiuixTheme.colorScheme.onSurfaceVariantSummary
             }
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
+            Row(
+                horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .sinkClickable(enabled = deleteEnabled) { showDeleteConfirm = true }
-                    .padding(horizontal = 32.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 48.dp)
                     .windowInsetsPadding(WindowInsets.navigationBars)
             ) {
-                Icon(
-                    imageVector = MiuixIcons.Delete,
-                    contentDescription = stringResource(R.string.shortcut_delete),
-                    tint = deleteTint,
-                    modifier = Modifier.size(26.dp)
-                )
-                Text(
-                    text = stringResource(R.string.shortcut_delete),
-                    color = deleteTint,
-                    style = MiuixTheme.textStyles.footnote1
-                )
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.sinkClickable { createGroupFromSelection() }
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.AddFolder,
+                        contentDescription = stringResource(R.string.batch_create_group),
+                        tint = MiuixTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(26.dp)
+                    )
+                    Text(
+                        text = stringResource(R.string.batch_create_group),
+                        color = MiuixTheme.colorScheme.onSurface,
+                        style = MiuixTheme.textStyles.footnote1
+                    )
+                }
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.sinkClickable(enabled = deleteEnabled) { showDeleteConfirm = true }
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.Delete,
+                        contentDescription = stringResource(R.string.shortcut_delete),
+                        tint = deleteTint,
+                        modifier = Modifier.size(26.dp)
+                    )
+                    Text(
+                        text = stringResource(R.string.shortcut_delete),
+                        color = deleteTint,
+                        style = MiuixTheme.textStyles.footnote1
+                    )
+                }
             }
         }
     }
 
     // 批量删除确认（HyperOS 批量模式惯例：破坏性动作确认，删除为红色）——
-    // §2.5 WindowDialog 定案模式：两等宽 TextButton + Spacer(20dp)
+    // §2.5 WindowDialog 定案模式：两等宽 TextButton + Spacer(20dp)。
+    // 含组时文案区分（布局 §4：删组=连成员一起删，和解散不是同义词）
+    val selectedForDialog = workingList.filter { it.id in selectedIds }
+    val groupsInDialog = selectedForDialog.filter { it.kind == ShortcutKind.GROUP }
     WindowDialog(
         show = showDeleteConfirm,
         title = stringResource(R.string.shortcut_delete),
-        summary = stringResource(R.string.shortcut_batch_delete_confirm, selectedIds.size),
+        summary = if (groupsInDialog.isNotEmpty()) {
+            stringResource(
+                R.string.shortcut_delete_confirm_with_groups,
+                selectedForDialog.size,
+                groupsInDialog.size,
+                groupsInDialog.sumOf { it.children?.size ?: 0 }
+            )
+        } else {
+            stringResource(R.string.shortcut_batch_delete_confirm, selectedForDialog.size)
+        },
         onDismissRequest = { showDeleteConfirm = false },
         content = {
             Row(horizontalArrangement = Arrangement.SpaceBetween) {
@@ -425,12 +424,104 @@ internal fun ShortcutListPage(
     )
 }
 
+/**
+ * 普通行（两区共用）：单击=编辑（禁用项也可编辑，布局 §2.2"禁用不阻止单击"）；
+ * 长按=进批量选择；开关按分区规则落位；拖动手柄仅已启用区（未启用区无扇形序意义）。
+ * 禁用变暗用 alpha 表达（BasicComponent 的 enabled 会连带挡交互，与"可单击编辑"冲突）。
+ */
+@Composable
+private fun androidx.compose.foundation.lazy.LazyItemScope.ShortcutRow(
+    shortcut: ShortcutAction,
+    showHandle: Boolean,
+    reorderState: sh.calvin.reorderable.ReorderableLazyListState,
+    prefs: SharedPreferences,
+    haptics: androidx.compose.ui.hapticfeedback.HapticFeedback,
+    onEdit: (ShortcutAction) -> Unit,
+    onToggle: (ShortcutAction, Boolean) -> Unit,
+    onEnterSelection: (ShortcutAction) -> Unit,
+    workingList: List<ShortcutAction>
+) {
+    val iconPkg = shortcut.iconPackageName ?: shortcut.packageName
+    // 行体（带 ReorderableCollectionItemScope 接收者：draggableHandle 需要它在作用域内）
+    val content: @Composable sh.calvin.reorderable.ReorderableCollectionItemScope.(Boolean) -> Unit =
+        { isDragging ->
+        // 拖动中的抬升感：占位方块无卡底，阴影不可见，用微放大表达"浮起"
+        val scale by animateFloatAsState(
+            if (isDragging) 1.03f else 1f, label = "shortcutDragScale"
+        )
+        BasicComponent(
+            title = shortcut.label.ifEmpty { stringResource(R.string.shortcut_unnamed) },
+            summary = buildShortcutSummary(
+                shortcut,
+                stringResource(R.string.shortcut_uri_unset),
+                stringResource(R.string.shortcut_toolbox_desc)
+            ),
+            startAction = if (iconPkg != null) {
+                { SettingsAppIcon(packageName = iconPkg, appName = shortcut.label, size = 32f) }
+            } else null,
+            endActions = {
+                // 行内启停：即时写盘即时按分区规则落位
+                Switch(
+                    checked = shortcut.enabled,
+                    onCheckedChange = { onToggle(shortcut, it) }
+                )
+                if (showHandle) {
+                    // 拖动手柄：40dp 触摸热区（图标视觉 24dp）；松手一次落盘。
+                    // suppressRowLongPress 先消费 down——手柄按下不得漏给行内长按
+                    Box(
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .size(40.dp)
+                            .suppressRowLongPress()
+                            .draggableHandle(
+                                onDragStarted = {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                },
+                                onDragStopped = {
+                                    ShortcutStore.saveUserShortcuts(prefs, workingList)
+                                }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = MiuixIcons.Sort,
+                            contentDescription = stringResource(R.string.shortcut_drag_handle),
+                            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+            },
+            modifier = Modifier.animateItem()
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
+                .alpha(if (shortcut.enabled) 1f else 0.55f)
+                // 单击与长按必须同一节点裁决（combinedClickable）：
+                // foundation 1.10 的 node clickable 先消费 DOWN，外挂
+                // detectTapGestures 的 awaitFirstDown 只认未消费 down，
+                // 长按检测永远收不到手势（批量模式失效根因）。
+                .combinedClickable(
+                    onClick = { onEdit(shortcut) },
+                    onLongClick = { onEnterSelection(shortcut) }
+                )
+        )
+    }
+    // 统一包 ReorderableItem：content 需要其 scope 接收者（draggableHandle）；
+    // 未启用行无手柄、注册进 reorder 状态无副作用
+    ReorderableItem(
+        state = reorderState,
+        key = shortcut.id,
+        animateItemModifier = Modifier.animateItem()
+    ) { isDragging -> content(isDragging) }
+}
+
 /** 手柄区按下即消费 down：掐死行 combinedClickable 的长按计时——批量选择只能从手柄以外的行体进入。 */
 private fun Modifier.suppressRowLongPress(): Modifier = pointerInput(Unit) {
     awaitEachGesture { awaitFirstDown(requireUnconsumed = false).consume() }
 }
 
-/** HyperOS 批量勾选圈：未选中=空心环，选中=主题蓝底+对勾（miuix Checkbox 无空心态）。 */
 @Composable
 private fun SelectionCircle(checked: Boolean) {
     Box(
@@ -482,7 +573,7 @@ private fun buildShortcutSummary(shortcut: ShortcutAction, unsetUri: String, too
             val pkg = shortcut.packageName ?: "?"
             "$pkg/#${shortcut.shortcutId ?: "?"}"
         }
-        // 组摘要：子项 label 串（N 项）——与 C8 组编辑页的成员展示同语义
+        // 组摘要：成员 label 串（N 项）——与组编辑页的成员展示同语义
         ShortcutKind.GROUP -> {
             val n = shortcut.children?.size ?: 0
             val labels = shortcut.children.orEmpty().joinToString("、") { it.label }

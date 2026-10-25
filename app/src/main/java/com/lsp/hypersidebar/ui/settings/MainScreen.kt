@@ -45,6 +45,7 @@ import top.yukonga.miuix.kmp.basic.NavigationBarItem
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Add
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Info
@@ -124,6 +125,7 @@ internal fun MainScreen(
         SettingsKey.Diagnostics -> stringResource(R.string.diagnostics_entry)
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
         is SettingsKey.GroupEdit -> stringResource(R.string.group_edit_title)
+        SettingsKey.ShortcutAdd -> stringResource(R.string.shortcut_add_title)
         SettingsKey.InvokeSettings -> stringResource(R.string.invoke_section)
         SettingsKey.FanBackground -> stringResource(R.string.fan_background_section)
     }
@@ -182,6 +184,14 @@ internal fun MainScreen(
                             Icon(
                                 imageVector = MiuixIcons.SelectAll,
                                 contentDescription = stringResource(R.string.shortcut_select_all)
+                            )
+                        }
+                    } else if (activeStack.last() == SettingsKey.ShortcutList) {
+                        // 首页右上角＋（布局定稿 §2.1）：进入添加页；批量模式不显示
+                        IconButton(onClick = { settingsStack.add(SettingsKey.ShortcutAdd) }) {
+                            Icon(
+                                imageVector = MiuixIcons.Add,
+                                contentDescription = stringResource(R.string.shortcut_add_title)
                             )
                         }
                     }
@@ -265,32 +275,57 @@ internal fun MainScreen(
                                 settingsStack.add(SettingsKey.ShortcutEdit(shortcut, isNew = false))
                             }
                         },
-                        onAdd = { kind ->
-                            if (kind == com.lsp.hypersidebar.util.ShortcutKind.GROUP) {
-                                settingsStack.add(
-                                    SettingsKey.GroupEdit(
-                                        com.lsp.hypersidebar.util.ShortcutAction(
-                                            id = UUID.randomUUID().toString(),
-                                            kind = kind,
-                                            label = "",
-                                            enabled = true
-                                        ),
-                                        isNew = true
-                                    )
+                        // 多选「组成分组」（布局 §4）：已选 2~3 个普通项预填建组，
+                        // 组插入位次由 GroupEditPage 落盘逻辑定（首位成员位置）
+                        onCreateGroup = { members ->
+                            settingsStack.add(
+                                SettingsKey.GroupEdit(
+                                    com.lsp.hypersidebar.util.ShortcutAction(
+                                        id = UUID.randomUUID().toString(),
+                                        kind = com.lsp.hypersidebar.util.ShortcutKind.GROUP,
+                                        label = "",
+                                        enabled = true,
+                                        children = members
+                                    ),
+                                    isNew = true
                                 )
-                            } else {
-                                settingsStack.add(
-                                    SettingsKey.ShortcutEdit(
-                                        ShortcutAction(
-                                            id = UUID.randomUUID().toString(),
-                                            kind = kind,
-                                            label = "",
-                                            enabled = true
-                                        ),
-                                        isNew = true
-                                    )
+                            )
+                        }
+                    )
+                }
+            }
+            entry<SettingsKey.ShortcutAdd> {
+                DetailPageContainer {
+                    ShortcutAddPage(
+                        prefs = prefs,
+                        // 选择类型即替换本页进入新建流程：保存/取消后直接回列表
+                        onAddKind = { kind ->
+                            popLast(settingsStack)
+                            settingsStack.add(
+                                SettingsKey.ShortcutEdit(
+                                    ShortcutAction(
+                                        id = UUID.randomUUID().toString(),
+                                        kind = kind,
+                                        label = "",
+                                        enabled = true
+                                    ),
+                                    isNew = true
                                 )
-                            }
+                            )
+                        },
+                        onAddGroup = {
+                            popLast(settingsStack)
+                            settingsStack.add(
+                                SettingsKey.GroupEdit(
+                                    com.lsp.hypersidebar.util.ShortcutAction(
+                                        id = UUID.randomUUID().toString(),
+                                        kind = com.lsp.hypersidebar.util.ShortcutKind.GROUP,
+                                        label = "",
+                                        enabled = true
+                                    ),
+                                    isNew = true
+                                )
+                            )
                         }
                     )
                 }

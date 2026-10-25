@@ -36,7 +36,11 @@ object ForegroundSourceProbe {
         val pkg = runCatching {
             info.javaClass.getField("mForegroundPackageName").get(info) as? String
         }.getOrNull()
-        val normalized = pkg?.takeIf { it.isNotBlank() && it != selfPackage }
+        // 过滤宿主自身 + 模块自身（在模块设置页里呼出扇形测试是常态，模块前台不记——
+        // 真机日志实证 fg=io.github.mikudayoooooooo.hypersidebar 未被滤）
+        val normalized = pkg?.takeIf {
+            it.isNotBlank() && it != selfPackage && it != FreeformLauncher.MODULE_PACKAGE
+        }
         HLog.i(TAG, "capture: fg=${normalized ?: pkg ?: "null"} src=${normalized ?: "-"}")
         return normalized
     }

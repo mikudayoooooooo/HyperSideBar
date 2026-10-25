@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -104,6 +105,11 @@ internal fun MainScreen(
     val aboutStack = remember { navBackStackOf(SettingsKey.TabAbout) }
     var activeTab by rememberSaveable { mutableIntStateOf(0) }
     val activeStack = if (activeTab == 0) settingsStack else aboutStack
+
+    // 快捷方式列表/组编辑的刷新令牌（2026-10-25 真机反馈：子页保存返回后列表不刷新——
+    // nav3 返回时 remember 状态保活，workingList 停留旧值须重进页面）。子页
+    // 保存/删除/退出时自增，两页 remember(revision) 重建即重读盘
+    var shortcutRevision by remember { mutableStateOf(0) }
 
     val selectAppsTitle = stringResource(R.string.select_apps)
     // miuix-nav 的 NavBackStack 元素类型是 NavKey（非泛型），取栈顶要显式收回 SettingsKey
@@ -250,6 +256,7 @@ internal fun MainScreen(
                     ShortcutListPage(
                         prefs = prefs,
                         bar = shortcutSelectionBar,
+                        revision = shortcutRevision,
                         onEdit = { shortcut ->
                             // 组走专属编辑页（C8，§B0：组不经 ShortcutEditPage）
                             if (shortcut.kind == com.lsp.hypersidebar.util.ShortcutKind.GROUP) {
@@ -294,7 +301,12 @@ internal fun MainScreen(
                         prefs = prefs,
                         group = key.group,
                         isNew = key.isNew,
-                        onBack = { popLast(settingsStack) }
+                        revision = shortcutRevision,
+                        onBack = {
+                            // 组页保存/解散/取消都在页内发生——退出即自增刷新令牌（多刷无害）
+                            shortcutRevision++
+                            popLast(settingsStack)
+                        }
                     )
                 }
             }
@@ -314,11 +326,13 @@ internal fun MainScreen(
                             } else {
                                 ShortcutStore.updateShortcut(prefs, updated)
                             }
+                            shortcutRevision++
                             popLast(settingsStack)
                         },
                         onDelete = if (key.isNew) null else {
                             {
                                 ShortcutStore.removeShortcut(prefs, key.shortcut.id)
+                                shortcutRevision++
                                 popLast(settingsStack)
                             }
                         },

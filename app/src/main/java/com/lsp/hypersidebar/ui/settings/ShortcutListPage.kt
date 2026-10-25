@@ -85,13 +85,16 @@ internal class ShortcutSelectionBar {
 internal fun ShortcutListPage(
     prefs: SharedPreferences,
     bar: ShortcutSelectionBar,
+    /** 刷新令牌（2026-10-25 真机反馈修复）：子页保存/删除/退出时自增——nav3 返回时
+     *  remember 保活导致列表停留旧值，须重进页面才能看到新加项 */
+    revision: Int = 0,
     onEdit: (ShortcutAction) -> Unit,
     onAdd: (ShortcutKind) -> Unit,
     modifier: Modifier = Modifier
 ) {
     // 内存工作列表：拖动交换/启停只改内存并即时写盘（列表序=扇形展示序）；
-    // 进出页面（弹栈重组）remember 重建即重新加载
-    var workingList by remember { mutableStateOf(ShortcutStore.loadUserShortcuts(prefs)) }
+    // revision 变化（子页保存返回）重建即重新加载
+    var workingList by remember(revision) { mutableStateOf(ShortcutStore.loadUserShortcuts(prefs)) }
     // 批量选择模式（长按行进入）：顶栏变形 + 删除收底（HyperOS 闹钟批量范式）
     var selectionMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }

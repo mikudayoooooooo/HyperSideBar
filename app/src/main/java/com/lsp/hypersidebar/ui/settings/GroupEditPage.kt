@@ -62,11 +62,13 @@ internal fun GroupEditPage(
     prefs: SharedPreferences,
     group: ShortcutAction,
     isNew: Boolean,
+    /** 刷新令牌（同 ShortcutListPage）：列表页与组页互跳后重读顶层列表 */
+    revision: Int = 0,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 顶层列表（成员来源/回填目标）；进出页面 remember 重建即重读（同 ShortcutListPage）
-    var topList by remember { mutableStateOf(ShortcutStore.loadUserShortcuts(prefs)) }
+    // 顶层列表（成员来源/回填目标）；revision 变化（列表页保存返回）重建即重读
+    var topList by remember(group.id, revision) { mutableStateOf(ShortcutStore.loadUserShortcuts(prefs)) }
     var name by remember(group.id) { mutableStateOf(group.label) }
     // 组成员（顺序即展示顺序；新组随勾选追加，编辑组从 children 起）
     var members by remember(group.id) { mutableStateOf(group.children.orEmpty()) }

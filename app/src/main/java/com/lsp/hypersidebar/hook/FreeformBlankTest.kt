@@ -82,6 +82,14 @@ object FreeformBlankTest {
     /**
      * 我们真正要的那个谓词：该点算不算"小窗之外的空白"。
      * 桌面模式下恒 false（不动作，见类注释的"有意分歧"）。
+     *
+     * **与 ROM 谓词的第二处分歧（2026-10-25 乱跳修复）**：挂起（pin）窗**有几何**时，其矩形
+     * （= ROM pin 过渡后 `setBounds` 的图标矩形）算"非空白"——点图标必须穿透给 ROM 原生
+     * 展开链（`MiuiBubbleStackView` 点击 → `unPinFloatingWindow(…, isClick=true)`）。旧实现
+     * 忠实沿用 ROM 谓词的 pinned-skip ⇒ 点图标被判"空白" ⇒ 抢流消费 ⇒ 动作落到别的窗
+     * （用户实测"挂起的小窗点击会乱跳而不是展开，得多试几次"）。bounds 缺失的 pinned 窗
+     * 不在本列表里（接线层 `boundsOf` 滤掉）⇒ 由 Spy 侧的 `pinnedWithoutGeometry` 门兜底
+     * （fail-open：该轮整体不抢流）。
      */
     fun isBlank(
         x: Float,
@@ -90,6 +98,14 @@ object FreeformBlankTest {
         windowsInZOrder: List<Window>,
     ): Boolean {
         if (desktopModeActive) return false
+        val px = x.toInt()
+        val py = y.toInt()
+        for (w in windowsInZOrder) {
+            if (!w.pinned || !w.visible) continue
+            val right = w.left + (w.width * w.scale).toInt()
+            val bottom = w.top + (w.height * w.scale).toInt()
+            if (px >= w.left && px < right && py >= w.top && py < bottom) return false
+        }
         return !isTouchedInFreeformWindow(x, y, false, windowsInZOrder)
     }
 }

@@ -67,6 +67,13 @@ class FanMenuController(
     private var showStartElapsed = 0L
     @Volatile private var exitAfterLaunch = false
 
+    /**
+     * 本次呼出冻结的前台应用（C4，计划 §A3/A4）：与 show 同参进入、转存实例字段
+     * （同 showStartElapsed 模式），选择回调时带给 launchFreeform 记录上下文。
+     * null=未知/桌面/launcher/模块自身 ⇒ 本次推荐不加权、启动不记录。
+     */
+    @Volatile private var frozenSource: String? = null
+
     // 池=1（1C P2）：dismiss 后 host 不销毁，idleHost 持有供下次呼出复用；
     // activeContext = 最近一次 showInternal 的 context（回调经它取，见 obtainHost）
     private var idleHost: ComposeFanHost? = null
@@ -99,14 +106,20 @@ class FanMenuController(
         mainHandler.removeCallbacks(watchdogRunnable)
     }
 
-    fun show(context: Context, anchorX: Float, anchorY: Float, cornerAnchor: Boolean = false) {
+    fun show(
+        context: Context,
+        anchorX: Float,
+        anchorY: Float,
+        cornerAnchor: Boolean = false,
+        source: String? = null
+    ) {
         // hook 的触摸回调可能不在主线程（launcher 的 GestureStubView.onTouchEvent 经
         // MiuiMirror 输入线程分发，实测 tid≠主线程）；Compose 生命周期装配必须主线程
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
             HLog.i(TAG, "show: hopping to main thread (from ${Thread.currentThread().name})")
-            mainHandler.post { showInternal(context, anchorX, anchorY, cornerAnchor) }
+            mainHandler.post { showInternal(context, anchorX, anchorY, cornerAnchor, source) }
         } else {
-            showInternal(context, anchorX, anchorY, cornerAnchor)
+            showInternal(context, anchorX, anchorY, cornerAnchor, source)
         }
     }
 
@@ -114,10 +127,11 @@ class FanMenuController(
         context: Context,
         anchorX: Float,
         anchorY: Float,
-        cornerAnchor: Boolean = false
+        cornerAnchor: Boolean = false,
+        source: String? = null
     ) {        // 实测轮七：入口状态遥测——定位 isShowing 被无日志翻转的路径（双开根因）
         Trace.current = Trace.new()
-        HLog.i(TAG, tl() + "showInternal enter: isShowing=$isShowing host=${host != null} anchor=($anchorX,$anchorY)")
+        HLog.i(TAG, tl() + "showInternal enter: isShowing=$isShowing host=${host != null} anchor=($anchorX,$anchorY) src=${source ?: "-"}")
         if (isShowing && host != null) return
         // 耗时锚点（呼出卡顿归因）：cost=本次呼出主线程装配全程；firstAssembly=true
         // =本进程池为空（进程冷启/被杀后首呼出），这是"有时候呼出会卡"的头号嫌疑段
@@ -137,6 +151,7 @@ class FanMenuController(
             val isLandscape = context.resources.configuration.orientation ==
                 android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
+            frozenSource = source
             val data = assembleFanData(context, cornerAnchor)
 
             // 池=1 复用（1C P2）：host 不逐呼出重建，context 经 activeContext 提供
@@ -221,7 +236,8 @@ class FanMenuController(
             }
         }
 
-        val allSystemApps = DataLoader.loadApps(context)
+        // 条件式推荐（C4 接线）：按冻结来源排序（分数未就绪/来源 null ⇒ 内部回退今日行为）
+        val allSystemApps = DataLoader.rankedApps(context, frozenSource)
         val merged = LinkedHashSet<String>()
         merged.addAll(orderedCustom)
         merged.addAll(allSystemApps)
@@ -302,9 +318,9 @@ class FanMenuController(
                     )
                     exitAfterLaunch = true
                     if (isAllApps) {
-                        launchStrategy.launchAllApps(context)
+                        launchStrategy.launchAllApps(context, frozenSource)
                     } else {
-                        launchStrategy.launchFreeform(context, appInfo.packageName)
+                        launchStrategy.launchFreeform(context, appInfo.packageName, frozenSource)
                     }
                     hideAll()
                 }

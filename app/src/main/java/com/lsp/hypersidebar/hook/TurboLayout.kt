@@ -10,6 +10,7 @@ import android.view.View
 import android.view.WindowManager
 import com.lsp.hypersidebar.anchor.AnchorResolver
 import com.lsp.hypersidebar.anchor.AnchorRoles
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.PropNames
@@ -500,10 +501,13 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         vlog("s#$sGestureSeq showFan: anchor=($anchorX, $anchorY) downY=${sDownY.toInt()} dwell=${stripDwellMs()}ms")
         // 耗时锚点（呼出卡顿归因）：postLag=:ui 主线程繁忙度（同 EdgeGestureHook）
         val postAtMs = android.os.SystemClock.uptimeMillis()
+        // source 冻结（C4）：:ui uid=1000 过服务端权限门（三代实证）；本进程前台时
+        // capture 过滤 securitycenter ⇒ null=不记录
+        val frozenSource = ForegroundSourceProbe.capture(HostPackages.UI_HOST)
         val r = Runnable {
             sPendingShow = null
             vlog("s#$sGestureSeq showFan runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
-            fanController.show(ctx, anchorX, anchorY)
+            fanController.show(ctx, anchorX, anchorY, source = frozenSource)
         }
         sPendingShow = r
         mainHandler.post(r)
@@ -1063,10 +1067,11 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         val anchorY = dm.heightPixels.toFloat()
         HLog.i(TAG, "corner→fan: anchor=($anchorX,$anchorY) down=(${ev.rawX.toInt()},${ev.rawY.toInt()})")
         val postAtMs = android.os.SystemClock.uptimeMillis()
+        val frozenSource = ForegroundSourceProbe.capture(HostPackages.UI_HOST)
         val r = Runnable {
             sPendingShow = null
             vlog("k#$cornerSeq showFan(corner) runnable: postLag=${android.os.SystemClock.uptimeMillis() - postAtMs}ms")
-            runCatching { fanController.show(ctx, anchorX, anchorY, cornerAnchor = true) }
+            runCatching { fanController.show(ctx, anchorX, anchorY, cornerAnchor = true, source = frozenSource) }
                 .onFailure { HLog.w(TAG, "corner show failed: ${it.message}") }
         }
         sPendingShow = r

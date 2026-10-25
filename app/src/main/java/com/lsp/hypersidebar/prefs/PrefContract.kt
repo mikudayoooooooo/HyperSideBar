@@ -207,6 +207,8 @@ object PrefKeys {
     const val FAN_EXTRA_ALL_APPS = "allApps"
     const val FAN_EXTRA_SHORTCUT = "shortcut"
     const val FAN_EXTRA_OPEN_PANEL = "openPanel"
+    /** 呼出扇形时的前台应用（C3 source 穿线；缺省=未知，:ui 侧不记上下文） */
+    const val FAN_EXTRA_SOURCE = "source"
 
     // ===== root 代发结果回告（模块 App → :ui）extra 键（ShortcutRelayReceiver 写、FreeformRelayHook 读）=====
     const val RELAY_RESULT_EXTRA_OK = "ok"

@@ -166,8 +166,9 @@ class FreeformRelayHook(
                             strategy.openNativePanel(ctx)
                         }
                         intent.getBooleanExtra(PrefKeys.FAN_EXTRA_ALL_APPS, false) -> {
-                            HLog.i(TAG, "[${trace ?: "-"}] relay: allApps")
-                            strategy.launchAllApps(ctx)
+                            val source = intent.getStringExtra(PrefKeys.FAN_EXTRA_SOURCE)
+                            HLog.i(TAG, "[${trace ?: "-"}] relay: allApps src=${source ?: "-"}")
+                            strategy.launchAllApps(ctx, source)
                         }
                         intent.getStringExtra(PrefKeys.FAN_EXTRA_SHORTCUT) != null -> {
                             val json = intent.getStringExtra(PrefKeys.FAN_EXTRA_SHORTCUT) ?: return
@@ -179,8 +180,9 @@ class FreeformRelayHook(
                         }
                         intent.getStringExtra(PrefKeys.FAN_EXTRA_PKG) != null -> {
                             val pkg = intent.getStringExtra(PrefKeys.FAN_EXTRA_PKG) ?: return
-                            HLog.i(TAG, "[${trace ?: "-"}] relay: freeform pkg=$pkg")
-                            strategy.launchFreeform(ctx, pkg)
+                            val source = intent.getStringExtra(PrefKeys.FAN_EXTRA_SOURCE)
+                            HLog.i(TAG, "[${trace ?: "-"}] relay: freeform pkg=$pkg src=${source ?: "-"}")
+                            strategy.launchFreeform(ctx, pkg, source)
                         }
                     }
                 }

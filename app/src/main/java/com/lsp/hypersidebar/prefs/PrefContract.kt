@@ -207,6 +207,8 @@ object PrefKeys {
     const val FAN_EXTRA_ALL_APPS = "allApps"
     const val FAN_EXTRA_SHORTCUT = "shortcut"
     const val FAN_EXTRA_OPEN_PANEL = "openPanel"
+    /** 呼出扇形时的前台应用（C3 source 穿线；缺省=未知，:ui 侧不记上下文） */
+    const val FAN_EXTRA_SOURCE = "source"
 
     // ===== root 代发结果回告（模块 App → :ui）extra 键（ShortcutRelayReceiver 写、FreeformRelayHook 读）=====
     const val RELAY_RESULT_EXTRA_OK = "ok"
@@ -219,6 +221,12 @@ object PrefKeys {
 
     /** 配置拉取应答（模块 App → hook 宿主 Messenger）data 键（ConfigPullService 写、ConfigPullBridge 读） */
     const val CONFIG_PULL_EXTRA_MAP = "map"
+
+    // ===== 条件式推荐上下文记录（2026-10-24 计划 §A3）=====
+    /** Settings.Secure 自建键：source→target→时间戳（7 天窗）。:ui 单写
+     *  （WRITE_SECURE_SETTINGS 平台签名特权），全进程只读。扁平命名空间 hsb_ 前缀
+     *  防撞（与 persist.hsb.* 属性约定对齐）。禁入 ConfigSync（运行时记录非配置）。 */
+    const val SECURE_CONTEXT_LAUNCH_LOG = "hsb_context_launch_log"
 
     // ===== manifest 快捷方式 launcher 桥（批次 3）=====
     // 背景（2026-09-05 实锤）：LauncherApps.getShortcuts 对非默认桌面应用抛
@@ -350,6 +358,15 @@ object LayoutDefaults {
 
     const val DEAD_ZONE = 12f
     const val TRIGGER_DWELL_MS = 250
+
+    /**
+     * 条件式推荐加权参数（2026-10-24 计划 §A1 定案，非用户设置项——不进 layoutKeys、
+     * 不暴露设置页）：boost = weight × min(当前来源→目标的 7 天启动次数, cap)。
+     * 30 ≈ 3 次原生小窗启动的权重（ROM 侧 timestamps.size()×10，三代实证），一对来源
+     * 启动即可把目标顶过普通使用频次（launchCount 本身是近一周窗口，同窗叠加语义干净）。
+     */
+    const val REC_CTX_WEIGHT = 30
+    const val REC_CTX_CAP = 5
 
     /** 底角斜滑触发默认开关（N1）：默认关，用户显式开启后才接管底角手势。 */
     const val CORNER_SWIPE_ENABLED = false

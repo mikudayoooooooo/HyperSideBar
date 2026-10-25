@@ -82,15 +82,26 @@ object FanPrewarmer {
      * 先入队 ⇒ 此刻推荐列表已就绪或刷新失败，拿不到只灌固定项，不等待）。
      */
     fun preloadConfiguredFanIcons(context: Context, prefs: SharedPreferences) {
+        // 有效图标包名（C5，计划 §B1）：iconPackageName ?: packageName——修复既有缺口
+        // （借用图标而 packageName 为空的条目预载不到）；组子项拍平并入（拼贴三格需要）
+        val shortcuts = runCatching { ShortcutStore.loadUserShortcuts(prefs) }.getOrDefault(emptyList())
         val base = buildList {
             addAll(
                 runCatching { prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()) ?: emptySet() }
                     .getOrDefault(emptySet())
             )
-            addAll(
-                runCatching { ShortcutStore.loadUserShortcuts(prefs).mapNotNull { it.packageName } }
-                    .getOrDefault(emptyList())
-            )
+            shortcuts.forEach { sa ->
+                // 单个条目=宿主包名（扇形渲染源，与 assembleFanData 同口径）；
+                // 组=借用图标包名（B2）+ 子项有效图标包名（拼贴成员）
+                if (sa.kind == ShortcutKind.GROUP) {
+                    sa.iconPackageName?.let { add(it) }
+                    sa.children.orEmpty().forEach { c ->
+                        (c.iconPackageName ?: c.packageName)?.let { add(it) }
+                    }
+                } else {
+                    sa.packageName?.let { add(it) }
+                }
+            }
         }.filter { it.isNotBlank() }
         val recommended = runCatching { DataLoader.loadApps(context) }.getOrDefault(emptyList())
         val targets = (base + recommended.take(ICON_PRELOAD_COUNT)).distinct()

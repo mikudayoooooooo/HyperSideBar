@@ -150,6 +150,8 @@ tasks.named("preBuild").configure {
 dependencies {
     implementation(libs.androidx.core.ktx)
     testImplementation(libs.junit)
+    // 纯核心解析器单测需要真 org.json（Android 桩 not mocked；test-only 不进 APK）
+    testImplementation(libs.json)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 

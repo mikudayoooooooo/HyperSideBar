@@ -4,6 +4,8 @@ kotlin = "2.4.0"
 coreKtx = "1.10.1"
 ezxhelperVersion = "3.2.0-preview1"
 junit = "4.13.2"
+# test-only：Android org.json 同 API 真实现（android.jar 桩在单测里 not mocked）
+json = "20240303"
 junitVersion = "1.1.5"
 espressoCore = "3.5.1"
 miuixUi = "0.9.4"
@@ -24,6 +26,7 @@ android-utils = { module = "io.github.kyuubiran.ezxhelper:android-utils", versio
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 miuix-nav = { module = "top.yukonga.miuix.kmp:miuix-nav", version.ref = "miuixUi" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+json = { group = "org.json", name = "json", version.ref = "json" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 miuix-icons = { module = "top.yukonga.miuix.kmp:miuix-icons", version.ref = "miuixUi" }

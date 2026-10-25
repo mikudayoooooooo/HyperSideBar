@@ -119,6 +119,8 @@ class AllAppsActivity : ComponentActivity() {
     private var remotePrefs by mutableStateOf<SharedPreferences?>(null)
     private lateinit var fallbackPrefs: SharedPreferences
     private var suggestions by mutableStateOf<List<String>?>(null)
+    /** 呼出扇形时的前台应用（source 三跳第二跳：面板内选择后随回传广播到 :ui 记录点） */
+    private var frozenSource: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -129,6 +131,7 @@ class AllAppsActivity : ComponentActivity() {
         // 空壳 prefs 读不到 CUSTOM_APPS，固定应用消失（logcat 实证 2026-09-04）
         remotePrefs = RemotePrefsBridge.prefs
         suggestions = intent.getStringArrayListExtra(EXTRA_SUGGESTIONS)
+        frozenSource = intent.getStringExtra(PrefKeys.FAN_EXTRA_SOURCE)
         RemotePrefsBridge.addListener { prefs ->
             runOnUiThread {
                 remotePrefs = prefs
@@ -155,6 +158,8 @@ class AllAppsActivity : ComponentActivity() {
                             Intent(ACTION_FAN_LAUNCH).apply {
                                 setPackage(HostPackages.UI_HOST)
                                 putExtra(PrefKeys.FAN_EXTRA_PKG, pkg)
+                                // source 三跳第三跳：回传呼出时冻结的前台应用到记录点
+                                frozenSource?.let { putExtra(PrefKeys.FAN_EXTRA_SOURCE, it) }
                                 // 跨进程防伪令牌（:ui 侧 FreeformRelayHook 校验）
                                 RelayToken.attach(this, RelayToken.current())
                             }.let { applicationContext.sendBroadcast(it) }

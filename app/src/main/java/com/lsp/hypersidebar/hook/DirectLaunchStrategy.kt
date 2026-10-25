@@ -40,11 +40,11 @@ class DirectLaunchStrategy(
     private val remotePrefs: SharedPreferences
 ) : FanLaunchStrategy {
 
-    override fun launchFreeform(context: Context, pkg: String) {
-        FreeformLauncher.launch(context, pkg)
+    override fun launchFreeform(context: Context, pkg: String, source: String?) {
+        FreeformLauncher.launch(context, pkg, source)
     }
 
-    override fun launchAllApps(context: Context) {
+    override fun launchAllApps(context: Context, source: String?) {
         // 面板数据在启动时经 intent 传递：:ui 平台签名特权不受 hidden API 限制，getFreeformSuggestionList
         // 反射可用；模块进程是普通 App，被 hidden API blocklist 拒绝（实测 denied），
         // 面板进程内的 DataLoader 永远拿不到建议列表
@@ -56,6 +56,8 @@ class DirectLaunchStrategy(
             intent.putStringArrayListExtra(
                 com.lsp.hypersidebar.ui.allapps.AllAppsActivity.EXTRA_SUGGESTIONS, list
             )
+            // source 三跳第一跳（fan→面板）：面板内选择后回传广播到记录点
+            source?.let { intent.putExtra(PrefKeys.FAN_EXTRA_SOURCE, it) }
             // 2026-10-18 体检 P1：面板是 exported 组件，**必须**带跨进程防伪令牌
             // （接收端 AllAppsActivity 校验；令牌未下发时按 verifyFan 的宽松语义放行）
             com.lsp.hypersidebar.util.RelayToken.attach(

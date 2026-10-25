@@ -93,7 +93,11 @@ fun computeFanGeometry(
     /** 底角呼出（N1）：锚点贴屏幕底角，半径/图标/数量取底角独立样式键
      *  （默认=竖屏值，可在底角布局 sheet 微调），弧只占向上象限，快捷栏置于扇形上缘之上；
      *  默认 false=常规边缘几何。 */
-    cornerAnchor: Boolean = false
+    cornerAnchor: Boolean = false,
+    /** 组展开锚定（C6，计划 §B3 定案）：非 null 时快捷栏以该 X 为中心排布（=原组
+     *  图标中心，host 从旧几何算好传入）——子项锚定组图标位置，手指天然落中位子项、
+     *  无整条重居中平移；仍走 coerceIn 出屏钳制。null=默认（扇形水平中心）。 */
+    quickBarCenterX: Float? = null
 ): FanGeometry {
     val width = screenSize.width.toFloat()
     val height = screenSize.height.toFloat()
@@ -278,7 +282,10 @@ fun computeFanGeometry(
         aboveY >= effPadding -> aboveY
         else -> belowY   // 上下都放不下（极端配置）：保留下方，交给钳制
     }
-    val baseX = (fanLeftX + fanRightX) / 2f - effBarWidth / 2f
+    // 锚定覆盖（C6）：组展开时以原组图标中心为栏中心（几何连续，闩锁豁免面最小）；
+    // 默认=扇形水平中心。两者都走下方 coerceIn 出屏钳制
+    val barCenterX = quickBarCenterX ?: (fanLeftX + fanRightX) / 2f
+    val baseX = barCenterX - effBarWidth / 2f
 
     val quickBarX = baseX.coerceIn(effPadding, (width - effBarWidth - effPadding).coerceAtLeast(effPadding))
     val quickBarY = baseY.coerceIn(effPadding, (height - effBarHeight - effPadding).coerceAtLeast(effPadding))

@@ -318,6 +318,17 @@ internal fun ShortcutListPage(
                                 onClick = { onAdd(ShortcutKind.QS_TILE) },
                                 enabled = !atStoreCap
                             )
+                            // 快捷组入口（C8，计划 §B2）：从现有条目装 2~3 个成组；
+                            // 可入组的单条目不足 2 个时禁用
+                            ArrowPreference(
+                                title = stringResource(R.string.shortcuts_add_group),
+                                summary = stringResource(R.string.shortcuts_add_group_summary),
+                                onClick = { onAdd(ShortcutKind.GROUP) },
+                                enabled = !atStoreCap &&
+                                    workingList.count {
+                                        it.kind != ShortcutKind.GROUP && it.kind != ShortcutKind.TOOLBOX
+                                    } >= 2
+                            )
                         }
                     }
                 }

@@ -117,6 +117,7 @@ internal fun MainScreen(
         SettingsKey.Stats -> stringResource(R.string.stats_title)
         SettingsKey.Diagnostics -> stringResource(R.string.diagnostics_entry)
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
+        is SettingsKey.GroupEdit -> stringResource(R.string.group_edit_title)
         SettingsKey.InvokeSettings -> stringResource(R.string.invoke_section)
         SettingsKey.FanBackground -> stringResource(R.string.fan_background_section)
     }
@@ -250,21 +251,50 @@ internal fun MainScreen(
                         prefs = prefs,
                         bar = shortcutSelectionBar,
                         onEdit = { shortcut ->
-                            settingsStack.add(SettingsKey.ShortcutEdit(shortcut, isNew = false))
+                            // 组走专属编辑页（C8，§B0：组不经 ShortcutEditPage）
+                            if (shortcut.kind == com.lsp.hypersidebar.util.ShortcutKind.GROUP) {
+                                settingsStack.add(SettingsKey.GroupEdit(shortcut, isNew = false))
+                            } else {
+                                settingsStack.add(SettingsKey.ShortcutEdit(shortcut, isNew = false))
+                            }
                         },
                         onAdd = { kind ->
-                            settingsStack.add(
-                                SettingsKey.ShortcutEdit(
-                                    ShortcutAction(
-                                        id = UUID.randomUUID().toString(),
-                                        kind = kind,
-                                        label = "",
-                                        enabled = true
-                                    ),
-                                    isNew = true
+                            if (kind == com.lsp.hypersidebar.util.ShortcutKind.GROUP) {
+                                settingsStack.add(
+                                    SettingsKey.GroupEdit(
+                                        com.lsp.hypersidebar.util.ShortcutAction(
+                                            id = UUID.randomUUID().toString(),
+                                            kind = kind,
+                                            label = "",
+                                            enabled = true
+                                        ),
+                                        isNew = true
+                                    )
                                 )
-                            )
+                            } else {
+                                settingsStack.add(
+                                    SettingsKey.ShortcutEdit(
+                                        ShortcutAction(
+                                            id = UUID.randomUUID().toString(),
+                                            kind = kind,
+                                            label = "",
+                                            enabled = true
+                                        ),
+                                        isNew = true
+                                    )
+                                )
+                            }
                         }
+                    )
+                }
+            }
+            entry<SettingsKey.GroupEdit> { key ->
+                DetailPageContainer {
+                    GroupEditPage(
+                        prefs = prefs,
+                        group = key.group,
+                        isNew = key.isNew,
+                        onBack = { popLast(settingsStack) }
                     )
                 }
             }

@@ -949,11 +949,13 @@ class ComposeFanHost(
         return true
     }
 
-    /** 展开：换 pendingInput 为子项列表 + 锚定几何重算 + quick 选中态重置（fan 侧保留） */
+    /** 展开：换 pendingInput 为子项列表 + 锚定几何重算 + quick 选中态重置（fan 侧保留）。
+     *  守卫只看 children/input——expandState.expanded 在调用前已被机器/控制器置位
+     *  （真机 18:53 实锤：旧守卫自毙致展开静默无操作），重复展开由调用方各自防。 */
     private fun performExpand(groupApp: FanAppInfo, groupIdx: Int, oldGeometry: FanGeometry) {
         val children = groupApp.group
         val input = pendingInput ?: return
-        if (children.isNullOrEmpty() || expandState.expanded) return
+        if (children.isNullOrEmpty()) return
         rootQuickStash = input
         expandedAnchorCenterX = computeQuickAppCenter(groupIdx, oldGeometry).x
         pendingInput = GeometryInput(
@@ -980,7 +982,8 @@ class ComposeFanHost(
         HLog.i(TAG, "group collapsed → root bar")
     }
 
-    /** 控制器组分支入口（C7 三分支；机器路径通常已先处理，此为防御/外部触发口） */
+    /** 控制器组分支入口（C7 三分支）：已展开（含机器路径先行处理）则空操作——
+     *  防重复换帧由这里独担（performExpand 不再看 expanded） */
     fun expandQuickGroup(app: FanAppInfo) {
         val geometry = geometryState.value ?: return
         if (expandState.expanded) return

@@ -72,6 +72,12 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
 
         // ---- OS3/OS4：Dagger 持有者 + 单例判定工具（jadx: wmshell-os4-full 实证）----
         private const val HOLDER_OS34 = "com.android.wm.shell.dagger.MultiTaskingControllerImpl"
+
+        /** holder 解析失败后的冷却（10s）：期内不再碰单例，期满后的下一个使用点重试。 */
+        private const val HOLDER_RETRY_COOLDOWN_MS = 10_000L
+
+        /** pinAll posted 后的生效回查延迟（与 close 链的 verifyGoneThen 同量级）。 */
+        private const val PIN_VERIFY_DELAY_MS = 700L
         private const val INTERACT_UTIL_OS34 =
             "com.android.wm.shell.multitasking.miuimultiwinswitch.MulWinSwitchInteractUtil"
         private const val DESKTOP_STATUS_OS34 =
@@ -141,7 +147,7 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         // 旧代的 Class 引用必须丢：它会把整个旧 classloader 钉住（热重载回收不了）。
         decorVmClass = null
         holderClass = null
-        holderTried = false
+        holderFailedAtMs = null
         taskOps = null
         predDiagLogged = false
         repoDiagLogged = false
@@ -239,7 +245,8 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
 
     /** OS3/4 持有者类（**只 loadClass**；真正调 getInstance 一律推迟到 [resolveHolderLazy]）。 */
     private var holderClass: Class<*>? = null
-    private var holderTried = false
+    /** 上次 holder 解析失败的 monotonic 时间戳；null = 从未失败（解析成功后靠 controller!=null 短路）。 */
+    private var holderFailedAtMs: Long? = null
 
     /**
      * OS2 路径：只读 hook 一个 ROM 自己的方法，把 `this`（`MiuiWindowDecorViewModel`）存下来。
@@ -316,10 +323,16 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
      * runCatching 兜住（绝不把 ROM 的 CCE 抛进 SystemUI）。
      */
     private fun resolveHolderLazy() {
-        if (controller != null || holderTried) return
-        holderTried = true
+        if (controller != null) return
+        // 2026-10-25 改：原"一次性锁死"（首次失败永久不再试）⇒ 首个使用点恰逢单例未就绪
+        //（WMShell 尚未装配完）时，整个 boot 都落 su 兜底。改为**失败冷却重试**：≥10s 后的
+        // 下一个使用点允许再解析。红线不变——仍只在 isBlank/perform 的使用时点碰单例
+        //（AGENTS：绝不在 hook 安装期触碰 WMShell 单例）。
+        holderFailedAtMs?.let {
+            if (android.os.SystemClock.elapsedRealtime() - it < HOLDER_RETRY_COOLDOWN_MS) return
+        }
         val h = holderClass ?: return
-        runCatching {
+        val ok = runCatching {
             val inst = h.getMethod("getInstance").invoke(null)
             controller = h.getMethod("getMiuiFreeformModeController").invoke(inst)
             // 仓库：OS3/4 的 z-order/取任务访问器在 **MultiTaskingTaskRepository** 上，
@@ -328,9 +341,11 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
             repository = pickTaskRepository(inst)
             HLog.i(TAG, "holder resolved lazily: controller=${controller != null} " +
                 "repo=${repository?.javaClass?.simpleName}")
+            controller != null
         }.onFailure {
             HLog.w(TAG, "holder lazy resolve failed: ${causeLine(it)}")
-        }
+        }.getOrDefault(false)
+        if (!ok) holderFailedAtMs = android.os.SystemClock.elapsedRealtime()
     }
 
     /**
@@ -545,6 +560,23 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         repo.cachedMethod("getMiuiFreeformTaskInfo", Int::class.javaPrimitiveType!!)
             ?.invoke(repo, taskId)
     }.getOrNull()
+
+    /**
+     * 挂起（pin）态但**几何缺失**的小窗数（2026-10-25 乱跳修复的 Spy 侧门）。
+     *
+     * `FreeformBlankTest.isBlank` 的 pinned 非空白排除只对**进了几何表**的窗生效；bounds
+     * 缺失（`boundsOf` 返回 null）的挂起窗不在表里 ⇒ 点它的图标仍会被判"空白"。这种情况
+     * 下调用方（`SystemUiInputSpy.takeoverArmed`）宁可本轮整体不抢流（点击全穿透给 ROM），
+     * 也不能把挂起图标的点击吃掉——与"拿不到几何（点击照常穿透）优于判错区域"的既有口径
+     * 同向（见 [boundsOf] 注释）。
+     */
+    fun pinnedWithoutGeometry(): Int = runCatching {
+        val repo = repository ?: return 0
+        val infos = infoList(repo) ?: return 0
+        infos.count { info ->
+            (info.getOrNull("isInPinMode") as? Boolean) == true && boundsOf(info) == null
+        }
+    }.getOrDefault(0)
 
     /** 目标窗口当前形态的矩形（取不到 ⇒ null）。 */
     private fun currentRect(taskId: Int): Rect? = runCatching {
@@ -1248,12 +1280,15 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
             val sh = closeWithTransition(taskId)
             HLog.w(TAG, "close try#2 shellTransition=$sh task=$taskId")
             verifyGoneThen(taskId, 700L) {
-                val ef = closeViaShellCommand(taskId)
-                HLog.w(TAG, "close try#3 shell-cmd=$ef task=$taskId")
+                // 2026-10-25 换序：反射 exitFreeformTask 提前（进程内、零 su；反编译实证 shell
+                // 命令 handler 调的就是同一 public 方法 ⇒ 语义等价）；su 的 shell 命令降为
+                // try#4 末级（rootless 机器本就不可用，rooted 机器也只是保底）。
+                val ex = closeViaExitFreeform(taskId)
+                HLog.w(TAG, "close try#3 exitFreeformTask=$ex task=$taskId")
                 verifyGoneThen(taskId, 700L) {
-                    val ex = closeViaExitFreeform(taskId)
-                    HLog.w(TAG, "close try#4 exitFreeformTask=$ex task=$taskId")
-                    if (!ex) {
+                    val ef = closeViaShellCommand(taskId)
+                    HLog.w(TAG, "close try#4 shell-cmd=$ef task=$taskId")
+                    if (!ef) {
                         val ctx = context ?: return@verifyGoneThen
                         broadcastFallback(ctx, "close fallback (task=$taskId)")
                     }
@@ -1284,45 +1319,89 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
      * 遍历 z-order 里非钉住的小窗，`PinHandler.prepareFreeFormToPin` + `setPinAnimInfo`
      * + `setBounds`，最后 `startAllPinShellTransition`（**带过渡动画**）；已在钉住态的窗被跳过。
      * caption（`MiuiCaptionClickListener`）没有 pin 按钮 ⇒ ROM 自己没有用户入口，这正是补位。
-     * 首选直接反射调 controller（零权限）；失败退 ROM 的 shell 命令
-     * `cmd window shell miuifreeform pinAllFreeform`（与 close 的回退同款 su 模式）。
+     * 首选直接反射调 controller（零权限），**700ms 回查未生效则重投一次**（2026-10-25 补：
+     * 旧实现 posted 即 return true，ROM 侧因"已有动画在跑"等静默不执行时无感知——与 mini 的
+     * void 静默返回同病）；shell 命令 `cmd window shell miuifreeform pinAllFreeform` 降为末级。
      */
     private fun pinAll(): Boolean {
         // ⚠ pinAllFreeForm 内部是 WindowContainerTransaction + startAllPinShellTransition
         //（WM 锁 + shell 过渡）——**必须跑在 ROM 的 WMShell 线程**，与 doExit 同一条纪律
         //（"exit 仍必须在 ROM 的 WMShell 线程"，见 postToRomExecutor 注释）。
         // 直接在主线程调 = 锁序死锁 = SystemUI 卡死（2026-10-18 真机：一点空白整机冻住）。
-        val c = controller
-        if (c != null) {
-            val posted = postToRomExecutor(Runnable {
-                runCatching {
-                    c.javaClass.methods.firstOrNull {
-                        it.name == "pinAllFreeForm" && it.parameterCount == 0
-                    }?.invoke(c)
-                }.onFailure { HLog.w(TAG, "pinAllFreeForm invoke failed: ${it.message}") }
-            })
-            if (posted) {
-                HLog.i(TAG, "pin via controller.pinAllFreeForm()（ROM 线程）")
-                return true
-            }
+        if (postPinAllDirect()) {
+            HLog.i(TAG, "pin via controller.pinAllFreeForm()（ROM 线程，${PIN_VERIFY_DELAY_MS}ms 回查）")
+            verifyPinAllThen(retriesLeft = 1)
+            return true
         }
-        // 回退：ROM 的 shell 命令（进程级，无线程约束；与 close 的回退同款 su 模式）
-        return runCatching {
-            val p = ProcessBuilder(
-                "su", "-c", "cmd window shell miuifreeform pinAllFreeform"
-            ).start()
-            p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
-            HLog.i(TAG, "pin via shell command")
-            true
-        }.onFailure { HLog.w(TAG, "pin via shell failed: ${it.message}") }.getOrDefault(false)
+        // 直调投递失败 ⇒ shell 命令兜底（进程级，无线程约束）
+        return pinViaShellCommand()
     }
 
-    /** ROM 自己的 shell 命令（OS3/OS4 都有）：`cmd window shell miuifreeform exitFreeformTask <id>`。 */
+    /** 反射直调 pinAllFreeForm（投 ROM 线程；动作是否真生效由 [verifyPinAllThen] 回查）。 */
+    private fun postPinAllDirect(): Boolean {
+        val c = controller ?: return false
+        return postToRomExecutor(Runnable {
+            runCatching {
+                c.javaClass.methods.firstOrNull {
+                    it.name == "pinAllFreeForm" && it.parameterCount == 0
+                }?.invoke(c)
+            }.onFailure { HLog.w(TAG, "pinAllFreeForm invoke failed: ${it.message}") }
+        })
+    }
+
+    /**
+     * pinAll 的生效回查：[PIN_VERIFY_DELAY_MS] 后查 z-order 里是否仍有"未钉住且未在退出"的
+     * 小窗；仍有且还有重试额度 ⇒ 再投一次直调；再败 ⇒ shell 命令兜底（**异步**——旧实现的
+     * su 同步跑在 spy 主线程，冷启 100~800ms 最坏 2s，期间输入派发停摆）。
+     * repository 缺失时无从查证，不重试也不兜底（保持旧行为的"尽力而为"）。
+     */
+    private fun verifyPinAllThen(retriesLeft: Int) {
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            val pending = runCatching {
+                val repo = repository ?: return@postDelayed
+                zOrderIds(repo).any { !isExiting(it) && !isPinned(it) }
+            }.getOrDefault(false)
+            if (!pending) return@postDelayed
+            if (retriesLeft > 0 && postPinAllDirect()) {
+                HLog.i(TAG, "pin 回查：仍有未钉住窗 ⇒ 重投一次")
+                verifyPinAllThen(retriesLeft - 1)
+                return@postDelayed
+            }
+            HLog.w(TAG, "pin 回查：直调未生效 ⇒ shell 命令兜底")
+            pinViaShellCommand()
+        }, PIN_VERIFY_DELAY_MS)
+    }
+
+    /** pin 的 shell 命令末级兜底。waitFor 超时 = 失败（旧实现返回值被忽略）。 */
+    private fun pinViaShellCommand(): Boolean = runCatching {
+        val p = ProcessBuilder(
+            "su", "-c", "cmd window shell miuifreeform pinAllFreeform"
+        ).start()
+        val finished = p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+        if (!finished) {
+            p.destroy()
+            HLog.w(TAG, "pin via shell timeout")
+            return@runCatching false
+        }
+        HLog.i(TAG, "pin via shell command")
+        true
+    }.onFailure { HLog.w(TAG, "pin via shell failed: ${it.message}") }.getOrDefault(false)
+
+    /**
+     * ROM 自己的 shell 命令（OS3/OS4 都有，close 链 try#4 **末级**）：
+     * `cmd window shell miuifreeform exitFreeformTask <id>`。
+     * 2026-10-25：waitFor 返回值原来被忽略——超时也报成功，白烧上级一轮 700ms 回查。
+     */
     private fun closeViaShellCommand(taskId: Int): Boolean = runCatching {
         val p = ProcessBuilder(
             "su", "-c", "cmd window shell miuifreeform exitFreeformTask $taskId"
         ).start()
-        p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+        val finished = p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)
+        if (!finished) {
+            p.destroy()
+            HLog.w(TAG, "closeViaShellCommand($taskId) timeout")
+            return@runCatching false
+        }
         true
     }.onFailure { HLog.w(TAG, "closeViaShellCommand($taskId) failed: ${it.message}") }.getOrDefault(false)
 

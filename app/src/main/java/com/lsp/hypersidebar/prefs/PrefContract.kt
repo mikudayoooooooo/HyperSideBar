@@ -351,6 +351,15 @@ object LayoutDefaults {
     const val DEAD_ZONE = 12f
     const val TRIGGER_DWELL_MS = 250
 
+    /**
+     * 条件式推荐加权参数（2026-10-24 计划 §A1 定案，非用户设置项——不进 layoutKeys、
+     * 不暴露设置页）：boost = weight × min(当前来源→目标的 7 天启动次数, cap)。
+     * 30 ≈ 3 次原生小窗启动的权重（ROM 侧 timestamps.size()×10，三代实证），一对来源
+     * 启动即可把目标顶过普通使用频次（launchCount 本身是近一周窗口，同窗叠加语义干净）。
+     */
+    const val REC_CTX_WEIGHT = 30
+    const val REC_CTX_CAP = 5
+
     /** 底角斜滑触发默认开关（N1）：默认关，用户显式开启后才接管底角手势。 */
     const val CORNER_SWIPE_ENABLED = false
 

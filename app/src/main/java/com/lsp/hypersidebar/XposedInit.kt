@@ -129,6 +129,9 @@ class XposedInit : XposedModule() {
                 // 都被 SELinux 拒（`__system_property_set` rc=-1 / 反射 RuntimeException），
                 // 而 fail-open 下"写 1"本来就是空操作 ⇒ 总闸现在只由模块 App 写文件 marker 关断。
                 initHooks(turboLayoutHook!!, freeformRelayHook!!, sidebarOverlayProbe!!)
+                // （2026-10-24 的 PropSpike 矩阵探针已按拍板于 2026-10-25 删除：A 案免 root
+                //  文件通道真机判活；探针四格全 OK 的判词归档在 os4-native-hold-route-plan.md §27.5/§27.6
+                //  ——system_app 域 × persist.sys./sys. 可写，B 案备用路线已实证可行。）
             }
             Host.HOME -> {
                 // 竖屏边缘手势通道（内滑+停顿零干扰透传；横屏触发已移交 :ui B 路线）

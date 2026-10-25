@@ -125,15 +125,14 @@ object CornerGeomBridge {
         if (changeKey == lastW) return
         lastW = changeKey
 
-        // 免 root 那一路先写（真机更正：/data/local/tmp 对 app 是 EACCES ⇒ 这里内部走 su；
-        // 好处仍是不受属性长度限制 + 原子替换），写完哪怕 setprop 失败，native 也能从文件读到同一份值
+        // 免 root 文件通道先落一份（2026-10-24 迁址应用专属媒体目录，不再借 su，见
+        // ConfigFileBridge 头注释）——写完哪怕 setprop 失败/本机无 root，native 也能从文件读到同一份值
         ConfigFileBridge.pushScalars(
             linkedMapOf(
                 PROP_W_RATIO to wStr,
                 PROP_HOT_PCT to hStr,
                 PROP_CORNER_SUPP to suppStr,
-            ),
-            context
+            )
         )
 
         exec().execute {
@@ -324,6 +323,9 @@ object CornerGeomBridge {
         lastBand = key
 
         exec().execute {
+            // 免 root 文件通道（2026-10-24，与 push() 同款）：无 root 的机器靠它吃到触发带几何；
+            // 属性那条 su 照推不变（有 root 的机器双通道并联，native 文件优先）。
+            ConfigFileBridge.pushScalars(values.associate { it })
             val cmd = values.joinToString("; ") { "setprop ${it.first} ${it.second}" }
             val ok = runCatching {
                 val p = ProcessBuilder("su", "-c", cmd).start()

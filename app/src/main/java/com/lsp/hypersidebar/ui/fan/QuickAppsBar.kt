@@ -165,15 +165,22 @@ private fun QuickAppIcon(
             )
         }
 
-        AppIconImage(
-            bitmap = bitmap,
-            fallbackColor = fallbackColor,
-            appName = app.appName,
-            // 与 FanAppIcon 同口径 ICON_FILL_RATIO（图标几乎占满格子、留 8% 呼吸）。旧值 1.0 让
-            // 同尺寸下的快捷栏图标肉眼比扇形图标更大，是"两者不一致"的另一处来源
-            size = iconSize * FanVisuals.ICON_FILL_RATIO,
-            colors = colors
-        )
+        if (app.group != null && bitmap == null) {
+            // 组默认图标（C7，计划 §B2 定案）：微信群头像式三角拼贴（上 1 下 2）——
+            // 仅当无借用图标（bitmap==null）时绘制；三个子位图各走 rememberAppIcon
+            // （peek+异步补载，预热名单已含子项包名）
+            GroupCollageIcon(context = context, group = app.group, cellDp = iconSize, colors = colors)
+        } else {
+            AppIconImage(
+                bitmap = bitmap,
+                fallbackColor = fallbackColor,
+                appName = app.appName,
+                // 与 FanAppIcon 同口径 ICON_FILL_RATIO（图标几乎占满格子、留 8% 呼吸）。旧值 1.0 让
+                // 同尺寸下的快捷栏图标肉眼比扇形图标更大，是"两者不一致"的另一处来源
+                size = iconSize * FanVisuals.ICON_FILL_RATIO,
+                colors = colors
+            )
+        }
 
         if (isSelected) {
             // B1：描边随 mask 同形状（squircle 圆角方），绘于图标之上
@@ -186,6 +193,39 @@ private fun QuickAppIcon(
                         cornerRadius = (iconSize * FanVisuals.ICON_CORNER_RATIO).dp
                     )
             )
+        }
+    }
+}
+
+/** 组默认拼贴（上 1 下 2 三角，类微信三人头像）：子图标 ≈ 格子 46%，窄间隙。 */
+@Composable
+private fun GroupCollageIcon(
+    context: Context,
+    group: List<FanAppInfo>,
+    cellDp: Float,
+    colors: FanThemeColors
+) {
+    val child = cellDp * 0.46f
+    val gap = cellDp * 0.04f
+    val members = group.take(3)
+    Box(modifier = Modifier.size(cellDp.dp)) {
+        // 上方中位 1 枚 + 下方左右 2 枚（三角朝上；2 成员时退化为下方两枚）
+        members.forEachIndexed { i, member ->
+            val mod = when (i) {
+                0 -> Modifier.offset(x = ((cellDp - child) / 2f).dp, y = gap.dp)
+                1 -> Modifier.offset(x = gap.dp, y = (cellDp - child - gap).dp)
+                else -> Modifier.offset(x = (cellDp - child - gap).dp, y = (cellDp - child - gap).dp)
+            }
+            val (bm, fb) = rememberAppIcon(context, member)
+            Box(modifier = mod) {
+                AppIconImage(
+                    bitmap = bm,
+                    fallbackColor = fb,
+                    appName = member.appName,
+                    size = child,
+                    colors = colors
+                )
+            }
         }
     }
 }

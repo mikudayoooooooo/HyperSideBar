@@ -91,12 +91,15 @@ object FanPrewarmer {
                     .getOrDefault(emptySet())
             )
             shortcuts.forEach { sa ->
-                (sa.iconPackageName ?: sa.packageName)?.let { add(it) }
-                // 组子项（拼贴成员）各自预灌
+                // 单个条目=宿主包名（扇形渲染源，与 assembleFanData 同口径）；
+                // 组=借用图标包名（B2）+ 子项有效图标包名（拼贴成员）
                 if (sa.kind == ShortcutKind.GROUP) {
+                    sa.iconPackageName?.let { add(it) }
                     sa.children.orEmpty().forEach { c ->
                         (c.iconPackageName ?: c.packageName)?.let { add(it) }
                     }
+                } else {
+                    sa.packageName?.let { add(it) }
                 }
             }
         }.filter { it.isNotBlank() }

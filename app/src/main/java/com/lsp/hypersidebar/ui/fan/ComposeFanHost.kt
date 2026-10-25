@@ -192,6 +192,15 @@ class ComposeFanHost(
     @Volatile private var released = false
     var onOutsideTap: (() -> Unit)? = null
 
+    // ===== 组展开态（C7，计划 §B4；无组数据时全链休眠=今日行为）=====
+    /** 当前快捷栏是否含组条目（show 时刷新）——true 时触摸走 QuickExpandMachine 路径 */
+    private var quickHasGroups = false
+    private var expandState = QuickExpandMachine.State()
+    /** 展开前的根栏输入 stash（收回时还原） */
+    private var rootQuickStash: GeometryInput? = null
+    /** 展开子栏的锚定中心 X（原组图标中心；null=未展开）——传给 computeFanGeometry */
+    private var expandedAnchorCenterX: Float? = null
+
     /**
      * 孤儿 UP 防护（OS4 借道路径实测，2026-10-04）：
      *
@@ -249,6 +258,7 @@ class ComposeFanHost(
                 "dim=${readBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)}"
         )
         pendingInput = GeometryInput(anchorX, anchorY, apps, quickApps, isLandscape, cornerAnchor)
+        quickHasGroups = quickApps.any { it.group != null }
         resetInteractionState()
         // 壁纸磨砂（0914 用户拍板"优先 miuix 内部采样"）：launcher 与 :ui 双宿主同接、
         // 共用同一张壁纸图（0915 用户拍板）——竖屏桌面采样内容=真实背景；横屏 :ui 垫的
@@ -355,6 +365,10 @@ class ComposeFanHost(
         lastSelectedQuickIndex = -1
         selectedSince = 0L
         originValid = false
+        // 组展开态随呼出清零（§6 断言：重复呼出 20 次无展开残留）
+        expandState = QuickExpandMachine.State()
+        rootQuickStash = null
+        expandedAnchorCenterX = null
     }
 
     private fun computeAndPublishGeometry() {
@@ -370,7 +384,9 @@ class ComposeFanHost(
             Offset(input.anchorX - loc[0], input.anchorY - loc[1]),
             IntSize(wrapper.width, wrapper.height),
             input.apps, input.quickApps, config, density, input.isLandscape,
-            input.cornerAnchor
+            input.cornerAnchor,
+            // 组展开锚定（C6 参数）：子栏以原组图标中心排布，几何连续无平移跳变
+            quickBarCenterX = expandedAnchorCenterX
         )
         geometryState.value = g
         HLog.i(
@@ -490,6 +506,14 @@ class ComposeFanHost(
                 if (event.action == MotionEvent.ACTION_DOWN) {
                     sawDownInSession = true
                     sessionDownTime = event.downTime
+                }
+                // 组触摸路径（C7，计划 §B4）：快捷栏含组（或已展开）时，quick 交互整体走
+                // QuickExpandMachine——含普通项的选中/计时/提交（与组共用一套状态）；
+                // fan 侧选中仍用 resolveFanSelection 保持滞回。无组时本路径休眠=今日行为
+                if ((quickHasGroups || expandState.expanded) &&
+                    handleGroupTouch(event, geometry, x, y, dx, dy, dist, deadZonePx)
+                ) {
+                    return true
                 }
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
@@ -818,6 +842,163 @@ class ComposeFanHost(
         val cx = geometry.quickBarX + barPadding + index * (quickIconPx + pxSpacing) + quickIconPx / 2f
         val cy = geometry.quickBarY + barPadding + quickIconPx / 2f
         return Offset(cx, cy)
+    }
+
+    // ===== 组展开（C7）：QuickExpandMachine 事件路由 + 几何换帧 =====
+
+    /**
+     * 组触摸路径（含组时接管全部 quick 交互）。返回 true=事件已消费（恒真——
+     * 机器路径完整覆盖 DOWN/MOVE/UP/CANCEL 的显示与提交）。
+     */
+    private fun handleGroupTouch(
+        event: MotionEvent,
+        geometry: FanGeometry,
+        x: Float, y: Float,
+        dx: Float, dy: Float, dist: Float,
+        deadZonePx: Float
+    ): Boolean {
+        val uptime = SystemClock.uptimeMillis()
+        val fanSel = resolveFanSelection(dx, dy, dist, deadZonePx, geometry)
+        val quickIdx = calcQuickAppCandidate(x, y, geometry)
+        val hit = when {
+            quickIdx in geometry.quickApps.indices -> QuickExpandMachine.QuickHit.Quick(
+                "q$quickIdx", geometry.quickApps[quickIdx].group != null
+            )
+            fanSel in geometry.items.indices -> QuickExpandMachine.QuickHit.FanItem(fanSel)
+            else -> QuickExpandMachine.QuickHit.None
+        }
+        // 展开包络（仅展开态参与判定）：新栏包围盒外扩 ~0.5 图标（胶囊比例 0.5/0.25 内衬）
+        val insideEnvelope = if (!expandState.expanded) true else run {
+            val q = geometry.quickIconSize * context.resources.displayMetrics.density
+            val n = geometry.quickApps.size
+            val barW = n * q + (n - 1) * q * 0.35f + q
+            val m = q * 0.5f
+            x >= geometry.quickBarX - m && x <= geometry.quickBarX + barW + m &&
+                y >= geometry.quickBarY - m && y <= geometry.quickBarY + 1.5f * q + m
+        }
+        val action = when (event.action) {
+            MotionEvent.ACTION_DOWN -> QuickExpandMachine.ACTION_DOWN
+            MotionEvent.ACTION_MOVE -> QuickExpandMachine.ACTION_MOVE
+            MotionEvent.ACTION_UP -> QuickExpandMachine.ACTION_UP
+            else -> QuickExpandMachine.ACTION_CANCEL
+        }
+        // 统计口径与既有路径持平（采集层不因组在场而缺样本）
+        if (action == QuickExpandMachine.ACTION_DOWN || action == QuickExpandMachine.ACTION_MOVE) {
+            StatsRecorder.onFanMove(x, y)
+        }
+        if (action == QuickExpandMachine.ACTION_UP) {
+            StatsRecorder.onFanUp(
+                when {
+                    dist < deadZonePx -> CancelZone.DEAD
+                    dist < innerCancelRadius(geometry) -> CancelZone.INNER
+                    dist > outerCancelRadius(geometry) -> CancelZone.OUTER
+                    else -> CancelZone.IN_BAND
+                },
+                deadZonePx
+            )
+        }
+        val hadSelection = expandState.hasQuickSelection
+        val (next, cmd) = QuickExpandMachine.onEvent(
+            expandState,
+            QuickExpandMachine.Event(action, hit, uptime, insideEnvelope),
+            released, DWELL_MS, FINAL_MIN_MS
+        )
+        expandState = next
+        if (!hadSelection && next.hasQuickSelection) StatsRecorder.onFanPreselected()
+
+        when (cmd) {
+            QuickExpandMachine.Command.EXPAND_GROUP -> {
+                if (quickIdx in geometry.quickApps.indices) {
+                    performExpand(geometry.quickApps[quickIdx], quickIdx, geometry)
+                }
+            }
+            QuickExpandMachine.Command.COLLAPSE_GROUP -> performCollapse()
+            QuickExpandMachine.Command.TAP_OUTSIDE -> {
+                touchState.value = FanTouchState(x, y, 2, -1, -1)
+                onOutsideTap?.invoke()
+                return true
+            }
+            QuickExpandMachine.Command.LAUNCH_QUICK -> {
+                val item = geometry.quickApps.getOrNull(quickIdx)
+                touchState.value = FanTouchState(x, y, 2, -1, -1)
+                if (item != null) {
+                    HLog.i(TAG, "quick(group-path) launch: ${item.appName}")
+                    onQuickAppSelected?.invoke(item)
+                }
+                return true
+            }
+            QuickExpandMachine.Command.LAUNCH_APP -> {
+                val item = geometry.items.getOrNull(fanSel)?.app
+                touchState.value = FanTouchState(x, y, 2, -1, -1)
+                if (item != null) {
+                    HLog.i(TAG, "fan(group-path) launch: ${item.packageName}")
+                    onAppSelected?.invoke(item)
+                }
+                return true
+            }
+            QuickExpandMachine.Command.NONE -> Unit
+        }
+        // 显示更新：quick 索引取自机器选中 id（q<idx>）；fan 索引取滞回选中
+        val displayQuick = next.selectedId?.removePrefix("q")?.toIntOrNull() ?: -1
+        val phase = when (action) {
+            QuickExpandMachine.ACTION_UP -> 2
+            QuickExpandMachine.ACTION_CANCEL -> 3
+            else -> 0
+        }
+        touchState.value = FanTouchState(x, y, phase, fanSel.takeIf { it in geometry.items.indices } ?: -1, displayQuick)
+        return true
+    }
+
+    /** 展开：换 pendingInput 为子项列表 + 锚定几何重算 + quick 选中态重置（fan 侧保留） */
+    private fun performExpand(groupApp: FanAppInfo, groupIdx: Int, oldGeometry: FanGeometry) {
+        val children = groupApp.group
+        val input = pendingInput ?: return
+        if (children.isNullOrEmpty() || expandState.expanded) return
+        rootQuickStash = input
+        expandedAnchorCenterX = computeQuickAppCenter(groupIdx, oldGeometry).x
+        pendingInput = GeometryInput(
+            input.anchorX, input.anchorY, input.apps, children,
+            input.isLandscape, input.cornerAnchor
+        )
+        lastSelectedQuickIndex = -1
+        selectedSince = 0L
+        streakSince = 0L
+        computeAndPublishGeometry()
+        HLog.i(TAG, "group expanded: ${groupApp.appName} children=${children.size} anchorX=${expandedAnchorCenterX?.toInt()}")
+    }
+
+    /** 收回根栏：还原 stash + 默认几何 + quick 选中态重置。不关扇形（规格） */
+    private fun performCollapse() {
+        val stash = rootQuickStash ?: return
+        pendingInput = stash
+        rootQuickStash = null
+        expandedAnchorCenterX = null
+        lastSelectedQuickIndex = -1
+        selectedSince = 0L
+        streakSince = 0L
+        computeAndPublishGeometry()
+        HLog.i(TAG, "group collapsed → root bar")
+    }
+
+    /** 控制器组分支入口（C7 三分支；机器路径通常已先处理，此为防御/外部触发口） */
+    fun expandQuickGroup(app: FanAppInfo) {
+        val geometry = geometryState.value ?: return
+        if (expandState.expanded) return
+        val idx = geometry.quickApps.indexOfFirst { it.group != null && it.appName == app.appName }
+        if (idx < 0) return
+        expandState = QuickExpandMachine.State(expanded = true, expandedGroupId = "q$idx")
+        performExpand(geometry.quickApps[idx], idx, geometry)
+    }
+
+    /** 组路径的取消半径（与既有 innerCancel/outerCancel 同公式，供统计口径复用） */
+    private fun innerCancelRadius(geometry: FanGeometry): Float {
+        val density = context.resources.displayMetrics.density
+        return (geometry.innerRadius * 0.85f - geometry.iconSize * density * 0.5f) * 0.75f
+    }
+
+    private fun outerCancelRadius(geometry: FanGeometry): Float {
+        val density = context.resources.displayMetrics.density
+        return (geometry.outerRadius + geometry.iconSize * density * 0.5f) * 1.25f
     }
 
     /**

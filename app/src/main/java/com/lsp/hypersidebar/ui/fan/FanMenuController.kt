@@ -254,21 +254,39 @@ class FanMenuController(
             ShortcutStore.getToolboxLabel(context)
         )
         val allQuick = runtimeQuick.map { sa ->
-            FanAppInfo(
-                // 真实宿主包名（批次 2 修复）：此前用 "shortcut:${id}" 伪包名，
-                // AppIconCache.load 的 getApplicationIcon 必然 NameNotFound → bitmap=null
-                // → 快捷栏退化字首头像（圆形）而非宿主真图标。启动逻辑不依赖
-                // packageName（走 actionHandle 闭包捕获的 sa），改真包名无副作用
-                packageName = sa.packageName ?: "",
-                appName = sa.label,
-                actionHandle = { ctx ->
-                    if (sa.kind == ShortcutKind.TOOLBOX) {
-                        launchStrategy.openNativePanel(ctx)
-                    } else {
-                        launchStrategy.launchShortcut(ctx, sa)
+            // 组条目翻译（C7，计划 §B0）：无 actionHandle + children 各自闭包——
+            // 子项零特殊化（启动/统计走现有 actionHandle 路径）；组图标源=iconPackageName
+            // （扇形侧首个消费该字段的场景：借用图标走 AppIconCache，拼贴时空串）
+            if (sa.kind == ShortcutKind.GROUP && !sa.children.isNullOrEmpty()) {
+                FanAppInfo(
+                    packageName = sa.iconPackageName ?: "",
+                    appName = sa.label,
+                    actionHandle = null,
+                    group = sa.children.filter { it.enabled }.map { child ->
+                        FanAppInfo(
+                            packageName = child.iconPackageName ?: child.packageName ?: "",
+                            appName = child.label,
+                            actionHandle = { ctx -> launchStrategy.launchShortcut(ctx, child) }
+                        )
                     }
-                }
-            )
+                )
+            } else {
+                FanAppInfo(
+                    // 真实宿主包名（批次 2 修复）：此前用 "shortcut:${id}" 伪包名，
+                    // AppIconCache.load 的 getApplicationIcon 必然 NameNotFound → bitmap=null
+                    // → 快捷栏退化字首头像（圆形）而非宿主真图标。启动逻辑不依赖
+                    // packageName（走 actionHandle 闭包捕获的 sa），改真包名无副作用
+                    packageName = sa.packageName ?: "",
+                    appName = sa.label,
+                    actionHandle = { ctx ->
+                        if (sa.kind == ShortcutKind.TOOLBOX) {
+                            launchStrategy.openNativePanel(ctx)
+                        } else {
+                            launchStrategy.launchShortcut(ctx, sa)
+                        }
+                    }
+                )
+            }
         }
         return FanData(apps, allQuick, runtimeQuick, isLandscape)
     }
@@ -330,14 +348,23 @@ class FanMenuController(
                 HLog.i(TAG, tl() + "onQuickAppSelected: ${appInfo.packageName}")
                 val context = activeContext
                 if (context != null) {
-                    if (appInfo.actionHandle != null) {
-                        StatsRecorder.onShortcut()
-                        exitAfterLaunch = true
-                        appInfo.actionHandle.invoke(context)
-                        dismiss()
-                    } else {
-                        // 防御分支：快捷项理论上均携带 actionHandle
-                        launchStrategy.launchFreeform(context, appInfo.packageName)
+                    when {
+                        // 组（C7 三分支，计划 §B4）：只展开——不 onShortcut、不
+                        // exitAfterLaunch、不 dismiss（四步全跳过；handleQuickBarTap
+                        // 汇同一回调 ⇒ 单点覆盖两路）。展开由宿主换几何实现
+                        appInfo.group != null -> {
+                            this@apply.expandQuickGroup(appInfo)
+                        }
+                        appInfo.actionHandle != null -> {
+                            StatsRecorder.onShortcut()
+                            exitAfterLaunch = true
+                            appInfo.actionHandle.invoke(context)
+                            dismiss()
+                        }
+                        else -> {
+                            // 防御分支：快捷项理论上均携带 actionHandle
+                            launchStrategy.launchFreeform(context, appInfo.packageName)
+                        }
                     }
                 }
             }

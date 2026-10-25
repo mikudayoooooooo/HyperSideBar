@@ -17,9 +17,10 @@ import java.io.File
  * 键名约定不变：文件里用**短名**（属性名去掉 `persist.hsb.` 前缀），例如 `corner.hot_pct=8`。
  * native 侧 1 秒粒度 + `stat`(mtime/size) 判变更 ⇒ 改完 ≤1s 生效，无需重启任何宿主。
  *
- * 与属性（su）**并存而非替代**：有 root 的机器属性照推（强化路径，`CornerGeomBridge` 里
- * 那条不动）；免 root 机器靠本文件吃到值。写失败只记日志——两路都失败时 native 用编译期
- * 兜底值（fail-open 语义不变，最坏只是几何不跟手，不会吞手势）。
+ * 与属性（su）的关系（2026-10-25 降级）：文件是**主路**——native 读取顺序本来就是
+ * 文件→属性→缺省，文件送达后属性不再推（`CornerGeomBridge` 按 [pushScalars] 返回值跳过
+ * su）；文件写失败才走原 su 链兜底（有 root 的机器救回来）。真机 X1 判活后 su 只剩
+ * "外部存储不可写"这一种触发场景。
  */
 object ConfigFileBridge {
 
@@ -39,18 +40,21 @@ object ConfigFileBridge {
      * 把标量写成 `key=value` 并原子替换。值用 `toString()`；浮点请先自行格式化成与属性一致的
      * 字符串（例如 `"%.4f"`）——native 侧只做 `strtof/strtol`。
      * 只在模块 App 自己的进程写（别的进程对这条路径是"别人的媒体目录"，FUSE 必拒）。
+     *
+     * @return true = 文件已落盘（native 文件优先 ⇒ 调用方可跳过 su 属性强化）；
+     *         false = 没写成（调用方走属性兜底链）。
      */
-    fun pushScalars(entries: Map<String, Any>) {
-        if (entries.isEmpty()) return
+    fun pushScalars(entries: Map<String, Any>): Boolean {
+        if (entries.isEmpty()) return true
         // ⚠ 2026-10-25 真机翻车点：HLog.proc() 返回**短名**（模块 App 进程 = "app"），拿它跟
         // applicationId 比较恒不等 ⇒ 静默跳过、一行日志没有（App 明明起了、文件却没写）。
         if (HLog.proc() != HLog.PROC_APP) {
             HLog.w(TAG, "非模块 App 进程（proc=${HLog.proc()}）⇒ 跳过免 root 文件写入")
-            return
+            return false
         }
         val f = confFile() ?: run {
             HLog.w(TAG, "conf 路径构造失败（本机没有外部存储？）⇒ 免 root 文件通道不可用")
-            return
+            return false
         }
         val body = buildString {
             append("# hyperSidebar native 配置（模块 App 自动生成；手改这个文件也有效，≤1s 生效）\n")
@@ -69,10 +73,12 @@ object ConfigFileBridge {
             f.delete()
             if (tmp.renameTo(f)) true else f.writeText(body)
         }
-        if (r.isSuccess) {
+        return if (r.isSuccess) {
             HLog.i(TAG, "config pushed: ${entries.size} keys → ${f.absolutePath}（免 root）")
+            true
         } else {
             HLog.w(TAG, "config push failed: ${r.exceptionOrNull()?.message}")
+            false
         }
     }
 

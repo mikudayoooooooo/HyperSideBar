@@ -11,6 +11,9 @@ espressoCore = "3.5.1"
 miuixUi = "0.9.4"
 xposed-api = "102.0.0"
 xposed-service = "102.0.0"
+# ⚠ 钉住勿随手升（2026-10-26 审查 A5）：与 miuix 0.9.4 的验证矩阵绑定——miuix 组件
+# 只在 BOM 2024.02.00 上验过（WindowDialog/NavDisplay 等行为依赖特定 Compose 版本）。
+# 升级 = 独立决策，须整包真机回归后才可动。
 composeBom = "2024.02.00"
 # miuix 0.9.4 的 WindowDialog/MiuixPopupHost 会调 NavigationBackHandler，要求 activity ≥1.13
 # 提供 LocalNavigationEventDispatcherOwner；缺则弹窗必崩、miuix-nav 预测返回静默失效

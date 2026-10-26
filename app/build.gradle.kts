@@ -1,6 +1,7 @@
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Locale
 import java.util.Properties
 
 val versionFile = rootProject.file("version.properties")
@@ -10,7 +11,9 @@ if (versionFile.exists()) {
 }
 val lastCode = props.getProperty("VERSION_CODE", "0").toInt()
 
-val todayPrefix = SimpleDateFormat("yyyyMMdd").format(Date()) // e.g. "20260707"
+// Locale 钉死（2026-10-26 审查 A2）：阿拉伯/波斯数字 locale 下 SimpleDateFormat 会
+// 产出非 ASCII 数字，todayPrefix.toInt() 直接在配置期抛——构建脚本必须钉 Locale.US
+val todayPrefix = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date()) // e.g. "20260707"
 val dailySeq = if (lastCode / 100 == todayPrefix.toInt()) {
     lastCode % 100 + 1
 } else {
@@ -152,8 +155,8 @@ dependencies {
     testImplementation(libs.junit)
     // 纯核心解析器单测需要真 org.json（Android 桩 not mocked；test-only 不进 APK）
     testImplementation(libs.json)
-    androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
+    // （2026-10-26 审查 A3）androidTest 模板源集与依赖已删除：从未运行过（AGENTS
+    // 「无模拟器、真机验证」定案），espresso/ext-junit 两条依赖是纯死重
 
     // MIUIX UI Library
     implementation(libs.miuix.ui)

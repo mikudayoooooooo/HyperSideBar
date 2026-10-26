@@ -6,8 +6,6 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="29" />
 
     <!-- allowBackup 关闭：RelayToken 防伪令牌、熔断状态、应用/快捷方式配置属安全敏感
          的跨进程 IPC 状态，随云备份/换机迁移会导致令牌在新设备失效或被外泄。模块配置

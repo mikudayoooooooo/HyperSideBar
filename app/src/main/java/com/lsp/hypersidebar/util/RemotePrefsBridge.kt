@@ -61,6 +61,18 @@ object RemotePrefsBridge : XposedServiceHelper.OnServiceListener {
         prefs?.let(onBound)
     }
 
+    /**
+     * 注销监听（2026-10-26 审查 B3）：MainActivity/AllAppsActivity 每次 onCreate 都
+     * addListener 一个捕获 Activity 实例的闭包，而本列表是进程级强引用——面板/设置页
+     * 每开一次就泄漏一个 Activity（连同其 Compose 状态），rebind 时全部旧闭包还会被
+     * 再执行一遍。消费方必须在 onDestroy 调本方法注销（用 addListener 传入的**同一个**
+     * 函数引用——Kotlin lambda 每次构造是新实例，调用方需存字段）。
+     */
+    @Synchronized
+    fun removeListener(onBound: (SharedPreferences) -> Unit) {
+        listeners.remove(onBound)
+    }
+
     /** 模块进程侧配置同步：注册写入监听（写入即全量广播给 hook 进程）+ 绑定完成即推一次。 */
     fun registerConfigSync(context: Context) {
         val p = prefs ?: return

@@ -14,6 +14,7 @@ import android.util.Log
 import com.lsp.hypersidebar.prefs.PrefKeys
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.util.concurrent.TimeUnit
 import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "ShortcutLauncher"
@@ -122,11 +123,10 @@ object ShortcutLauncher {
             return cached
         }
 
+        // B4：经 runSuCapture（waitFor 带超时）——原实现裸 waitFor，su daemon 卡顿/
+        // 授权弹窗未响应时本方法无限阻塞，且 @Synchronized 会连坐全部调用方
         val available = try {
-            val process = Runtime.getRuntime().exec(arrayOf("su", "--version"))
-            val result = process.waitFor() == 0
-            process.destroy()
-            result
+            runSuCapture(listOf("su", "--version")).exitCode == 0
         } catch (e: Exception) {
             false
         }
@@ -135,6 +135,32 @@ object ShortcutLauncher {
         lastRootCheckTime = now
         Log.d(TAG, "root available: $available")
         return available
+    }
+
+    /** su 子进程结果（B4）：exitCode + 双流文本；超时 exitCode=-1。 */
+    private class SuResult(val exitCode: Int, val stdout: String, val stderr: String)
+
+    /**
+     * su 子进程统一执行（2026-10-26 审查 B4，全部 root 代发路径共用）：
+     * - **先读双流再 waitFor**——输出撑满 64KB 管道缓冲后子进程写流阻塞、父进程
+     *   waitFor 互等的死锁经典模式（lookup 路径早已修对，其余调用点经本 helper 收敛）；
+     * - waitFor 带 [timeoutMs] 上限（0910 性能审计挂账遗留：su 卡顿无限阻塞）；
+     * - finally destroy 防僵尸进程。
+     */
+    private fun runSuCapture(cmd: List<String>, timeoutMs: Long = 10_000L): SuResult {
+        val process = ProcessBuilder(cmd).start()
+        try {
+            val stdout = BufferedReader(InputStreamReader(process.inputStream)).use { it.readText() }
+            val stderr = BufferedReader(InputStreamReader(process.errorStream)).use { it.readText() }
+            val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            if (!finished) {
+                HLog.w(TAG, "su timeout after ${timeoutMs}ms: ${cmd.lastOrNull()?.take(120) ?: "cmd"}")
+                return SuResult(-1, stdout, stderr)
+            }
+            return SuResult(process.exitValue(), stdout, stderr)
+        } finally {
+            process.destroy()
+        }
     }
 
     /**
@@ -655,21 +681,16 @@ object ShortcutLauncher {
                 .joinToString(" ") { shellQuote(it) }
         )
         val lookupOut: String = try {
-            val process = ProcessBuilder(lookupCmd).start()
-            try {
-                val stdout = BufferedReader(InputStreamReader(process.inputStream)).use { it.readText() }
-                val exitCode = process.waitFor()
-                if (exitCode != 0) {
-                    HLog.w(TAG, "shortcut root fallback: get-shortcuts exit=$exitCode")
-                    return LaunchResult.Failure(
-                        FailureReason.SHORTCUT_ROOT_LOOKUP_FAILED,
-                        "cmd shortcut get-shortcuts exit=$exitCode"
-                    )
-                }
-                stdout
-            } finally {
-                process.destroy()
+            // B4：统一 helper（顺序本就正确，补超时收敛）
+            val result = runSuCapture(lookupCmd)
+            if (result.exitCode != 0) {
+                HLog.w(TAG, "shortcut root fallback: get-shortcuts exit=${result.exitCode}")
+                return LaunchResult.Failure(
+                    FailureReason.SHORTCUT_ROOT_LOOKUP_FAILED,
+                    "cmd shortcut get-shortcuts exit=${result.exitCode}"
+                )
             }
+            result.stdout
         } catch (e: Exception) {
             HLog.w(TAG, "shortcut root fallback: lookup exec failed: ${e.message}")
             return LaunchResult.Failure(FailureReason.SHORTCUT_ROOT_LOOKUP_FAILED, e.message ?: "su exec failed")
@@ -739,22 +760,18 @@ object ShortcutLauncher {
         // 处理。stdout 首行（Starting: Intent ...）留痕——exit=0 不代表目标真显示
         // （WX_SHORTCUT 字符串 extras 假回执实锤：Starting 照打、activity 静默 finish）
         return try {
-            val process = ProcessBuilder(execCmd).start()
-            try {
-                val stdout = BufferedReader(InputStreamReader(process.inputStream)).use { it.readText().trim() }
-                val stderr = BufferedReader(InputStreamReader(process.errorStream)).use { it.readText().trim() }
-                val exitCode = process.waitFor()
-                HLog.i(TAG, "shortcut root fallback: am start out=${stdout.lineSequence().firstOrNull() ?: ""}")
-                val errored = stderr.contains("Error") || stdout.contains("Error: Activity not started")
-                if (exitCode == 0 && !errored) {
-                    HLog.i(TAG, "shortcut root fallback: SUCCESS")
-                    LaunchResult.Success(null)
-                } else {
-                    HLog.w(TAG, "shortcut root fallback: am start exit=$exitCode stderr=$stderr")
-                    LaunchResult.Failure(FailureReason.ROOT_EXEC_FAILED, "exit=$exitCode: $stderr")
-                }
-            } finally {
-                process.destroy()
+            // B4：统一 helper（先读流后 waitFor + 超时）
+            val result = runSuCapture(execCmd)
+            val stdout = result.stdout.trim()
+            val stderr = result.stderr.trim()
+            HLog.i(TAG, "shortcut root fallback: am start out=${stdout.lineSequence().firstOrNull() ?: ""}")
+            val errored = stderr.contains("Error") || stdout.contains("Error: Activity not started")
+            if (result.exitCode == 0 && !errored) {
+                HLog.i(TAG, "shortcut root fallback: SUCCESS")
+                LaunchResult.Success(null)
+            } else {
+                HLog.w(TAG, "shortcut root fallback: am start exit=${result.exitCode} stderr=$stderr")
+                LaunchResult.Failure(FailureReason.ROOT_EXEC_FAILED, "exit=${result.exitCode}: $stderr")
             }
         } catch (e: Exception) {
             HLog.w(TAG, "shortcut root fallback: am start exec failed: ${e.message}")
@@ -811,21 +828,15 @@ object ShortcutLauncher {
         val cmd = listOf("su", "-c", script)
         HLog.i(TAG, "launchQsTileViaRoot: $script")
         return try {
-            val process = ProcessBuilder(cmd).start()
-            try {
-                val exitCode = process.waitFor()
-                val errorOutput = BufferedReader(InputStreamReader(process.errorStream)).use {
-                    it.readText().trim()
-                }
-                if (exitCode == 0) {
-                    HLog.i(TAG, "launchQsTileViaRoot: SUCCESS")
-                    LaunchResult.Success(null)
-                } else {
-                    HLog.w(TAG, "launchQsTileViaRoot: exit=$exitCode, error=$errorOutput")
-                    LaunchResult.Failure(FailureReason.ROOT_EXEC_FAILED, "exit=$exitCode: $errorOutput")
-                }
-            } finally {
-                process.destroy()
+            // B4：统一 helper（先读流后 waitFor + 超时；原顺序会因输出满缓冲互等）
+            val result = runSuCapture(cmd)
+            val errorOutput = result.stderr.trim()
+            if (result.exitCode == 0) {
+                HLog.i(TAG, "launchQsTileViaRoot: SUCCESS")
+                LaunchResult.Success(null)
+            } else {
+                HLog.w(TAG, "launchQsTileViaRoot: exit=${result.exitCode}, error=$errorOutput")
+                LaunchResult.Failure(FailureReason.ROOT_EXEC_FAILED, "exit=${result.exitCode}: $errorOutput")
             }
         } catch (e: Exception) {
             HLog.e(TAG, "launchQsTileViaRoot: exception", e)
@@ -1104,28 +1115,20 @@ object ShortcutLauncher {
         HLog.i(TAG, "launchViaRoot: ${fullCmd.joinToString(" ")}")
 
         return try {
-            val process = ProcessBuilder(fullCmd).start()
-            try {
-                val exitCode = process.waitFor()
+            // B4：统一 helper（先读流后 waitFor + 超时）
+            val result = runSuCapture(fullCmd)
+            val errorOutput = result.stderr.trim()
 
-                // 读取 stderr 获取错误信息
-                val errorOutput = BufferedReader(InputStreamReader(process.errorStream)).use {
-                    it.readText().trim()
-                }
-
-                if (exitCode == 0) {
-                    HLog.i(TAG, "launchViaRoot: SUCCESS")
-                    LaunchResult.Success(null)
+            if (result.exitCode == 0) {
+                HLog.i(TAG, "launchViaRoot: SUCCESS")
+                LaunchResult.Success(null)
+            } else {
+                HLog.w(TAG, "launchViaRoot: exit=${result.exitCode}, error=$errorOutput")
+                if (errorOutput.contains("not exported") || errorOutput.contains("Permission Denial")) {
+                    LaunchResult.Failure(FailureReason.NOT_EXPORTED, errorOutput)
                 } else {
-                    HLog.w(TAG, "launchViaRoot: exit=$exitCode, error=$errorOutput")
-                    if (errorOutput.contains("not exported") || errorOutput.contains("Permission Denial")) {
-                        LaunchResult.Failure(FailureReason.NOT_EXPORTED, errorOutput)
-                    } else {
-                        LaunchResult.Failure(FailureReason.ROOT_EXEC_FAILED, "exit=$exitCode: $errorOutput")
-                    }
+                    LaunchResult.Failure(FailureReason.ROOT_EXEC_FAILED, "exit=${result.exitCode}: $errorOutput")
                 }
-            } finally {
-                process.destroy()
             }
         } catch (e: Exception) {
             HLog.e(TAG, "launchViaRoot: exception", e)

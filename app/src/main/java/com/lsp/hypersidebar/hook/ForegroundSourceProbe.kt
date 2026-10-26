@@ -25,16 +25,34 @@ object ForegroundSourceProbe {
 
     private const val TAG = "FgSource"
 
+    // 反射句柄懒解析一次（2026-10-26 审查 B5：仓库纪律对齐 pilferMethod/SysProps——
+    // 解析失败永久置 null 不重试，miui.process 类缺失=该 ROM 无此服务）
+    @Volatile private var pmClass: Class<*>? = null
+    @Volatile private var getForegroundMethod: java.lang.reflect.Method? = null
+    @Volatile private var fgField: java.lang.reflect.Field? = null
+    @Volatile private var resolved = false
+
+    private fun resolve() {
+        if (resolved) return
+        resolved = true
+        runCatching {
+            val cls = Class.forName("miui.process.ProcessManager")
+            pmClass = cls
+            getForegroundMethod = cls.getMethod("getForegroundInfo")
+        }
+    }
+
     /** 呼出一次调一个 binder（~1-2ms），非热路径红线明文例外（plan §7）。 */
     fun capture(selfPackage: String?): String? {
-        val info = runCatching {
-            val pm = Class.forName("miui.process.ProcessManager")
-            val m = pm.getMethod("getForegroundInfo")
-            m.invoke(null)
-        }.getOrNull() ?: return null
+        resolve()
+        val m = getForegroundMethod
+        val cls = pmClass
+        val info = runCatching { m?.invoke(null) }.getOrNull() ?: return null
         // 字段读取同样兜死：ForegroundInfo 三代同构（public String mForegroundPackageName）
+        val field = fgField ?: info.javaClass.getField("mForegroundPackageName")
+            .also { fgField = it }
         val pkg = runCatching {
-            info.javaClass.getField("mForegroundPackageName").get(info) as? String
+            field.get(info) as? String
         }.getOrNull()
         // 过滤宿主自身 + 模块自身（在模块设置页里呼出扇形测试是常态，模块前台不记——
         // 真机日志实证 fg=io.github.mikudayoooooooo.hypersidebar 未被滤）

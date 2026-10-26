@@ -403,23 +403,54 @@ object ShortcutStore {
         return result
     }
 
+    // ===== 工具箱可用性（2026-10-26 审查 B5）：合并单次查询 + 1s TTL 缓存 =====
+    // 原实现：isToolboxAvailable + getToolboxLabel 各查两个 Settings.Secure key
+    //（每次扇形呼出主线程 2~4 次 binder，且重复查同两个 key）；gbBoosting/vtbBoosting
+    // 是游戏/视频模式开关，变化频率人手级别，1s 缓存无感知风险（仓库纪律同
+    // sysJudgeEnabled 的 1s TTL 口径）。
+
+    private const val TOOLBOX_TTL_MS = 1_000L
+
+    /** 合并查询结果缓存（gb 可用性、vtb 可用性）。 */
+    private class ToolboxState(val gb: Boolean, val vtb: Boolean)
+
+    @Volatile private var toolboxCacheAt = 0L
+    @Volatile private var toolboxCache: ToolboxState? = null
+
+    /** 双 key 单遍读取（带 1s TTL）；Settings 读失败按双关处理（方向安全：只少一个占位项）。 */
+    private fun toolboxState(context: android.content.Context): ToolboxState {
+        val now = android.os.SystemClock.uptimeMillis()
+        toolboxCache?.let { c ->
+            if (now - toolboxCacheAt <= TOOLBOX_TTL_MS) return c
+        }
+        val state = runCatching {
+            val cr = context.contentResolver
+            ToolboxState(
+                gb = android.provider.Settings.Secure.getInt(cr, KEY_GB_BOOSTING, 0) == 1,
+                vtb = android.provider.Settings.Secure.getInt(cr, KEY_VTB_BOOSTING, 0) == 1
+            )
+        }.getOrDefault(ToolboxState(gb = false, vtb = false))
+        toolboxCache = state
+        toolboxCacheAt = now
+        return state
+    }
+
     /**
      * 判断当前场景是否有可用的面板（游戏/视频加速模式）。
      */
     fun isToolboxAvailable(context: android.content.Context): Boolean {
-        val cr = context.contentResolver
-        return android.provider.Settings.Secure.getInt(cr, KEY_GB_BOOSTING, 0) == 1 ||
-            android.provider.Settings.Secure.getInt(cr, KEY_VTB_BOOSTING, 0) == 1
+        val s = toolboxState(context)
+        return s.gb || s.vtb
     }
 
     /**
      * 获取面板标签。
      */
     fun getToolboxLabel(context: android.content.Context): String {
-        val cr = context.contentResolver
+        val s = toolboxState(context)
         return when {
-            android.provider.Settings.Secure.getInt(cr, KEY_GB_BOOSTING, 0) == 1 -> "游戏工具箱"
-            android.provider.Settings.Secure.getInt(cr, KEY_VTB_BOOSTING, 0) == 1 -> "视频工具箱"
+            s.gb -> "游戏工具箱"
+            s.vtb -> "视频工具箱"
             else -> "打开面板"
         }
     }

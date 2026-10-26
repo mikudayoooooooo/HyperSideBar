@@ -122,6 +122,21 @@ class AllAppsActivity : ComponentActivity() {
     /** 呼出扇形时的前台应用（source 三跳第二跳：面板内选择后随回传广播到 :ui 记录点） */
     private var frozenSource: String? = null
 
+    // 绑定桥监听存字段（2026-10-26 审查 B3）：onDestroy 用**同一引用**注销（面板是
+    // singleTask 高频重入，匿名闭包每次 onCreate 泄漏一份捕获本 Activity）
+    private val bridgeListener: (SharedPreferences) -> Unit = { prefs ->
+        runOnUiThread {
+            remotePrefs = prefs
+            Log.i(
+                TAG,
+                "bridge bound: customApps=" +
+                    runCatching { prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()) }
+                        .getOrNull()?.size
+            )
+        }
+        RemotePrefsBridge.registerConfigSync(applicationContext)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         verifyCaller()
@@ -132,18 +147,7 @@ class AllAppsActivity : ComponentActivity() {
         remotePrefs = RemotePrefsBridge.prefs
         suggestions = intent.getStringArrayListExtra(EXTRA_SUGGESTIONS)
         frozenSource = intent.getStringExtra(PrefKeys.FAN_EXTRA_SOURCE)
-        RemotePrefsBridge.addListener { prefs ->
-            runOnUiThread {
-                remotePrefs = prefs
-                Log.i(
-                    TAG,
-                    "bridge bound: customApps=" +
-                        runCatching { prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()) }
-                            .getOrNull()?.size
-                )
-            }
-            RemotePrefsBridge.registerConfigSync(applicationContext)
-        }
+        RemotePrefsBridge.addListener(bridgeListener)
 
         setContent {
             HyperSidebarTheme(colorMode = currentThemeMode()) {
@@ -215,6 +219,12 @@ class AllAppsActivity : ComponentActivity() {
         // singleTask 重入（上次未关闭）：同样先过令牌闸，再刷新传入的建议列表
         verifyCaller()
         suggestions = intent.getStringArrayListExtra(EXTRA_SUGGESTIONS)
+    }
+
+    override fun onDestroy() {
+        // B3：注销绑定桥监听（同引用），阻断 Activity 实例经进程级 listeners 表泄漏
+        RemotePrefsBridge.removeListener(bridgeListener)
+        super.onDestroy()
     }
 
     private fun currentThemeMode(): String =

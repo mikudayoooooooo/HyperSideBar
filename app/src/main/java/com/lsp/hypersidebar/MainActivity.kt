@@ -31,6 +31,18 @@ class MainActivity : ComponentActivity() {
     private var remotePrefs by mutableStateOf<SharedPreferences?>(null)
     private lateinit var fallbackPrefs: SharedPreferences
 
+    // 绑定桥监听存字段（2026-10-26 审查 B3）：onDestroy 用**同一引用**注销，
+    // 否则每次重建泄漏一个捕获本 Activity 的闭包（进程级强引用表）
+    private val bridgeListener: (SharedPreferences) -> Unit = { prefs ->
+        runOnUiThread {
+            remotePrefs = prefs
+            xposedService = RemotePrefsBridge.service
+        }
+        // 配置同步通道（批次 2）：模块进程任何 prefs 写入即全量广播给
+        // hook 进程（幂等注册）；绑定完成本身也推一次
+        RemotePrefsBridge.registerConfigSync(applicationContext)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         fallbackPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
@@ -41,15 +53,7 @@ class MainActivity : ComponentActivity() {
         // D7 修复：改走进程级绑定桥（原自注册 listener 在"设置页先完成绑定后，
         // 本 Activity 重建时二次注册收不到回调"路径下 remotePrefs 永远为 null
         // ——计数 0 的根因；见 RemotePrefsBridge）
-        RemotePrefsBridge.addListener { prefs ->
-            runOnUiThread {
-                remotePrefs = prefs
-                xposedService = RemotePrefsBridge.service
-            }
-            // 配置同步通道（批次 2）：模块进程任何 prefs 写入即全量广播给
-            // hook 进程（幂等注册）；绑定完成本身也推一次
-            RemotePrefsBridge.registerConfigSync(applicationContext)
-        }
+        RemotePrefsBridge.addListener(bridgeListener)
 
         val storedTheme = fallbackPrefs.getString(PrefKeys.THEME_MODE, ThemeModes.MONET_SYSTEM)
             ?: ThemeModes.MONET_SYSTEM
@@ -90,5 +94,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onDestroy() {
+        // B3：注销绑定桥监听（同引用），阻断 Activity 实例经进程级 listeners 表泄漏
+        RemotePrefsBridge.removeListener(bridgeListener)
+        super.onDestroy()
     }
 }

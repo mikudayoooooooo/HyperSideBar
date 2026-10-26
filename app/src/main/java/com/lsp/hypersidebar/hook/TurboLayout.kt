@@ -1237,6 +1237,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             resetStripGesture()
             cornerTrigger.reset()
         }.onFailure { HLog.w(TAG, "state reset failed: ${it.message}") }
+        // B2：Application 上的转屏回调注销（匿名注册无处注销的教训——同键注销）
+        releaseRotationConvergence()
         HLog.i(TAG, "releaseForReload: fan window/timers/sink released (:ui)")
     }
 
@@ -1328,6 +1330,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 ?: HLog.w(TAG, "hookCoverPassThrough: $cls ctor NOT FOUND")
         }.onFailure { HLog.w(TAG, "hookCoverPassThrough failed: ${it.message}") }
         startCoverWatchdog()
+        // B2：转屏立即收敛（Application 级 ComponentCallbacks；安全 App context 已就绪）
+        runCatching { safeAppContext()?.let { ensureRotationConvergence(it) } }
     }
 
     /**
@@ -1487,6 +1491,49 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 mainHandler.postDelayed(this, 2000L)
             }
         }, 2000L)
+    }
+
+    // ===== 转屏立即收敛 cover flag（2026-10-26 审查 B2）=====
+    // 旧行为：转屏后 FLAG_NOT_TOUCHABLE 残留只靠 ROM updateViewLayout 或 2s 看门狗翻转
+    // ⇒ 竖→横最长 2s cover 不可摸（条收不到事件，呼不出）；横→竖反向死区同窗。
+    // 现补 ComponentCallbacks（CornerGeomBridge.ensureRotationWatch 同款先例）：
+    // 回调当帧投主线程立即收敛，窗口期塌缩到一帧。挂 Application（长期存活），
+    // 注册须对称注销（热重载释放名单在 releaseForReload）。
+    @Volatile private var rotationCallbacks: android.content.ComponentCallbacks? = null
+    @Volatile private var rotationApp: Context? = null
+
+    private fun ensureRotationConvergence(ctx: Context) {
+        if (rotationCallbacks != null) return
+        val app = runCatching { ctx.applicationContext ?: ctx }.getOrNull() ?: return
+        val callbacks = object : android.content.ComponentCallbacks {
+            override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+                // 转屏当帧立即收敛（主线程投递——coverRefs/flag 写只在主线程）
+                mainHandler.post {
+                    runCatching {
+                        coverRefs.forEach { ref -> ref.get()?.let { applyCoverFlag(it) } }
+                    }.onFailure { HLog.w(TAG, "rotate cover flag convergence failed: ${it.message}") }
+                }
+            }
+
+            @Suppress("OVERRIDE_DEPRECATION")
+            override fun onLowMemory() {}
+        }
+        runCatching {
+            app.registerComponentCallbacks(callbacks)
+            rotationCallbacks = callbacks
+            rotationApp = app
+            HLog.i(TAG, "rotation convergence armed（转屏立即收敛 cover flag，2s 看门狗降为兜底）")
+        }.onFailure { HLog.w(TAG, "rotation convergence 未挂上: ${it.message}") }
+    }
+
+    private fun releaseRotationConvergence() {
+        runCatching {
+            val c = rotationCallbacks
+            val a = rotationApp
+            if (c != null && a != null) a.unregisterComponentCallbacks(c)
+        }.onFailure { HLog.w(TAG, "rotation convergence unregister failed: ${it.message}") }
+        rotationCallbacks = null
+        rotationApp = null
     }
 
     /**

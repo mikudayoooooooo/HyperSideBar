@@ -9,7 +9,6 @@ import android.os.Build
 import android.util.Log
 import com.lsp.hypersidebar.BuildConfig
 import java.util.Collections
-import java.util.concurrent.ConcurrentHashMap
 import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.util.HLog
 
@@ -54,12 +53,23 @@ object ConfigSync {
      */
     const val ACTION_SYNC_ACK = BuildConfig.APPLICATION_ID + ".CONFIG_SYNC_ACK"
 
-    /** SYNC 定向投递目标（唯一消费方=两个 hook 宿主；隐式广播任意 App 可收，禁止回退隐式） */
-    private val HOOK_HOST_PKGS = listOf(HostPackages.HOME, HostPackages.UI_HOST)
+    /**
+     * SYNC 定向投递目标（唯一消费方=三个 hook 宿主；隐式广播任意 App 可收，禁止回退隐式）。
+     * 2026-10-26 审查 B1：补 SystemUI——它的 SystemUiHook 已挂 registerHookSide 接收端
+     * （接收器空转数代），spy 读的底角/blank-tap/接管开关因此只能靠启动快照；补上后
+     * 设置页改动实时到达（省一次「重启系统界面」）。
+     */
+    private val HOOK_HOST_PKGS = listOf(HostPackages.HOME, HostPackages.UI_HOST, HostPackages.SYSTEM_UI)
 
     // ===== hook 进程侧：同步缓存 =====
 
-    private val cache = ConcurrentHashMap<String, Any>()
+    /**
+     * 同步缓存（2026-10-26 审查 B5）：**整体换引用**而非 clear+putAll——后者存在
+     * 「清空后、putAll 前」的瞬时空窗，并发读（手势线程经 SyncedPrefs）会回落到
+     * base 启动快照（旧值）。引用替换是单个 volatile 写，读侧要么见旧全量、要么见
+     * 新全量，永远不见空表。map 本身不再需要并发容器（无人原地写）。
+     */
+    @Volatile private var cache: Map<String, Any> = emptyMap()
 
     /** 最近一次收到 SYNC 的时刻（elapsedRealtime）；0=从未收到（init 快照兜底态） */
     @Volatile private var lastSyncAt = 0L
@@ -69,8 +79,7 @@ object ConfigSync {
 
     /** 收到 SYNC 全量覆盖（键值均为 Bundle 可序列化基础类型/StringSet）。 */
     fun applySync(map: Map<String, Any>) {
-        cache.clear()
-        cache.putAll(map)
+        cache = java.util.Collections.unmodifiableMap(HashMap(map))
         lastSyncAt = android.os.SystemClock.elapsedRealtime()
         // 高频明细日志开关随全量配置刷新（设置页切换 → 三进程生效；§11.2）
         (map[com.lsp.hypersidebar.prefs.PrefKeys.DEBUG_VERBOSE_LOGS] as? Boolean)?.let {
@@ -96,7 +105,9 @@ object ConfigSync {
     fun overrideValue(key: String?): Any? = key?.let { cache[it] }
     fun containsOverride(key: String?): Boolean = key != null && cache.containsKey(key)
     fun hasOverride(): Boolean = cache.isNotEmpty()
-    fun overrideSnapshot(): Map<String, Any> = HashMap(cache)
+
+    /** 缓存快照（本体已不可变，直接返回；调用方不得写） */
+    fun overrideSnapshot(): Map<String, Any> = cache
 
     /**
      * 缓存新鲜度（迭代六 §11.1）：从未同步过，或距上次 SYNC 超过 [STALE_MS] 即视为过期。

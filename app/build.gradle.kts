@@ -72,6 +72,11 @@ android {
         // 与本行展示的库版本不是同一个东西。）
         buildConfigField("String", "XPOSED_API_VERSION", "\"${libs.versions.xposed.api.get()}\"")
         buildConfigField("String", "EZXHELPER_VERSION", "\"${libs.versions.ezxhelperVersion.get()}\"")
+        // 「技术栈与环境」页列依赖清单：版本一律从版本目录取，避免 UI 文案与实编依赖漂移
+        buildConfigField("String", "MIUIX_VERSION", "\"${libs.versions.miuixUi.get()}\"")
+        buildConfigField("String", "COMPOSE_BOM_VERSION", "\"${libs.versions.composeBom.get()}\"")
+        buildConfigField("String", "KOTLIN_VERSION", "\"${libs.versions.kotlin.get()}\"")
+        buildConfigField("String", "DEXKIT_VERSION", "\"${libs.versions.dexkit.get()}\"")
     }
 
     signingConfigs {

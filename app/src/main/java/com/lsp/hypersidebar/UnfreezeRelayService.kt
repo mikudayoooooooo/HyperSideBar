@@ -41,10 +41,11 @@ class UnfreezeRelayService : Service() {
     }
 
     private lateinit var messenger: Messenger
+    private lateinit var thread: HandlerThread
 
     override fun onCreate() {
         super.onCreate()
-        val thread = HandlerThread("UnfreezeRelay").apply { start() }
+        thread = HandlerThread("UnfreezeRelay").apply { start() }
         messenger = Messenger(object : Handler(thread.looper) {
             override fun handleMessage(msg: Message) {
                 if (msg.what != MSG_UNFREEZE) return
@@ -62,6 +63,13 @@ class UnfreezeRelayService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder = messenger.binder
+
+    /** 同 ConfigPullService：服务停止时收线程（2026-10-30 审计）。 */
+    override fun onDestroy() {
+        runCatching { thread.quitSafely() }
+            .onFailure { android.util.Log.w(TAG, "quit failed: ${it.message}") }
+        super.onDestroy()
+    }
 
     private fun isUiHostUid(uid: Int): Boolean =
         runCatching {

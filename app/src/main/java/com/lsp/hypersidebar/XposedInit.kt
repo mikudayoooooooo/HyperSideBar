@@ -189,6 +189,7 @@ class XposedInit : XposedModule() {
             "UnfreezeBridge(HandlerThread)" to { com.lsp.hypersidebar.util.UnfreezeBridge.releaseForReload() },
             "AppIconCache(pool)" to { com.lsp.hypersidebar.util.AppIconCache.releaseForReload() },
             "DataLoader(pool)" to { com.lsp.hypersidebar.util.DataLoader.releaseForReload() },
+            "StatsRecorder(handler)" to { com.lsp.hypersidebar.util.StatsRecorder.releaseForReload() },
             "FanPrewarmer(pool)" to { com.lsp.hypersidebar.util.FanPrewarmer.releaseForReload() },
         )) {
             runCatching { block() }.onFailure { HLog.w(TAG, "release [$n] failed: ${it.message}") }

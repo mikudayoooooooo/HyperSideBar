@@ -380,6 +380,17 @@ object StatsRecorder {
         }
     }
 
+    /**
+     * 热重载释放（2026-10-31，API 102 清理清单遗漏项）：2s 防抖落盘 Runnable 挂在主线程 Handler 上，
+     * 不摘则旧代跨代继续跑（钉住旧 classloader，且把旧代快照写进同一个 prefs 文件）。
+     * 未起过 = 空操作；幂等。
+     */
+    fun releaseForReload() {
+        runCatching { mainHandler.removeCallbacks(saveRunnable) }
+            .onFailure { HLog.w("Stats", "releaseForReload failed: ${it.message}") }
+        dirty = false
+    }
+
     private fun saveNow() {
         dirty = false
         // 裁剪老天

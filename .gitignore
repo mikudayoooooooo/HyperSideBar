@@ -55,3 +55,7 @@ hidden-api/build/
 
 # 真机联调随手截图（2026-10-13，不入库）
 /tmp-shots/
+
+# 本地工具输出（2026-11-01）
+hsb.log
+spark-output/

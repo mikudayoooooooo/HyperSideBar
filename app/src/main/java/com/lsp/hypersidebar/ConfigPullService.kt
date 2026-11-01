@@ -43,10 +43,11 @@ class ConfigPullService : Service() {
     }
 
     private lateinit var messenger: Messenger
+    private lateinit var thread: HandlerThread
 
     override fun onCreate() {
         super.onCreate()
-        val thread = HandlerThread("ConfigPull").apply { start() }
+        thread = HandlerThread("ConfigPull").apply { start() }
         messenger = Messenger(object : Handler(thread.looper) {
             override fun handleMessage(msg: Message) {
                 if (msg.what != MSG_PULL_CONFIG) return
@@ -65,6 +66,14 @@ class ConfigPullService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder = messenger.binder
+
+    /** 服务被系统停掉时收掉本地线程（2026-10-30 审计：此前 HandlerThread 随实例泄漏，
+     *  进程内停启多次会叠出同名线程；幂等 quit）。 */
+    override fun onDestroy() {
+        runCatching { thread.quitSafely() }
+            .onFailure { Log.w(TAG, "quit failed: ${it.message}") }
+        super.onDestroy()
+    }
 
     private fun isAllowedUid(uid: Int): Boolean =
         uid == Process.SYSTEM_UID || runCatching {

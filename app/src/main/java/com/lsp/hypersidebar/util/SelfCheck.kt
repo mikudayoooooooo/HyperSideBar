@@ -146,6 +146,12 @@ object SelfCheck {
                 }.getOrNull() ?: "?")
                 appendLine("系统: Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}) / ${Build.MODEL}")
                 appendLine("框架: $framework")
+                // 换包陈旧（2026-10-31）：LSPosed 的模块 dex 跨安装可能陈旧 ⇒ "新代码不生效、重启才好"
+                runCatching { com.lsp.hypersidebar.util.ModuleStaleness.diagnose(context) }
+                    .getOrNull()?.let { appendLine("★ $it") }
+                // 熄屏归因（2026-10-31）：模块侧没有 WakeLock / FLAG_KEEP_SCREEN_ON（编译期结论），
+                // 偶发无法熄屏只可能是宿主或其他模块；这两行让报告里永远带着这个前提。
+                appendLine("唤醒锁: 无（本模块不使用 PowerManager/WakeLock/KEEP_SCREEN_ON）")
                 appendLine()
                 appendLine("== 探针双路 ==")
                 appendLine("触发端 (com.miui.home): ${decodeProbe(home)} (code=$home)")
@@ -165,11 +171,14 @@ object SelfCheck {
                     " / 外圈 ${i(prefs, PrefKeys.LANDSCAPE_MAX_APPS_OUTER, LayoutDefaults.LANDSCAPE_MAX_APPS_OUTER)}" +
                     " / 内圈 ${i(prefs, PrefKeys.LANDSCAPE_MAX_APPS_INNER, LayoutDefaults.LANDSCAPE_MAX_APPS_INNER)}")
                 appendLine("呼出停顿: ${i(prefs, PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)} ms" +
-                    " / 滑动距离: ${f(prefs, PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP).toInt()} dp" +
+                    " / 呼出距离: ${com.lsp.hypersidebar.hook.GestureThresholds.SWIPE_CONFIRM_DP.toInt()} dp（固定）" +
                     " / 死区: ${f(prefs, PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)} dp")
                 appendLine("底角斜滑: ${runCatching {
                     prefs.getBoolean(PrefKeys.CORNER_SWIPE_ENABLED, LayoutDefaults.CORNER_SWIPE_ENABLED)
-                }.getOrDefault(LayoutDefaults.CORNER_SWIPE_ENABLED)}")
+                }.getOrDefault(LayoutDefaults.CORNER_SWIPE_ENABLED)}" +
+                    " / 兜底(底栏收起时): ${runCatching {
+                        prefs.getBoolean(PrefKeys.CORNER_SPY_FALLBACK, LayoutDefaults.CORNER_SPY_FALLBACK)
+                    }.getOrDefault(LayoutDefaults.CORNER_SPY_FALLBACK)}")
                 appendLine("扇形雾化: ${f(prefs, PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)}" +
                     " / 背景压暗: ${runCatching { prefs.getBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED) }.getOrDefault(LayoutDefaults.FAN_DIM_ENABLED)}")
                 appendLine("主题: ${runCatching { prefs.getString(PrefKeys.THEME_MODE, "?") }.getOrNull() ?: "?"}")

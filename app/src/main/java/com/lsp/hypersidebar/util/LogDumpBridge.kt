@@ -75,6 +75,9 @@ object LogDumpBridge {
     ) {
         this.statusProvider = statusProvider
         this.statsProvider = statsProvider
+        // 换包陈旧检测（2026-10-31）：本函数是"每个宿主进程 attach 期"的唯一公共落点，
+        // 陈旧才写一条 W（正常静默），详见 ModuleStaleness。
+        runCatching { ModuleStaleness.logOnce(context) }
         if (registered) return
         registered = true
         registeredCtx = context

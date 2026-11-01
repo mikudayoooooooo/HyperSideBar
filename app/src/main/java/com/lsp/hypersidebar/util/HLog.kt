@@ -141,8 +141,14 @@ object HLog {
 
     /** 写入侧脱敏：令牌值遮蔽、URI 载荷截断（仅对疑似行付正则代价） */
     private fun sanitize(msg: String): String {
-        val lower = msg.lowercase()
-        if (!lower.contains("token") && !lower.contains("uri") && !lower.contains("intent")) return msg
+        // 逐条日志都调用；旧实现先 `lowercase()` 复制一份（1000 条环里每条一次分配），
+        // 改用大小写无关的子串查找，零分配
+        if (!msg.contains("token", ignoreCase = true) &&
+            !msg.contains("uri", ignoreCase = true) &&
+            !msg.contains("intent", ignoreCase = true)
+        ) {
+            return msg
+        }
         var out = msg
         runCatching {
             out = out.replace(Regex("(?i)(token[=:])\\S+"), "$1***")

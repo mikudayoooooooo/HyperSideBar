@@ -39,6 +39,21 @@ object InsetProbe {
     /** 是否**曾经**拿到过任何一次有效读数（含 0=明确"键盘没起"）。安全阀只在"从未拿到"时生效。 */
     @Volatile var imeKnown: Boolean = false
         private set
+    /**
+     * 最近一次拿到读数的时刻（uptime）。
+     *
+     * 2026-10-31：`imeKnown` 是**一次性闸**——只要历史上读到过一次，它就永远为 true，
+     * 于是 `FreeformBlankTapHook` 的"键盘高度未知 ⇒ 下部 45% 不算空白"安全阀再也不会生效；
+     * 而探针本身随时可能失活（ROM 漂移/键盘收起后来源不再回调）⇒ 键盘上的触摸被当空白。
+     * 现要求"读数足够新"才算可信（见 [imeKnownFresh]）。
+     */
+    @Volatile private var imeStampAt: Long = 0L
+
+    /** 读数是否仍在 [ttlMs] 内（默认 3s：一次点按的手势链里 `imeFrame()` 会刷新它）。 */
+    fun imeKnownFresh(ttlMs: Long = 3_000L): Boolean {
+        val at = imeStampAt
+        return at != 0L && android.os.SystemClock.uptimeMillis() - at <= ttlMs
+    }
     /** overlay 探针是否报过读数（报过 ⇒ 它对该窗口的 IME 敏感 ⇒ 它的 0 也可以清带）。 */
     @Volatile private var overlaySeen = false
 
@@ -60,6 +75,24 @@ object InsetProbe {
         }
 
     private const val IME_TTL_MS = 10_000L
+
+    /**
+     * 底栏（导航栏）当前是否在屏上 —— **显示级**信号，来自 SystemUI 自家视图收到的
+     * `WindowInsets.isVisible(navigationBars())`（同一个 view 钩子已经在收 insets）。
+     * null = 还没收到过任何 insets（未知 ⇒ 调用方按"在屏"处理，不接管）。
+     *
+     * 用途（2026-11-01 用户口径）：部分竖屏场景（游戏/全屏）ROM 会主动收起底栏，
+     * 底角斜滑因此没人接收；底角兜底开关就是为这种时刻准备的，**与导航模式无关**。
+     */
+    @Volatile private var navBarVisible: Boolean? = null
+    /** 底栏占用高度（px）；-1 = 未知。仅在 [navBarVisible] 为 false 时用于日志。 */
+    @Volatile private var navBarBottomPx: Int = -1
+
+    /** 底栏是否已被收起（false = 收起；未知也返回 false，宁可不出也不抢系统手势）。 */
+    fun navBarHidden(): Boolean = navBarVisible == false
+
+    /** 诊断字符串（自检/日志用）。 */
+    fun navBarState(): String = "visible=$navBarVisible bottom=${navBarBottomPx}px"
 
     /** 最近一次取值来源（打日志/排查用）。 */
     @Volatile var source: String = "none"
@@ -108,6 +141,19 @@ object InsetProbe {
         return imeSvcVisibleCache
     }
 
+    /** 记录底栏可见性（显示级：任意 SystemUI 视图收到的 navigationBars insets 都一样）。 */
+    private fun noteNavBar(insets: WindowInsets) {
+        runCatching {
+            val visible = insets.isVisible(WindowInsets.Type.navigationBars())
+            val bottom = insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+            if (visible != navBarVisible || bottom != navBarBottomPx) {
+                HLog.i(TAG, "nav bar visible=$visible bottom=${bottom}px")
+            }
+            navBarVisible = visible
+            navBarBottomPx = bottom
+        }
+    }
+
     /** 供 insets 钩子写入（SystemUI 窗口收到的 IME insets）。 */
     fun setImeBottom(px: Int, src: String) {
         // overlay 是唯一"真实变化驱动"的来源；它一旦报过读数就**最高优先**（含报 0 清带），
@@ -129,6 +175,7 @@ object InsetProbe {
         imeBottomRaw = px
         imeBottomAt = android.os.SystemClock.uptimeMillis()
         imeKnown = true
+        imeStampAt = imeBottomAt
         source = src
         HLog.i(TAG, "ime bottom=$px via $src")
     }
@@ -157,8 +204,9 @@ object InsetProbe {
      */
     fun setImeFromWmShell(px: Int, visible: Boolean) {
         wmShellLive = true
+        imeStampAt = android.os.SystemClock.uptimeMillis()
         if (px == imeBottomRaw && source == SRC_WMSHELL) {
-            imeBottomAt = android.os.SystemClock.uptimeMillis()  // 同值也要续 TTL
+            imeBottomAt = imeStampAt  // 同值也要续 TTL
             return
         }
         imeBottomRaw = px
@@ -199,6 +247,7 @@ object InsetProbe {
         val changed = imeRectRaw != rect || imeBottomRaw != (rect?.height() ?: 0) || floatingIme != floating
         imeBottomAt = android.os.SystemClock.uptimeMillis()
         imeKnown = true
+        imeStampAt = imeBottomAt
         source = SRC_WMSHELL
         if (changed) {
             HLog.i(TAG, "ime rect=$rect visible=$visible romFloating=$romFloating unknownFloat=$floating raw=$frame via $SRC_WMSHELL")
@@ -498,6 +547,7 @@ object InsetProbe {
                         for (a in param.args) {
                             if (a is WindowInsets) {
                                 setImeBottom(a.getInsets(WindowInsets.Type.ime()).bottom, "insets:${cls.simpleName}")
+                                noteNavBar(a)
                             }
                         }
                     }
@@ -522,6 +572,7 @@ object InsetProbe {
                 if (!cn.startsWith("com.android.systemui.")) return@createAfterHook
                 (param.args.getOrNull(0) as? WindowInsets)?.let {
                     setImeBottom(it.getInsets(WindowInsets.Type.ime()).bottom, "viewHook:$cn")
+                    noteNavBar(it)
                 }
             }
             HLog.i(TAG, "insets hook: view fallback hooked")

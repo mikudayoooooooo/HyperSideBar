@@ -633,7 +633,7 @@ class EdgeGestureHook(
                     // 常驻模式：松手未提交选中 → 转点选态（窗口保留）；现状=立即收起。
                     // UP 已提交选中时 LAUNCHED 收起在先、isShowing=false，两分支都自然跳过
                     if (fanController.isShowing) {
-                        if (fanPersistentOnRelease()) fanController.onGestureEnded()
+                        if (fanController.stayAfterRelease()) fanController.onGestureEnded()
                         else fanController.dismiss()
                     }
                     resetGesture()
@@ -669,13 +669,10 @@ class EdgeGestureHook(
                 cornerSeq++
                 gestureSeq++
                 fanSeenThisGesture = false
-                // 呼出确认距离：与边缘通道同源（TRIGGER_MIN_DISTANCE dp），DOWN 一次缓存整条手势
+                // 呼出确认距离：唯一定义源 GestureThresholds.SWIPE_CONFIRM_DP（2026-10-31 起不可调），
+                // DOWN 一次缓存整条手势
                 dm?.let {
-                    val distanceDp = runCatching {
-                        remotePrefs.getFloat(
-                            PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
-                        )
-                    }.getOrDefault(LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
+                    val distanceDp = GestureThresholds.SWIPE_CONFIRM_DP
                     confirmPx = distanceDp * it.density
                     resetPx = confirmPx * GestureThresholds.SWIPE_RESET_RATIO
                 }
@@ -901,7 +898,7 @@ class EdgeGestureHook(
                     // 常驻模式：松手未提交选中 → 转点选态（窗口保留）；现状=立即收起。
                     // UP 已提交选中时 LAUNCHED 收起在先、isShowing=false，两分支都自然跳过
                     if (fanController.isShowing) {
-                        if (fanPersistentOnRelease()) fanController.onGestureEnded()
+                        if (fanController.stayAfterRelease()) fanController.onGestureEnded()
                         else fanController.dismiss()
                     }
                     resetGesture()
@@ -935,16 +932,9 @@ class EdgeGestureHook(
                 gestureSeq++
                 swipeConfirmed = false
                 stallFired = false
-                // 滑动距离换算（dp→px，DOWN 一次缓存整条手势；设置项即时经 ConfigSync 生效）
+                // 滑动距离换算（唯一定义源 GestureThresholds.SWIPE_CONFIRM_DP；DOWN 一次缓存整条手势）
                 (stub?.context ?: safeAppContext())?.resources?.displayMetrics?.let { dm ->
-                    val distanceDp = try {
-                        remotePrefs.getFloat(
-                            PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
-                        )
-                    } catch (_: Exception) {
-                        LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
-                    }
-                    confirmPx = distanceDp * dm.density
+                    confirmPx = GestureThresholds.SWIPE_CONFIRM_DP * dm.density
                     resetPx = confirmPx * GestureThresholds.SWIPE_RESET_RATIO
                 }
                 // 触发区外：完全透传（原生返回正常走）；DOWN 全量记录（A2/A7/A8 数据源）
@@ -1028,7 +1018,7 @@ class EdgeGestureHook(
                         // 常驻模式：松手未提交选中 → 转点选态（窗口保留）；现状=立即收起。
                         // 实测轮七的旧语义：fan 失去手势驱动源后会常驻——常驻模式下这正是
                         // 期望行为，看门狗（10s）兜底收起
-                        if (fanPersistentOnRelease()) fanController.onGestureEnded()
+                        if (fanController.stayAfterRelease()) fanController.onGestureEnded()
                         else {
                             cancelPendingShow()
                             fanController.dismiss()

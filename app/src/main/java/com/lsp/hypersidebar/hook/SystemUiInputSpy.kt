@@ -437,12 +437,34 @@ object SystemUiInputSpy {
     @Volatile private var sysJudgeCacheAt = 0L
     @Volatile private var sysJudgeCacheVal = true
 
+    /**
+     * 底角兜底门（2026-11-01 用户口径定稿）：**用户显式开启 + 底栏当前已被收起**。
+     *
+     * 语义改了：不再是"小白条不在用（navigation_mode != 2）"，而是"底栏被收起"——
+     * 部分竖屏场景（游戏/全屏）ROM 会主动收起底栏，底角斜滑因此无人接收，兜底就是为
+     * 这种时刻准备的；底栏在屏时**不接管**（那时 launcher/系统手势链路本来就在）。
+     * 可见性来自 `InsetProbe` 的 SystemUI 视图 insets（显示级）；未知 ⇒ 不接管。
+     * OS4（cornerPilferHost）保持既有 b2 路径，不受本开关影响。
+     */
+    private fun cornerFallbackActive(): Boolean {
+        if (cornerPilferHost) return false
+        val p = prefs ?: return false
+        return runCatching {
+            com.lsp.hypersidebar.prefs.SettingsRepository(p).cornerSpyFallbackEnabled() &&
+                com.lsp.hypersidebar.hook.InsetProbe.navBarHidden()
+        }.getOrDefault(false)
+    }
+
     private fun sysJudgeEnabled(): Boolean {
-        if (!cornerPilferHost) return false
         val now = android.os.SystemClock.uptimeMillis()
         if (now - sysJudgeCacheAt > 1_000L) {
-            // 显式 '0' 才关；空/异常 = 开（2a 是当前要验证的路径）
-            sysJudgeCacheVal = SysProps.get(PropNames.CORNER_SYSJUDGE) != "0"
+            // OS4：显式 '0' 才关；空/异常 = 开（2a 是当前要验证的路径）。
+            // OS2/3：只认"底角斜滑兜底"开关（读 prefs + Secure.navigation_mode，1s 一次足够）
+            sysJudgeCacheVal = if (cornerPilferHost) {
+                SysProps.get(PropNames.CORNER_SYSJUDGE) != "0"
+            } else {
+                cornerFallbackActive()
+            }
             sysJudgeCacheAt = now
         }
         return sysJudgeCacheVal
@@ -464,7 +486,9 @@ object SystemUiInputSpy {
             minAngleDeg = gt.CORNER_MIN_ANGLE_DEG,
             maxAngleDeg = gt.CORNER_MAX_ANGLE_DEG,
             abandonExtraDeg = gt.CORNER_ABANDON_EXTRA_DEG,
-            confirmFrames = gt.CORNER_CONFIRM_FRAMES_FAST,
+            // OS4（有竞争、Rust 侧 10-30ms 就认领）= 单帧；OS2/3 兜底路径没有竞争方，
+            // 仍用多帧一致性防误触（见 CORNER_CONFIRM_FRAMES 注释）
+            confirmFrames = if (cornerPilferHost) gt.CORNER_CONFIRM_FRAMES_FAST else gt.CORNER_CONFIRM_FRAMES,
         )
     }
 
@@ -1245,10 +1269,13 @@ object SystemUiInputSpy {
                 armed = true
                 HLog.i(TAG, "spy armed on first event")
             }
-            // 每 DOWN 恒打一行（低频）：判读"流到达 spy"的最小证据
-            HLog.i(TAG, "down (${ev.x.toInt()},${ev.y.toInt()}) " +
-                "src=${ev.source} dev=${ev.deviceId} edge=${ev.edgeFlags} " +
-                "t=${ev.downTime}/${ev.eventTime} | totals d=$totalDown bottom=$bottomBandDown edge=$edgeBandDown")
+            // 每 DOWN 一行，但只在明细开关下（全局 monitor 上"每次系统触摸一条"是本模块
+            // 唯一的逐触摸日志；常开会让 1000 条环被日常点击刷光，关键判定日志随之下沉）
+            if (HLog.verboseEnabled) {
+                HLog.i(TAG, "down (${ev.x.toInt()},${ev.y.toInt()}) " +
+                    "src=${ev.source} dev=${ev.deviceId} edge=${ev.edgeFlags} " +
+                    "t=${ev.downTime}/${ev.eventTime} | totals d=$totalDown bottom=$bottomBandDown edge=$edgeBandDown")
+            }
         } else if (HLog.verboseEnabled && (a == MotionEvent.ACTION_MOVE ||
                 a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL)
         ) {

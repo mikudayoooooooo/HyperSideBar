@@ -143,7 +143,14 @@ object RelayGestureSink {
 
     private fun dispatch(c: Context, intent: Intent, ev: MotionEvent) {
         val o = owner ?: return
-        if (!o.b2Enabled()) return
+        val zone = intent.getIntExtra(PrefKeys.SPY_EXTRA_ZONE, PrefKeys.SPY_ZONE_STRIP)
+        // 逐区放行（2026-10-31）：
+        //  · OS4（b2Enabled）条上/角区恒开；
+        //  · OS2/3 只在"底角斜滑兜底"打开且无小白条时接收**角区**流——条上通道属于 OS4
+        //    的侧边条几何，不能因为开了兜底就在 OS2/3 一并放开（用户拍板：只兜底底角）。
+        val cornerStream = zone == PrefKeys.SPY_ZONE_CORNER
+        val allowed = if (cornerStream) o.b2Enabled() || o.cornerFallbackOwned() else o.b2Enabled()
+        if (!allowed) return
         val landscape = intent.getBooleanExtra(PrefKeys.SPY_EXTRA_LANDSCAPE, false)
         if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
             streamDownTime = ev.downTime
@@ -151,13 +158,11 @@ object RelayGestureSink {
             streamSource = ev.source
             streamEdgeFlags = ev.edgeFlags
             streamPointerId = ev.getPointerId(0)
-            streamCorner = intent.getIntExtra(
-                PrefKeys.SPY_EXTRA_ZONE, PrefKeys.SPY_ZONE_STRIP
-            ) == PrefKeys.SPY_ZONE_CORNER
+            streamCorner = cornerStream
             HLog.i(TAG, "stream DOWN (${ev.rawX.toInt()},${ev.rawY.toInt()}) land=$landscape" +
                 if (streamCorner) " zone=corner" else "")
         }
-        if (streamCorner) {
+        if (cornerStream) {
             o.feedCornerGesture(
                 c, ev,
                 sysPilfered = intent.getBooleanExtra(

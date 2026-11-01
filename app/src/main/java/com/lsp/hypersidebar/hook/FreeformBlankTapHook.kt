@@ -446,12 +446,17 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         // 的死区——那样功能在 mini 窗周围会失灵。纯核用的是可见命中区（getScaledBounds），与用户所见一致。
         // ROM 判定仍在纯核拿不到数据时兜底（例如仓库未就绪）；两边都没有 ⇒ null（调用方按 fail-closed 处理）。
         val verdict = kernelBlank ?: predBlank
-        // 硬安全阀（2026-10-17，用户实测"下半区不能打字"后加）：**只要键盘高度未知**，
-        // 屏幕下部 45% 一律不算空白（既不动作也不抢流）——宁可少一个动作，也绝不把键盘的触摸吃掉。
-        if (verdict == true && !InsetProbe.imeKnown) {
+        // ⚠ 必须先调 [imeFrame]（它内含 pull，会把"浮窗键盘/ROM 键盘标志/读数新鲜度"这些状态
+        // 刷新），**再**判断护栏——否则同一根手势里护栏永远赶不上状态（2026-10-18 真机踩到）。
+        val ime = imeFrame(context)
+        // 硬安全阀（2026-10-17，用户实测"下半区不能打字"后加；2026-10-31 改"读数须新鲜"）：
+        // **只要没有足够新的键盘读数**，屏幕下部 45% 一律不算空白（既不动作也不抢流）——
+        // 宁可少一个动作，也绝不把键盘的触摸吃掉。旧实现用一次性闸 `imeKnown`，历史上读到过
+        // 一次就永久关闭这道阀 ⇒ 探针一旦失活，点键盘就会被当空白（真机"点键盘小窗自己挂起"）。
+        if (verdict == true && !InsetProbe.imeKnownFresh()) {
             val dm0 = android.content.res.Resources.getSystem().displayMetrics
             if (ev.y > dm0.heightPixels * 0.55f) {
-                HLog.i(TAG, "isBlank → false（无键盘读数 + 下部45%安全阀）")
+                HLog.i(TAG, "isBlank → false（无新鲜键盘读数 + 下部45%安全阀）")
                 return false
             }
         }
@@ -461,9 +466,6 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
             HLog.i(TAG, "isBlank → false（IME 活动，高度未知）")
             return false
         }
-        // ⚠ 必须先调 [imeFrame]（它内含 pull，会把"浮窗键盘/ROM 键盘标志"这些状态刷新），
-        // **再**判断护栏——否则同一根手势里护栏永远赶不上状态（2026-10-18 真机踩到）。
-        val ime = imeFrame(context)
         if (verdict == true) {
             // 键盘起着但**排除区不可知** ⇒ 不动作。两种来源，任一命中即拦：
             //  ① `floatingIme`：insets 帧退化（浮层键盘，如搜狗「游戏键盘」）——区域不可知；

@@ -26,9 +26,6 @@ object PrefKeys {
     const val DEAD_ZONE = "deadZone"
     const val TRIGGER_DWELL_MS = "triggerDwellMs"
 
-    /** 扇形 scrim（压暗）过渡时长（ms）：用户可调（2026-10-17；原为 FanMenuCompose 内部常量 300）。 */
-    const val FAN_SCRIM_FADE_MS = "fanScrimFadeMs"
-
     /** 底角"斜滑独占"（抑制系统同时响应）：开关（默认开），推 `persist.hsb.corner.supp`（2026-10-17）。 */
     const val CORNER_SUPPRESS_ENABLED = "cornerSuppressEnabled"
 
@@ -38,7 +35,16 @@ object PrefKeys {
      * 轻点=吞掉；一旦变拖动/多指=把手势实时还回去；注入被拒=永久关掉接管。
      */
     const val FREEFORM_BLANK_TAP_TAKEOVER = "freeformBlankTapTakeover"
-    const val TRIGGER_MIN_DISTANCE = "triggerMinDistance"
+
+    /**
+     * 底角斜滑兜底（2026-10-31 用户拍板）：**默认关**。
+     *
+     * 小白条（手势导航）不在用时，launcher 的 `NavStubView` 链路不存在，底角斜滑无人接收；
+     * 开启后改由 SystemUI 输入面（`SystemUiInputSpy`）识别底角并把事件转发给 `:ui` 的
+     * `TurboLayout`。只在「开关开 && 非 OS4 侧栏宿主 && navigation_mode != 2」三条同时成立时生效
+     * （见 `SystemUiInputSpy.cornerFallbackActive()`）——避免与 launcher/系统角区手势互相抢流。
+     */
+    const val CORNER_SPY_FALLBACK = "cornerSpyFallback"
 
     /** 底角斜滑触发开关（N1，仅竖屏）：默认关（opt-in）。开=底部两角斜向内上滑呼出扇形。 */
     const val CORNER_SWIPE_ENABLED = "cornerSwipeEnabled"
@@ -110,18 +116,22 @@ object PrefKeys {
     /** 呼出扇形时全屏压暗开关（Compose scrim 24% 黑，与菜单同步淡入） */
     const val FAN_DIM_ENABLED = "fanDimEnabled"
     /** 背景模糊来源（0915 Route D 定稿：单项下拉，取代旧三开关）。
-     *  取值见下方 FAN_BLUR_SOURCE_*；auto=按宿主与能力自动选路 */
+     *  取值见下方 FAN_BLUR_SOURCE_*；acrylic = 不取背后内容，板自身即材质（默认档） */
     const val FAN_BLUR_SOURCE = "fanBlurSource"
-    const val FAN_BLUR_SOURCE_AUTO = "auto"
+    /**
+     * 亚克力：不取背后内容、也不透出背后画面——板自身就是材质（主题混色 + 提亮 + 颗粒），
+     * 深浅由「材质浓度」决定。这是默认档，也是旧 `auto`/`off` 的合并去处
+     *（旧 `off` 与亚克力在本包里本就是同一条渲染路径）。
+     */
+    const val FAN_BLUR_SOURCE_ACRYLIC = "acrylic"
+    /** 采样壁纸：取壁纸位图当 backdrop，miuix 板材质完整生效（暗色主题下会被混色拉回主题色域）。 */
+    const val FAN_BLUR_SOURCE_WALLPAPER = "wallpaper"
     /**
      * 透明：不取背后内容、也不加板材质，只剩弧线与图标（原有的「系统裁剪模糊」已退役——
      * AOSP 背景模糊区域恒等于窗口矩形，与楔形板形必然打架，一个圆角大矩形不可接受；
-     * 旧 key `dialog` 因此落到 auto）
+     * 旧 key `dialog` 因此落到默认档）
      */
     const val FAN_BLUR_SOURCE_TRANSPARENT = "transparent"
-    const val FAN_BLUR_SOURCE_WALLPAPER = "wallpaper"
-    const val FAN_BLUR_SOURCE_BEHIND = "behind"
-    const val FAN_BLUR_SOURCE_OFF = "off"
 
     const val CUSTOM_APPS = "customApps"
     // 已选固定应用的拖动排序（JSON 数组字符串，仅含已选包名；StringSet 不保序，
@@ -415,10 +425,10 @@ object LayoutDefaults {
     const val BAND_WIDTH_DP = 32
 
     // ===== 滑条量程契约（0913 用户拍板：量程/步进与默认值同源定义，UI 禁止内联数字）=====
-    /** 滑动距离滑条（dp）：min / max / 步进。默认值=上方 TRIGGER_MIN_DISTANCE_DP，须落在格点上 */
-    const val TRIGGER_SWIPE_DISTANCE_MIN_DP = 10
-    const val TRIGGER_SWIPE_DISTANCE_MAX_DP = 150
-    const val TRIGGER_SWIPE_DISTANCE_STEP_DP = 5
+    // 2026-10-31：滑动距离滑条已删（用户走查"调到最大也没什么区别"——OS2/3 底角通道本来
+    // 就不读该值，OS4 底角用 12dp 常量）。呼出确认线固定为 GestureThresholds.SWIPE_CONFIRM_DP，
+    // 底角通道由角锥 CORNER_INWARD_MIN_DP 隐含 ⇒ 这里不再保留量程/钳制函数。
+
     /** 呼出停顿滑条（ms）：min / max / 步进（D2 定稿档位）。默认值=上方 TRIGGER_DWELL_MS */
     const val TRIGGER_DWELL_MIN_MS = 150
     const val TRIGGER_DWELL_MAX_MS = 350
@@ -427,12 +437,6 @@ object LayoutDefaults {
     const val FAN_FOG_MIN = 0f
     const val FAN_FOG_MAX = 0.70f
     const val FAN_FOG_STEP = 0.05f
-
-    /** 扇形压暗过渡时长滑条（ms）：min / max / 步进。默认值=下方 FAN_SCRIM_FADE_MS。
-     *  调的是 scrim **淡入/淡出**时长（不是压暗量——压暗量固定 `FAN_DIM_AMOUNT`，不做滑条）。 */
-    const val FAN_SCRIM_FADE_MIN_MS = 80
-    const val FAN_SCRIM_FADE_MAX_MS = 400
-    const val FAN_SCRIM_FADE_STEP_MS = 20
 
     /**
      * 图标尺寸滑条量程上限：用户"请求"的最大值。**实际可达上限还要受环上弦长约束**
@@ -447,10 +451,8 @@ object LayoutDefaults {
      */
     const val ICON_SIZE_HARD_MIN = 24f
 
-    // 滑动距离（呼出确认线，dp）：原 GestureThresholds.SWIPE_CONFIRM_PX=40px 死值改可配置
-    //（0913 用户拍板"40px 太极端"；15dp≈40px@440dpi 手感不变）。重置阈值=确认距离一半
-    //（滞回，见 GestureThresholds.SWIPE_RESET_RATIO）。此键原为 PRD §9.5 预留死键，本次接管。
-    const val TRIGGER_MIN_DISTANCE_DP = 15f
+    // 呼出确认线见 hook/GestureThresholds.SWIPE_CONFIRM_DP（2026-10-31 起唯一来源，
+    // 不再有设置项与盘上键；底角通道由角锥 CORNER_INWARD_MIN_DP 隐含）
 
     // 扇形背景视觉（路线 C）：雾化默认 0.55（弧缘 100% → 锚点 35% 反向渐变，2026-09-06
     // 用户拍板：暗色主题下正向渐变的密度落在屏边不可见区，观感"没区别"）；压暗默认关
@@ -459,14 +461,15 @@ object LayoutDefaults {
     const val FAN_DIM_ENABLED = false
     const val FAN_DIM_AMOUNT = 0.24f
 
-    /** scrim 过渡时长默认 300ms（原 `FanMenuCompose.SCRIM_FADE_MS` 内部常量，2026-10-17 改为设置项）。 */
-    const val FAN_SCRIM_FADE_MS = 300
-
     /**
      * 底角"斜滑独占"默认**开**（2026-10-17 用户拍板）：底角斜滑时让系统（Home/recents）不再同时响应，
      * 只出我们的扇形。关闭后回到"系统与模块同时判"的旧行为。推 `persist.hsb.corner.supp`。
      */
     const val CORNER_SUPPRESS_ENABLED = true
+
+    /** 底角斜滑兜底默认关（2026-10-31 用户拍板）：装完模块不该悄悄改变系统角区手势；
+     *  三键导航用户可显式开启，由 SystemUI 输入面接管底角（见 PrefKeys.CORNER_SPY_FALLBACK）。 */
+    const val CORNER_SPY_FALLBACK = false
 
     /**
      * "点空白时吞掉触摸（不穿透）"：**默认开**（2026-10-17 用户要求"点空白不能穿透"）。
@@ -490,22 +493,51 @@ object LayoutDefaults {
      *  （内部自动 ×density）。此常量沿用 0.9.0 时代的 px 物理量（120px@440dpi≈43.6dp），
      *  调用处除以 density 还原，保证跨设备观感与旧版一致。AOSP/miuix 文档上限 150dp */
     const val FAN_BOARD_BLUR_RADIUS_PX = 120f
-    /** 噪点抗条带系数基数（= miuix BlurDefaults.NoiseCoefficient 同值） */
-    const val FAN_BOARD_NOISE_BASE = 0.0045f
+
+    /**
+     * 噪点抗条带系数基数。
+     *
+     * 2026-10-31：0.0045 → 0.006。miuix 的 `NOISE_GRAIN_THRESHOLD = 0.005` 会让
+     * noise ≤ 0.005 的回调走"低噪点硬阈值"分支，而快捷栏胶囊恒走全分辨率噪声 ⇒
+     * 浓度≈1.7% 以下时板与胶囊的颗粒路径不同（观感=两端颜色断层）。抬到阈值之上即统一路径。
+     */
+    const val FAN_BOARD_NOISE_BASE = 0.006f
     /** 噪点系数随浓度的增量（亚克力颗粒感来源） */
     const val FAN_BOARD_NOISE_SCALE = 0.030f
     /** 板底混色浓度缩放：采样壁纸。壁纸常是亮色而主题可能是暗色，不压一层主题色就会得到
      *  一块亮晃晃的板（真机 0915 反馈）——混色即「把背后真像素拉回主题色域」的主要手段 */
     const val FAN_BOARD_VEIL_SCALE_WALLPAPER = 0.80f
-    /** 板底混色浓度缩放：系统模糊来源。这层是叠在真模糊**之上**的（零和），
-     *  浓一点就把系统模糊遮没了，必须极淡 */
-    const val FAN_BOARD_VEIL_SCALE_SYSTEM = 0.12f
     /** 板底混色浓度缩放：无来源——混色即板的底色本身，故远大于前者 */
     const val FAN_BOARD_VEIL_SCALE_PLAIN = 1.30f
     /** 板底混色浓度下限：保证 backdrop 图层恒非空，miuix 混色/噪点管线有像素可依 */
     const val FAN_BOARD_VEIL_MIN = 0.02f
     /** 板底混色浓度上限 */
     const val FAN_BOARD_VEIL_MAX = 0.92f
+
+    // ===== 组竖向弹层（2026-10-31 用户走查后拍板"竖向弹出"）=====
+    /** 子项图标相对快捷栏图标的缩放：0.9 让"子项 < 组图标"一眼可见层级，又不至于点到手抖 */
+    const val GROUP_POPUP_ICON_SCALE = 0.9f
+    /** 子项间距（相对子项图标）：紧一点才像一个整体 */
+    const val GROUP_POPUP_GAP_RATIO = 0.15f
+    /** 背板内衬（相对子项图标）：背板把子项"包起来"，是层级的主要视觉线索 */
+    const val GROUP_POPUP_PAD_RATIO = 0.25f
+    /** 入场时长（ms）：与扇形自身 140ms 量级同档，过快看不出"从组图标长出来" */
+    const val GROUP_POPUP_ENTER_MS = 160
+    /**
+     * 悬停展开组的等待（ms）：手指在组图标上停住这么久就展开弹层，**不用松手**
+     * （2026-10-31 用户反馈"悬停选中不能展开，需要松手"⇒ 恢复悬停展开）。
+     * 取 150 = 旧的悬停门（`QuickExpandMachine` 的 dwell），手感与之一致；
+     * 点击（DOWN→UP 极短）仍由松手路径展开，两条路都能出。
+     */
+    const val GROUP_HOVER_OPEN_MS = 150L
+    /** 弹层背板圆角（dp）：材质层与描边层共用同一个值。 */
+    const val GROUP_POPUP_CORNER_DP = 18f
+    /**
+     * 弹层背板的**兜底底色** alpha（2026-11-01）：真机上第二次 miuix blur 曾整块不出材质
+     * ⇒ 只剩描边，看着像"透明档"。材质层之前垫一层同主题色低 alpha：材质正常时几乎不可见，
+     * 材质缺席时仍是一块像样的板，不会再出现"透空"。
+     */
+    const val GROUP_POPUP_FALLBACK_ALPHA = 0.35f
     /** Screen 白提亮随浓度的缩放：有背后内容（同混色，宁淡勿浓） */
     const val FAN_BOARD_SHEEN_SCALE_BLURRED = 0.06f
     /** Screen 白提亮随浓度的缩放：无来源（板自身即材质） */
@@ -518,24 +550,18 @@ object LayoutDefaults {
     /** 采样饱和度增益（玻璃质感） */
     const val FAN_BOARD_SATURATION = 1.15f
 
-    /** 背景模糊来源默认值：关闭=不取背后内容，板完全由板材质浓度决定（0915 用户拍板）；
+    /** 背景模糊来源默认值：亚克力（不取背后内容，板自身即材质；2026-10-25 用户走查后拍板，
+     *  原默认是「关闭」，撤掉 auto/behind/off 三档）；
      *  非法取值的回落与「恢复默认」都引用本常量，改默认只改这里 */
-    const val FAN_BLUR_SOURCE_DEFAULT = PrefKeys.FAN_BLUR_SOURCE_OFF
+    const val FAN_BLUR_SOURCE_DEFAULT = PrefKeys.FAN_BLUR_SOURCE_ACRYLIC
 
-    /** 背景模糊来源下拉的取值顺序——设置页下标 ↔ 契约字符串的唯一映射（UI 禁止内联） */
+    /** 背景模糊来源下拉的取值顺序——设置页下标 ↔ 契约字符串的唯一映射（UI 禁止内联）。
+     *  旧值 auto/behind/off/dialog 不在表内 ⇒ `SettingsRepository.fanBlurSource()` 回落默认档。 */
     val FAN_BLUR_SOURCE_VALUES = listOf(
-        PrefKeys.FAN_BLUR_SOURCE_AUTO,
+        PrefKeys.FAN_BLUR_SOURCE_ACRYLIC,
         PrefKeys.FAN_BLUR_SOURCE_WALLPAPER,
-        PrefKeys.FAN_BLUR_SOURCE_BEHIND,
-        PrefKeys.FAN_BLUR_SOURCE_TRANSPARENT,
-        PrefKeys.FAN_BLUR_SOURCE_OFF
+        PrefKeys.FAN_BLUR_SOURCE_TRANSPARENT
     )
-
-    /**
-     * FLAG_BLUR_BEHIND 全屏景深半径，单位 **px**。AOSP 文档：模糊后方屏幕 20px 即够，
-     * 同样不得超 150px。此处取 40px（比文档建议略强一点，全屏不刺眼）。
-     */
-    const val FAN_BEHIND_BLUR_RADIUS_PX = 40f
 
     /** 所有布局相关键。恢复默认时批量写回。 */
     val layoutKeys = listOf(

@@ -301,11 +301,9 @@ object CornerGeomBridge {
         // Locale.US：属性值是纯数字，别让地区设置写出逗号小数点（native strtof 会读成整数部分）
         fun f(v: Float) = String.format(java.util.Locale.US, "%.2f", v)
         val dwellMs = prefs.getInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
-        // 确认门：距离（用户可配）→ px，角度→tan（native 用一次乘法比夹角，不引 math.h）
-        val distanceDp = prefs.getFloat(
-            PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
-        )
-        val confirmPx = distanceDp * dm.density
+        // 确认门：距离（唯一定义源 GestureThresholds.SWIPE_CONFIRM_DP）→ px，
+        // 角度→tan（native 用一次乘法比夹角，不引 math.h）
+        val confirmPx = GestureThresholds.SWIPE_CONFIRM_DP * dm.density
         val resetPx = confirmPx * GestureThresholds.SWIPE_RESET_RATIO
         val maxTan = Math.tan(Math.toRadians(GestureThresholds.MAX_SWIPE_ANGLE_DEG.toDouble())).toFloat()
         val values = listOf(

@@ -1135,14 +1135,16 @@ static int hsb_suppress_value(void) {
     return g_suppress_value;
 }
 
-/* 停顿阈值 / 速度门（无缓存：每条事件最多读一次，1µs 级；换来运行时可调） */
+/* 停顿阈值 / 速度门（无缓存：每条事件最多读一次，1µs 级；换来运行时可调）。
+ * 量程与设置页滑条同源（LayoutDefaults.TRIGGER_DWELL_MIN_MS..MAX_MS = 150..350，2026-10-31）：
+ * 盘上脏值/旧量程（曾放到 50..2000）不得让 native 与 :ui 的判官跑出不同档。 */
 static float hsb_strip_dwell_ms(void) {
-    return hsb_cfg_float(HSB_STRIP_DWELL_PROP, 50.0f, 2000.0f, HSB_STRIP_DWELL_FALLBACK_MS);
+    return hsb_cfg_float(HSB_STRIP_DWELL_PROP, 150.0f, 350.0f, HSB_STRIP_DWELL_FALLBACK_MS);
 }
 static float hsb_strip_stall_speed(void) {
     return hsb_cfg_float(HSB_STRIP_SPEED_PROP, 0.0f, 100000.0f, HSB_STRIP_SPEED_FALLBACK);
 }
-/* min 下限取到 0.5px 级：用户把"滑动距离"拉到最小时确认门就该跟着变窄 */
+/* 下限取到 0.5px 级：调用方传的是 GestureThresholds.SWIPE_CONFIRM_DP × density（15dp，固定） */
 static float hsb_strip_confirm_px(void) {
     return hsb_cfg_float(HSB_STRIP_CONFIRM_PROP, 0.5f, 2000.0f, HSB_STRIP_CONFIRM_FALLBACK);
 }

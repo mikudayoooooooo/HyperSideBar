@@ -4,11 +4,21 @@ package com.lsp.hypersidebar.hook
  * 手势阈值常量（PRD §9.5）——边缘通道（launcher）与 B 路线条上状态机（:ui）
  * 分属两个进程，阈值必须同源定义，避免双份常量漂移。
  *
- * 滑动距离已改用户可配置（PrefKeys.TRIGGER_MIN_DISTANCE，dp，0913 拍板"40px 死值太极端"）：
- * 两通道 DOWN 时按密度换算缓存，本文件只保留兜底值与滞回系数。
+ * 呼出确认线自 2026-10-31 起固定为 [SWIPE_CONFIRM_DP]（设置项已删）；两通道 DOWN 时按密度
+ * 换算缓存，本文件同时保留兜底 px 值与滞回系数。
  */
 object GestureThresholds {
-    /** 最小触发距离兜底值（px）：prefs/密度不可用时使用（正常路径=滑动距离 dp×density） */
+    /**
+     * 呼出确认线（dp）——**唯一来源，禁止内联**（2026-10-31 定案：设置项已删）。
+     *
+     * 由来：`TRIGGER_MIN_DISTANCE` 设置项删除（用户走查"调到最大也没什么区别"）。
+     * 事实上两条通道从来不该共用一个滑条：底角通道（[CORNER_INWARD_MIN_DP]）根本不读它，
+     * OS4 底角也用 12dp 常量；只有边缘通道和条上状态机真正吃这条线。
+     * 15dp = 旧默认值（≈40px@440dpi），手感与改动前一致。
+     */
+    const val SWIPE_CONFIRM_DP = 15f
+
+    /** 最小触发距离兜底值（px）：density 不可用时使用（正常路径 = [SWIPE_CONFIRM_DP]×density） */
     const val SWIPE_CONFIRM_PX = 40f
 
     /**

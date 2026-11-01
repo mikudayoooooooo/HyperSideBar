@@ -91,12 +91,10 @@ class SettingsRepository(val prefs: SharedPreferences) {
     }
 
     fun deadZone(): Float = prefs.getFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)
-    fun triggerDwellMs(): Int = prefs.getInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
 
-    /** 扇形压暗过渡时长（ms）：draft-aware（布局页滑条即时预览，未保存前跟随草稿）。 */
-    fun fanScrimFadeMs(): Int = getDraft(PrefKeys.FAN_SCRIM_FADE_MS) {
-        prefs.getInt(PrefKeys.FAN_SCRIM_FADE_MS, LayoutDefaults.FAN_SCRIM_FADE_MS)
-    }
+    /** 呼出停顿（ms）：读时钳到滑条量程（盘上脏值/旧键不得越界；native 侧同量程 150..350）。 */
+    fun triggerDwellMs(): Int = prefs.getInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
+        .coerceIn(LayoutDefaults.TRIGGER_DWELL_MIN_MS, LayoutDefaults.TRIGGER_DWELL_MAX_MS)
 
     /** 底角"斜滑独占"开关：draft-aware（底角 sheet 内开关与样式"✕全撤/✓全存"同步）。 */
     fun cornerSuppressEnabled(): Boolean = getDraft(PrefKeys.CORNER_SUPPRESS_ENABLED) {
@@ -109,8 +107,10 @@ class SettingsRepository(val prefs: SharedPreferences) {
             PrefKeys.FREEFORM_BLANK_TAP_TAKEOVER, LayoutDefaults.FREEFORM_BLANK_TAP_TAKEOVER
         )
     }
-    fun triggerMinDistanceDp(): Float =
-        prefs.getFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
+    /** 底角斜滑兜底开关（默认关；只在小白条不在用时接管，见 PrefKeys 注释）。draft-aware（设置页 sheet）。 */
+    fun cornerSpyFallbackEnabled(): Boolean = getDraft(PrefKeys.CORNER_SPY_FALLBACK) {
+        prefs.getBoolean(PrefKeys.CORNER_SPY_FALLBACK, LayoutDefaults.CORNER_SPY_FALLBACK)
+    }
 
     /** 底角斜滑触发开关（N1，opt-in）。draft-aware：sheet 内开关与样式"✕全撤/✓全存"同步。 */
     fun cornerSwipeEnabled(): Boolean = getDraft(PrefKeys.CORNER_SWIPE_ENABLED) {
@@ -140,7 +140,7 @@ class SettingsRepository(val prefs: SharedPreferences) {
             ?.takeIf { it in LayoutDefaults.FREEFORM_BLANK_TAP_MODE_VALUES }
             ?: LayoutDefaults.FREEFORM_BLANK_TAP_MODE_DEFAULT
 
-    /** 背景模糊来源（auto / dialog / wallpaper / behind / off）；非法或缺失值一律回 auto */
+    /** 背景来源（亚克力 / 采样壁纸 / 透明）：非法取值（含旧 auto/behind/off/dialog）回落默认档。 */
     fun fanBlurSource(): String =
         prefs.getString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT)
             ?.takeIf { it in LayoutDefaults.FAN_BLUR_SOURCE_VALUES }
@@ -225,23 +225,24 @@ class SettingsRepository(val prefs: SharedPreferences) {
             putInt(PrefKeys.CORNER_MAX_APPS_INNER, LayoutDefaults.CORNER_MAX_APPS_INNER)
             putFloat(PrefKeys.DEAD_ZONE, LayoutDefaults.DEAD_ZONE)
             putInt(PrefKeys.TRIGGER_DWELL_MS, LayoutDefaults.TRIGGER_DWELL_MS)
-            putFloat(PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP)
             putBoolean(PrefKeys.CORNER_SWIPE_ENABLED, LayoutDefaults.CORNER_SWIPE_ENABLED)
+            putBoolean(PrefKeys.CORNER_SPY_FALLBACK, LayoutDefaults.CORNER_SPY_FALLBACK)
             putBoolean(PrefKeys.FAN_PERSISTENT_ON_RELEASE, LayoutDefaults.FAN_PERSISTENT_ON_RELEASE)
             putBoolean(PrefKeys.FREEFORM_BLANK_TAP_ENABLED, LayoutDefaults.FREEFORM_BLANK_TAP_ENABLED)
             putString(PrefKeys.FREEFORM_BLANK_TAP_MODE, LayoutDefaults.FREEFORM_BLANK_TAP_MODE_DEFAULT)
             putFloat(PrefKeys.FAN_FOG_INTENSITY, LayoutDefaults.FAN_FOG_INTENSITY)
             putBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)
-            putInt(PrefKeys.FAN_SCRIM_FADE_MS, LayoutDefaults.FAN_SCRIM_FADE_MS)
             putBoolean(PrefKeys.CORNER_SUPPRESS_ENABLED, LayoutDefaults.CORNER_SUPPRESS_ENABLED)
             putBoolean(PrefKeys.FREEFORM_BLANK_TAP_TAKEOVER, LayoutDefaults.FREEFORM_BLANK_TAP_TAKEOVER)
             putString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT)
-            // 孤儿键清理（2026-10-17）：这四个是已删除的底角滑条的键（`GestureThresholds` 常量取代），
-            // 设备上的旧值不再被任何代码读写；"恢复默认"顺手删掉，避免留成永久垃圾。
+            // 孤儿键清理（2026-10-17 / 2026-10-31）：已删除的滑条键，设备上的旧值不再被任何代码
+            // 读写；"恢复默认"顺手删掉，避免留成永久垃圾。
             remove("cornerWidthRatio")
             remove("cornerHotPercent")
             remove("cornerMinAngleDeg")
             remove("cornerMaxAngleDeg")
+            // 呼出距离滑条已删（固定为 GestureThresholds.SWIPE_CONFIRM_DP）
+            remove("triggerMinDistance")
         }.apply()
         // 同上：批量写不走 savePref，显式推一次
         com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged("(restoreAllDefaults)")

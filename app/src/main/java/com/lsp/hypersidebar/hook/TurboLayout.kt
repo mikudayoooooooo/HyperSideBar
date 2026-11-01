@@ -269,6 +269,33 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     internal fun b2Enabled(): Boolean =
         isOs4Sidebar && moduleEnabled() && !breaker.open && !DataDeadState.dead
 
+    /**
+     * 底角兜底门（2026-10-31）：非 OS4 + 模块可用 + 用户显式开启 + 小白条不在用 ⇒
+     * :ui 接受 spy 转发的角区流。与 `SystemUiInputSpy.cornerFallbackActive()` 同判据——
+     * 两个进程各判一次（字符串常量可共享，运行时状态不可，见 Os4Marker 注释）。
+     * 任一步读不到 ⇒ false（宁可不出，也不要和系统角区手势互相抢流）。
+     * 1s TTL：每条转发事件都要问，prefs/Secure 读不能逐事件做。
+     */
+    @Volatile private var cornerFallbackCacheAt = 0L
+    @Volatile private var cornerFallbackCacheVal = false
+
+    internal fun cornerFallbackOwned(): Boolean {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - cornerFallbackCacheAt <= 1_000L) return cornerFallbackCacheVal
+        cornerFallbackCacheVal = computeCornerFallbackOwned()
+        cornerFallbackCacheAt = now
+        return cornerFallbackCacheVal
+    }
+
+    private fun computeCornerFallbackOwned(): Boolean {
+        if (isOs4Sidebar) return false
+        if (!moduleEnabled() || breaker.open || DataDeadState.dead) return false
+        return runCatching {
+            com.lsp.hypersidebar.prefs.SettingsRepository(remotePrefs).cornerSpyFallbackEnabled() &&
+                com.lsp.hypersidebar.hook.InsetProbe.navBarHidden()
+        }.getOrDefault(false)
+    }
+
     /** sink 回传令牌读取用（RelayGestureSink.requestPilfer 读 :ui 侧 remotePrefs）。 */
     internal val b2Prefs: SharedPreferences get() = remotePrefs
 
@@ -297,7 +324,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                     // 常驻模式：松手未提交选中 → 转点选态（窗口保留）；现状=立即收起。
                     // UP 已提交选中时 LAUNCHED 收起在先、isShowing=false，两分支都自然跳过
                     if (fanController.isShowing) {
-                        if (fanPersistentOnRelease()) fanController.onGestureEnded()
+                        if (fanController.stayAfterRelease()) fanController.onGestureEnded()
                         else fanController.dismiss()
                     }
                     resetStripGesture()
@@ -331,14 +358,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 // 0.707 投影衰减+锥倾斜（正是实测"横屏响应不如竖屏"的主因），竖屏
                 // 条几何下不适用
                 val dm = ctx.resources.displayMetrics
-                // 滑动距离换算（dp→px，DOWN 一次缓存整条手势；设置项即时经 ConfigSync 生效）
-                val distanceDp = try {
-                    remotePrefs.getFloat(
-                        PrefKeys.TRIGGER_MIN_DISTANCE, LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
-                    )
-                } catch (_: Exception) {
-                    LayoutDefaults.TRIGGER_MIN_DISTANCE_DP
-                }
+                // 滑动距离换算（唯一定义源 GestureThresholds.SWIPE_CONFIRM_DP；DOWN 一次缓存整条手势）
+                val distanceDp = GestureThresholds.SWIPE_CONFIRM_DP
                 sConfirmPx = distanceDp * dm.density
                 sResetPx = sConfirmPx * GestureThresholds.SWIPE_RESET_RATIO
                 if (isOs4Sidebar && !landscape) {
@@ -466,7 +487,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 if (sStallFired) {
                     if (fanController.isShowing) {
                         // 常驻模式：松手未提交选中 → 转点选态（窗口保留）；现状=立即收起
-                        if (fanPersistentOnRelease()) fanController.onGestureEnded()
+                        if (fanController.stayAfterRelease()) fanController.onGestureEnded()
                         else {
                             cancelPendingStripShow()
                             fanController.dismiss()
@@ -882,6 +903,9 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     private var cSysPilfered = false
 
     fun feedCornerGesture(ctx: Context, ev: MotionEvent, sysPilfered: Boolean = false) {
+        // 流归属门（2026-10-31）：OS4 恒开；OS2/3 只有"底角兜底"接管时收流。
+        // 与 RelayGestureSink.dispatch 同一判据，双保险防"抢了流没人消费"。
+        if (!b2Enabled() && !cornerFallbackOwned()) return
         // fan 展示中：转发流驱动拖选（与条上通道同款；B2 流驱动旗标放行孤儿防护）
         if (fanController.isShowing) {
             com.lsp.hypersidebar.ui.fan.B2StreamDispatch.active = true
@@ -902,7 +926,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         cancelPendingStripShow()
                         if (fanController.isShowing) fanController.dismiss()
                     } else if (fanController.isShowing) {
-                        if (fanPersistentOnRelease()) fanController.onGestureEnded()
+                        if (fanController.stayAfterRelease()) fanController.onGestureEnded()
                         else fanController.dismiss()
                     }
                     cornerTrigger.reset()
@@ -920,7 +944,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 cFanSeen = false
                 cLastHist = -1
                 cSysPilfered = sysPilfered
-                cornerEngaged = cornerSwipeEnabled() && !cornerAvoided(ctx)
+                // 2026-11-01：撤掉场景避让（见 cornerAvoided 处的说明），只剩功能开关
+                cornerEngaged = cornerSwipeEnabled()
                 if (!cornerEngaged) return
                 val dm = ctx.resources.displayMetrics
                 val density = dm.density
@@ -997,7 +1022,7 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                     if (fanController.isShowing) fanController.dismiss()
                 } else if (engaged) {
                     if (fanController.isShowing) {
-                        if (fanPersistentOnRelease()) fanController.onGestureEnded()
+                        if (fanController.stayAfterRelease()) fanController.onGestureEnded()
                         else {
                             cancelPendingStripShow()
                             fanController.dismiss()
@@ -1039,24 +1064,16 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             remotePrefs.getBoolean(PrefKeys.CORNER_SWIPE_ENABLED, LayoutDefaults.CORNER_SWIPE_ENABLED)
         }.getOrDefault(LayoutDefaults.CORNER_SWIPE_ENABLED)
 
-    /**
-     * B4 场景避让（§14.5，用户拍板：全局作用域但游戏等场景不主动开启）：
-     * ① 游戏加速中=Settings.Secure "gb_boosting"==1（gamebooster 服务写、DockMonitorService
-     *    等三组件消费的权威信号；反编译取证 ear/bt）；
-     * ② 全局隐藏手势提示线=Settings.Global "hide_gesture_line"==1（SystemUI SettingsManager
-     *    同键；实现假设随本批带上）。
-     * Settings 客户端按 generation 失效自刷新，DOWN 直读即可（无需自建 observer）；
-     * 任一读失败=fail-open 不避让（退化=全局生效，不比现状差）。
-     */
-    private fun cornerAvoided(ctx: Context): Boolean {
-        val boosting = runCatching {
-            android.provider.Settings.Secure.getInt(ctx.contentResolver, "gb_boosting", 0) == 1
-        }.getOrDefault(false)
-        if (boosting) return true
-        return runCatching {
-            android.provider.Settings.Global.getInt(ctx.contentResolver, "hide_gesture_line", 0) == 1
-        }.getOrDefault(false)
-    }
+    // 【2026-11-01 撤销 §14.5 场景避让】真机实测（真机 f9eaebde，OS4 8.01.02）：
+    // 原实现「游戏加速(gb_boosting==1) 或隐藏手势提示线(hide_gesture_line==1) ⇒ 底角不接管」
+    // 的方向是反的 —— 这两个状态恰恰是**系统自己的角区手势不存在**的时刻（加速器/隐藏手势线
+    // 时 SystemUI 不再画手势条），模块一避让就等于"最需要它的时候永久失效"。
+    // 实测证据：进 com.lywl.xbxxz（Unity，触发 Game Booster）后
+    //   `settings get secure gb_boosting` = 1
+    //   SystemUI 侧 `sys-corner DOWN claimed=true shown=true`、流已转发到 :ui
+    //   :ui 侧 TurboLayout 一行都不打（连 `k#N corner DOWN` 都没有）⇒ 扇形不出。
+    // 现改为：角区流由「系统是否消费」决定（native/launcher 认领由 RelayGestureSink 与
+    // SystemUiInputSpy 的 pilfer 结果反映），不再用"场景名"提前让位。
 
     /** 角落呼出：锚点=精确底角（cornerAnchor=true → 弧占向上象限，OS3 N1 option B 语义）。
      *  :ui 无 rootView insets 可求手势条上沿（OS3 postShowFanCorner 用 launcher rootView）——

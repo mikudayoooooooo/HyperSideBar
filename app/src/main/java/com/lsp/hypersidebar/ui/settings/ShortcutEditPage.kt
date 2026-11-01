@@ -33,6 +33,7 @@ import com.lsp.hypersidebar.util.LaunchResult
 import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutLauncher
+import com.lsp.hypersidebar.util.ShortcutServiceSpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -82,6 +83,11 @@ internal fun ShortcutEditPage(
     var targetSpec by remember(shortcut.id) { mutableStateOf(initialTargetSpec.spec) }
     var serviceName by remember(shortcut.id) { mutableStateOf(shortcut.serviceName ?: "") }
     var intentUri by remember(shortcut.id) { mutableStateOf(shortcut.intentUri ?: "") }
+    // SERVICE 的 action + extras（2026-11-01）：extras 用"每行 k=v"编辑，保存时归一化成 Map
+    var serviceAction by remember(shortcut.id) { mutableStateOf(shortcut.action ?: "") }
+    var serviceExtras by remember(shortcut.id) {
+        mutableStateOf(ShortcutServiceSpec.format(shortcut.extras))
+    }
     var packageName by remember(shortcut.id) { mutableStateOf(shortcut.packageName ?: "") }
     var enabled by remember(shortcut.id) { mutableStateOf(shortcut.enabled) }
     var testResult by remember { mutableStateOf<String?>(null) }
@@ -127,6 +133,12 @@ internal fun ShortcutEditPage(
                 else -> null
             },
             intentUri = intentUri.ifEmpty { null },
+            action = if (supportActionExtras(shortcut.kind)) serviceAction.trim().ifEmpty { null } else null,
+            extras = if (supportActionExtras(shortcut.kind)) {
+                ShortcutServiceSpec.parse(serviceExtras)
+            } else {
+                emptyMap()
+            },
             enabled = enabled,
             iconPackageName = when (shortcut.kind) {
                 ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.pkg.ifEmpty { shortcut.iconPackageName }
@@ -156,7 +168,13 @@ internal fun ShortcutEditPage(
                 ShortcutKind.SERVICE, ShortcutKind.QS_TILE -> serviceName.ifEmpty { null }
                 else -> null
             },
-            intentUri = intentUri.ifEmpty { null }
+            intentUri = intentUri.ifEmpty { null },
+            action = if (shortcut.kind == ShortcutKind.SERVICE) serviceAction.trim().ifEmpty { null } else null,
+            extras = if (shortcut.kind == ShortcutKind.SERVICE) {
+                ShortcutServiceSpec.parse(serviceExtras)
+            } else {
+                emptyMap()
+            }
         )
         scope.launch {
             try {
@@ -242,6 +260,20 @@ internal fun ShortcutEditPage(
                                     Text(stringResource(R.string.shortcut_pick_activity))
                                 }
                             }
+                            // 组件的 action/extras：小爱那类目标在 "应用组件" 流程里先落成
+                            // COMPONENT，启动时才被识别成 SERVICE —— 字段必须在这一步就能填
+                            ActionExtrasFields(
+                                action = serviceAction,
+                                onActionChange = { serviceAction = it },
+                                extras = serviceExtras,
+                                onExtrasChange = { serviceExtras = it },
+                                onApplyPreset = { extras, svc ->
+                                    packageName = ShortcutServiceSpec.XIAOAI_PKG
+                                    serviceName = svc
+                                    serviceAction = ShortcutServiceSpec.ACTION_ASSIST
+                                    serviceExtras = ShortcutServiceSpec.format(extras)
+                                },
+                            )
                         }
                         ShortcutKind.ACTIVITY -> {
                             Text(text = stringResource(R.string.shortcut_package_activity), style = MiuixTheme.textStyles.body1)
@@ -312,6 +344,7 @@ internal fun ShortcutEditPage(
                                 onValueChange = { serviceName = it },
                                 label = stringResource(R.string.shortcut_service_name_hint)
                             )
+
                         }
                         ShortcutKind.QS_TILE -> {
                             // 磁贴组件只读展示（由选择器扫描回填，SystemUI hook 直点触发）
@@ -411,4 +444,63 @@ private fun splitTargetSpec(input: String, installedPkgs: List<String>): SplitRe
     }
     val act = if (bestPkg.isNotEmpty()) trimmed.substring(bestPkg.length) else trimmed
     return SplitResult(pkg = bestPkg, act = act)
+}
+
+/** action/extras 是否适用于该类型（组件/服务；Activity 也放行以便过渡期数据） */
+private fun supportActionExtras(kind: ShortcutKind): Boolean = when (kind) {
+    ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY, ShortcutKind.SERVICE -> true
+    else -> false
+}
+
+/**
+ * 目标组件的"动作与参数"编辑块（2026-11-01）。
+ *
+ * 存在理由：小米的许多能力不是 Activity 而是 Service + String extras（小爱识屏/语音、
+ * 部分系统开关），原来只有"选组件"一个入口 ⇒ 这类目标选得中、点不动。两个预设按钮把
+ * 已实测的命令直接填好（`docs/adaptation/xiaoai-gestureline-launch.md` §2）。
+ */
+@Composable
+private fun ActionExtrasFields(
+    action: String,
+    onActionChange: (String) -> Unit,
+    extras: String,
+    onExtrasChange: (String) -> Unit,
+    onApplyPreset: (Map<String, String>, String) -> Unit,
+) {
+    Spacer(Modifier.height(12.dp))
+    Text(
+        text = stringResource(R.string.shortcut_service_extras_title),
+        style = MiuixTheme.textStyles.body1
+    )
+    Spacer(Modifier.height(8.dp))
+    TextField(
+        value = action,
+        onValueChange = onActionChange,
+        label = "android.intent.action.ASSIST"
+    )
+    Spacer(Modifier.height(8.dp))
+    TextField(
+        value = extras,
+        onValueChange = onExtrasChange,
+        label = stringResource(R.string.shortcut_service_extras_hint)
+    )
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = {
+                val (map, svc) = ShortcutServiceSpec.xiaoaiScreenRecognition()
+                onApplyPreset(map, svc)
+            }
+        ) {
+            Text(stringResource(R.string.shortcut_preset_xiaoai_screen))
+        }
+        Button(
+            onClick = {
+                val (map, svc) = ShortcutServiceSpec.xiaoaiVoice()
+                onApplyPreset(map, svc)
+            }
+        ) {
+            Text(stringResource(R.string.shortcut_preset_xiaoai_voice))
+        }
+    }
 }

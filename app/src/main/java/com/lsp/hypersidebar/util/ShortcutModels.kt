@@ -59,6 +59,10 @@ data class ShortcutAction(
     val activityName: String? = null,
     val serviceName: String? = null,
     val intentUri: String? = null,
+    /** SERVICE 专用：Intent action（如 `android.intent.action.ASSIST`）；Activity 路径不读 */
+    val action: String? = null,
+    /** SERVICE 专用：String extras（`am --es k v`）——小爱识屏等靠 extras 区分功能 */
+    val extras: Map<String, String> = emptyMap(),
     val iconPackageName: String? = null,
     val shortcutId: String? = null,
     val order: Int = 0,
@@ -74,6 +78,10 @@ data class ShortcutAction(
         putOpt("activityName", activityName)
         putOpt("serviceName", serviceName)
         putOpt("intentUri", intentUri)
+        putOpt("action", action)
+        if (extras.isNotEmpty()) {
+            put("extras", JSONObject().apply { extras.forEach { (k, v) -> put(k, v) } })
+        }
         putOpt("iconPackageName", iconPackageName)
         putOpt("shortcutId", shortcutId)
         put("order", order)
@@ -95,6 +103,12 @@ data class ShortcutAction(
             activityName = json.optString("activityName", "").ifEmpty { null },
             serviceName = json.optString("serviceName", "").ifEmpty { null },
             intentUri = json.optString("intentUri", "").ifEmpty { null },
+            action = json.optString("action", "").ifEmpty { null },
+            extras = json.optJSONObject("extras")?.let { o ->
+                val m = LinkedHashMap<String, String>()
+                for (k in o.keys()) m[k] = o.optString(k, "")
+                m
+            } ?: emptyMap(),
             iconPackageName = json.optString("iconPackageName", "").ifEmpty { null },
             shortcutId = json.optString("shortcutId", "").ifEmpty { null },
             order = json.optInt("order", 0),
@@ -479,4 +493,107 @@ object ShortcutStore {
             else -> "打开面板"
         }
     }
+}
+
+/**
+ * SERVICE 快捷方式的 action/extras 纯核心（2026-11-01，小爱接入的第一块地基）。
+ *
+ * 背景（`docs/adaptation/xiaoai-gestureline-launch.md` 实测）：长按/双击手势线唤起的
+ * 小爱识屏不是 Activity，而是 `startService(action=ACTION_ASSIST, component=VoiceService)`
+ * 再靠 String extras 区分功能（`voice_assist_start_from_key` / `voice_assist_function_key`）。
+ * 原 `ShortcutAction` 只有 component，拼不出这个 Intent ⇒ 这条链路接不进来。
+ *
+ * 这里只放**纯逻辑**（文本 ↔ Map ↔ am argv 的规范化与安全校验），执行侧照旧走
+ * `ShortcutLauncher`（直启）与 root relay（`am startservice`）。
+ */
+object ShortcutServiceSpec {
+
+    /** extras 文本行数上限：够小爱这种 2-3 个键，防整段配置被粘贴进来 */
+    const val MAX_EXTRAS = 8
+    const val MAX_VALUE_LEN = 512
+
+    private val KEY_RE = Regex("^[A-Za-z0-9_.\\-]+$")
+    private val ACTION_RE = Regex("^[A-Za-z0-9_.]+$")
+
+    fun validAction(action: String?): Boolean =
+        action.isNullOrBlank() || ACTION_RE.matches(action.trim())
+
+    fun validKey(key: String): Boolean = KEY_RE.matches(key)
+
+    /**
+     * `k=v` 每行一条 → Map。空行与 `#` 注释忽略；键非法/超量的行**丢弃**（不抛异常：
+     * 编辑中的半截文本不该让保存失败）。值里的 `=` 原样保留（只按第一个 `=` 切）。
+     */
+    fun parse(text: String): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        for (raw in text.lineSequence()) {
+            val line = raw.trim()
+            if (line.isEmpty() || line.startsWith("#")) continue
+            val i = line.indexOf('=')
+            if (i <= 0) continue
+            val k = line.substring(0, i).trim()
+            val v = line.substring(i + 1).trim()
+            if (!validKey(k) || v.length > MAX_VALUE_LEN) continue
+            out[k] = v
+            if (out.size >= MAX_EXTRAS) break
+        }
+        return out
+    }
+
+    fun format(map: Map<String, String>): String =
+        map.entries.sortedBy { it.key }.joinToString("\n") { "${it.key}=${it.value}" }
+
+    /**
+     * `am startservice` 的 argv（不含 `su -c`）——root relay 与单测共用同一份拼装结果，
+     * 避免"直启能跑、root 兜底少一个 extra"这类分叉。
+     *
+     * `action` 非法 ⇒ null（调用方按 INVALID_CONFIG 处理，别发出半截命令）。
+     * extras 的键必须在 [KEY_RE] 内、值不含换行；`am` 侧的引号由调用方 `shellQuote` 负责。
+     */
+    fun amStartServiceCommand(
+        pkg: String,
+        serviceClass: String,
+        action: String?,
+        extras: Map<String, String>,
+    ): List<String>? {
+        if (pkg.isBlank() || serviceClass.isBlank()) return null
+        if (!validAction(action)) return null
+        if (extras.size > MAX_EXTRAS) return null
+        if (extras.any { (k, v) -> !validKey(k) || v.length > MAX_VALUE_LEN || v.contains('\n') }) return null
+        val cmd = ArrayList<String>(4 + extras.size * 2)
+        cmd += "am"
+        cmd += "startservice"
+        if (!action.isNullOrBlank()) {
+            cmd += "-a"
+            cmd += action.trim()
+        }
+        cmd += "-n"
+        cmd += "$pkg/$serviceClass"
+        extras.forEach { (k, v) ->
+            cmd += "--es"
+            cmd += k
+            cmd += v
+        }
+        return cmd
+    }
+
+    // ===== 预设：小爱识屏 / 小爱语音（实测命令见 docs/adaptation/xiaoai-gestureline-launch.md §2）
+    const val XIAOAI_PKG = "com.miui.voiceassist"
+    const val XIAOAI_SERVICE = "com.xiaomi.voiceassistant.VoiceService"
+    const val ACTION_ASSIST = "android.intent.action.ASSIST"
+    const val KEY_START_FROM = "voice_assist_start_from_key"
+    const val KEY_FUNCTION = "voice_assist_function_key"
+    const val XIAOAI_LONG_PRESS = "long_press_fullscreen_gesture_line"
+    const val XIAOAI_DOUBLE_CLICK = "double_click_full_screen_gesture_line"
+
+    /** 长按手势线的等价物：识屏（走 ScreenRecognitionActivity，约 2.5s 自动 finish） */
+    fun xiaoaiScreenRecognition(): Pair<Map<String, String>, String> =
+        mapOf(
+            KEY_START_FROM to XIAOAI_LONG_PRESS,
+            KEY_FUNCTION to "start_screen_recognition",
+        ) to XIAOAI_SERVICE
+
+    /** 双击手势线的等价物：语音浮窗（不带 function key，VA 白名单接受该 startFromKey） */
+    fun xiaoaiVoice(): Pair<Map<String, String>, String> =
+        mapOf(KEY_START_FROM to XIAOAI_DOUBLE_CLICK) to XIAOAI_SERVICE
 }

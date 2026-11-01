@@ -962,6 +962,11 @@ object ShortcutLauncher {
 
         val intent = Intent(Intent.ACTION_MAIN).apply {
             component = ComponentName(pkg, act)
+            // 2026-11-01：COMPONENT 草稿也能带 action/extras —— 小爱那类目标在"应用组件"
+        // 流程里先被选成 COMPONENT，启动时才由 `detectComponentType` 转成 SERVICE；
+        // 若这里不带上，转过去之后就只剩 component（等于换了个功能，静默）。
+            action.action?.trim()?.takeIf { it.isNotEmpty() }?.let { this.action = it }
+            action.extras.forEach { (k, v) -> putExtra(k, v) }
         }
         return BuildIntentResult.Success(intent)
     }
@@ -972,8 +977,15 @@ object ShortcutLauncher {
         val svc = normalizeServiceName(pkg, action.serviceName ?: return BuildIntentResult.Failure(
             FailureReason.INVALID_CONFIG, "serviceName is empty"))
 
+        // 2026-11-01：SERVICE 现在支持 action + String extras（小爱识屏等靠 extras 区分功能）。
+        // action 非法 ⇒ 明确失败，别发出"只有 component"的半截 Intent（VA 会当普通 ASSIST 吞掉）。
+        if (!ShortcutServiceSpec.validAction(action.action)) {
+            return BuildIntentResult.Failure(FailureReason.INVALID_CONFIG, "invalid action")
+        }
         val intent = Intent().apply {
             component = ComponentName(pkg, svc)
+            action.action?.trim()?.takeIf { it.isNotEmpty() }?.let { this.action = it }
+            action.extras.forEach { (k, v) -> putExtra(k, v) }
         }
         return BuildIntentResult.Success(intent)
     }
@@ -1312,7 +1324,15 @@ object ShortcutLauncher {
                 if (!pkg.matches(PKG_ACTIVITY_REGEX) || !fullAct.matches(PKG_ACTIVITY_REGEX)) {
                     return null
                 }
-                arrayOf("am", "start", "-n", "$pkg/$fullAct")
+                val base = mutableListOf("am", "start")
+                action.action?.trim()?.takeIf { it.isNotEmpty() && ShortcutServiceSpec.validAction(it) }
+                    ?.let { base += "-a"; base += it }
+                base += "-n"; base += "$pkg/$fullAct"
+                action.extras.forEach { (k, v) ->
+                    if (!ShortcutServiceSpec.validKey(k) || v.contains('\n')) return null
+                    base += "--es"; base += k; base += v
+                }
+                base.toTypedArray()
             }
             ShortcutKind.INTENT_URI -> {
                 val uri = action.intentUri ?: return null
@@ -1343,7 +1363,9 @@ object ShortcutLauncher {
                 if (!pkg.matches(PKG_ACTIVITY_REGEX) || !fullSvc.matches(PKG_ACTIVITY_REGEX)) {
                     return null
                 }
-                arrayOf("am", "startservice", "-n", "$pkg/$fullSvc")
+                // 与直启同源（ShortcutServiceSpec）：action/extras 少一个都等于换了个功能
+                ShortcutServiceSpec.amStartServiceCommand(pkg, fullSvc, action.action, action.extras)
+                    ?.toTypedArray() ?: return null
             }
             ShortcutKind.QS_TILE -> {
                 val pkg = action.packageName ?: return null

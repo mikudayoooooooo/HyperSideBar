@@ -184,6 +184,10 @@
     <string name="shortcut_package_optional_hint">目标应用包名</string>
     <string name="shortcut_service_name">服务名称</string>
     <string name="shortcut_service_name_hint">输入服务类名</string>
+    <string name="shortcut_service_extras_title">动作与参数（可选）</string>
+    <string name="shortcut_service_extras_hint">每行一条 key=value</string>
+    <string name="shortcut_preset_xiaoai_screen">小爱识屏</string>
+    <string name="shortcut_preset_xiaoai_voice">小爱语音</string>
     <string name="shortcut_service_root_note">非导出 Service 需通过 ROOT 启动</string>
     <string name="shortcut_toolbox_desc">内置面板</string>
     <string name="shortcut_test_section">测试</string>

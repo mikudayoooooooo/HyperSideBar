@@ -169,8 +169,8 @@ internal fun ShortcutEditPage(
                 else -> null
             },
             intentUri = intentUri.ifEmpty { null },
-            action = if (shortcut.kind == ShortcutKind.SERVICE) serviceAction.trim().ifEmpty { null } else null,
-            extras = if (shortcut.kind == ShortcutKind.SERVICE) {
+            action = if (supportActionExtras(shortcut.kind)) serviceAction.trim().ifEmpty { null } else null,
+            extras = if (supportActionExtras(shortcut.kind)) {
                 ShortcutServiceSpec.parse(serviceExtras)
             } else {
                 emptyMap()
@@ -267,12 +267,6 @@ internal fun ShortcutEditPage(
                                 onActionChange = { serviceAction = it },
                                 extras = serviceExtras,
                                 onExtrasChange = { serviceExtras = it },
-                                onApplyPreset = { extras, svc ->
-                                    packageName = ShortcutServiceSpec.XIAOAI_PKG
-                                    serviceName = svc
-                                    serviceAction = ShortcutServiceSpec.ACTION_ASSIST
-                                    serviceExtras = ShortcutServiceSpec.format(extras)
-                                },
                             )
                         }
                         ShortcutKind.ACTIVITY -> {
@@ -344,7 +338,12 @@ internal fun ShortcutEditPage(
                                 onValueChange = { serviceName = it },
                                 label = stringResource(R.string.shortcut_service_name_hint)
                             )
-
+                            ActionExtrasFields(
+                                action = serviceAction,
+                                onActionChange = { serviceAction = it },
+                                extras = serviceExtras,
+                                onExtrasChange = { serviceExtras = it },
+                            )
                         }
                         ShortcutKind.QS_TILE -> {
                             // 磁贴组件只读展示（由选择器扫描回填，SystemUI hook 直点触发）
@@ -456,8 +455,9 @@ private fun supportActionExtras(kind: ShortcutKind): Boolean = when (kind) {
  * 目标组件的"动作与参数"编辑块（2026-11-01）。
  *
  * 存在理由：小米的许多能力不是 Activity 而是 Service + String extras（小爱识屏/语音、
- * 部分系统开关），原来只有"选组件"一个入口 ⇒ 这类目标选得中、点不动。两个预设按钮把
- * 已实测的命令直接填好（`docs/adaptation/xiaoai-gestureline-launch.md` §2）。
+ * 部分系统开关），原来只有"选组件"一个入口 ⇒ 这类目标选得中、点不动。
+ * 具体参数见 `docs/adaptation/xiaoai-gestureline-launch.md` §6 的参数表（不放预设按钮：
+ * 只有少数几个组合值得记，进文档比进 UI 更耐改）。
  */
 @Composable
 private fun ActionExtrasFields(
@@ -465,7 +465,6 @@ private fun ActionExtrasFields(
     onActionChange: (String) -> Unit,
     extras: String,
     onExtrasChange: (String) -> Unit,
-    onApplyPreset: (Map<String, String>, String) -> Unit,
 ) {
     Spacer(Modifier.height(12.dp))
     Text(
@@ -484,23 +483,4 @@ private fun ActionExtrasFields(
         onValueChange = onExtrasChange,
         label = stringResource(R.string.shortcut_service_extras_hint)
     )
-    Spacer(Modifier.height(8.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(
-            onClick = {
-                val (map, svc) = ShortcutServiceSpec.xiaoaiScreenRecognition()
-                onApplyPreset(map, svc)
-            }
-        ) {
-            Text(stringResource(R.string.shortcut_preset_xiaoai_screen))
-        }
-        Button(
-            onClick = {
-                val (map, svc) = ShortcutServiceSpec.xiaoaiVoice()
-                onApplyPreset(map, svc)
-            }
-        ) {
-            Text(stringResource(R.string.shortcut_preset_xiaoai_voice))
-        }
-    }
 }

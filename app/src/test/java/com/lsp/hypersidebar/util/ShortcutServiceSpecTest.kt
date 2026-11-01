@@ -58,10 +58,15 @@ class ShortcutServiceSpecTest {
     }
 
     @Test
-    fun `am startservice 命令与小爱预设一致`() {
-        val (extras, service) = spec.xiaoaiScreenRecognition()
+    fun `am startservice 命令与小爱识屏参数一致`() {
+        // 参数口径见 docs/adaptation/xiaoai-gestureline-launch.md §6（不进 UI 预设，进文档）
+        val service = "com.xiaomi.voiceassistant.VoiceService"
+        val extras = linkedMapOf(
+            "voice_assist_start_from_key" to "long_press_fullscreen_gesture_line",
+            "voice_assist_function_key" to "start_screen_recognition",
+        )
         val cmd = spec.amStartServiceCommand(
-            spec.XIAOAI_PKG, service, spec.ACTION_ASSIST, extras
+            "com.miui.voiceassist", service, "android.intent.action.ASSIST", extras
         ) ?: error("command must not be null")
         assertEquals(
             listOf(
@@ -101,10 +106,13 @@ class ShortcutServiceSpecTest {
             id = "sc-xiaoai",
             kind = ShortcutKind.SERVICE,
             label = "小爱识屏",
-            packageName = ShortcutServiceSpec.XIAOAI_PKG,
-            serviceName = ShortcutServiceSpec.XIAOAI_SERVICE,
-            action = ShortcutServiceSpec.ACTION_ASSIST,
-            extras = ShortcutServiceSpec.xiaoaiScreenRecognition().first,
+            packageName = "com.miui.voiceassist",
+            serviceName = "com.xiaomi.voiceassistant.VoiceService",
+            action = "android.intent.action.ASSIST",
+            extras = mapOf(
+                "voice_assist_start_from_key" to "long_press_fullscreen_gesture_line",
+                "voice_assist_function_key" to "start_screen_recognition",
+            ),
         )
         val back = ShortcutAction.fromJson(JSONObject(original.toJson().toString()))
         assertEquals(original.action, back.action)

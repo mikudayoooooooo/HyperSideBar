@@ -577,23 +577,4 @@ object ShortcutServiceSpec {
         return cmd
     }
 
-    // ===== 预设：小爱识屏 / 小爱语音（实测命令见 docs/adaptation/xiaoai-gestureline-launch.md §2）
-    const val XIAOAI_PKG = "com.miui.voiceassist"
-    const val XIAOAI_SERVICE = "com.xiaomi.voiceassistant.VoiceService"
-    const val ACTION_ASSIST = "android.intent.action.ASSIST"
-    const val KEY_START_FROM = "voice_assist_start_from_key"
-    const val KEY_FUNCTION = "voice_assist_function_key"
-    const val XIAOAI_LONG_PRESS = "long_press_fullscreen_gesture_line"
-    const val XIAOAI_DOUBLE_CLICK = "double_click_full_screen_gesture_line"
-
-    /** 长按手势线的等价物：识屏（走 ScreenRecognitionActivity，约 2.5s 自动 finish） */
-    fun xiaoaiScreenRecognition(): Pair<Map<String, String>, String> =
-        mapOf(
-            KEY_START_FROM to XIAOAI_LONG_PRESS,
-            KEY_FUNCTION to "start_screen_recognition",
-        ) to XIAOAI_SERVICE
-
-    /** 双击手势线的等价物：语音浮窗（不带 function key，VA 白名单接受该 startFromKey） */
-    fun xiaoaiVoice(): Pair<Map<String, String>, String> =
-        mapOf(KEY_START_FROM to XIAOAI_DOUBLE_CLICK) to XIAOAI_SERVICE
 }

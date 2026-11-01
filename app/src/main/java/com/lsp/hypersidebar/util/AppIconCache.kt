@@ -41,12 +41,36 @@ object AppIconCache {
             .onFailure { HLog.w(TAG, "executor shutdown failed: ${it.message}") }
         runCatching { cache.evictAll() }
             .onFailure { HLog.w(TAG, "cache evict failed: ${it.message}") }
+        runCatching { inflight.clear() }
+            .onFailure { HLog.w(TAG, "inflight clear failed: ${it.message}") }
         runCatching { HLog.i(TAG, "releaseForReload: done") }
     }
     fun peek(pkg: String): Bitmap? = cache.get(pkg)
 
-    /** 查缓存 + miss 时 binder 加载解码。必须在后台线程调用。 */
+    /**
+     * 进行中的解码任务（single-flight，2026-10-30）：预灌（4 线程池）与逐磁贴 miss
+     * （每磁贴一个 IO 协程）此前对同一包各做一遍 binder + `toBitmap(128)`；
+     * 面板冷开时固定区与「全部」区同包并存，等于白做一轮解码。
+     * 同一包同一时刻只跑一个任务，其余调用者等它的结果。
+     */
+    private val inflight =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.FutureTask<Bitmap?>>()
+
+    /** 查缓存 + miss 时 binder 加载解码（同包并发自动合流）。必须在后台线程调用。 */
     fun load(context: Context, pkg: String): Bitmap? {
+        cache.get(pkg)?.let { return it }
+        val task = inflight.computeIfAbsent(pkg) { key ->
+            java.util.concurrent.FutureTask { decode(context, key) }
+        }
+        // FutureTask.run 幂等：只有第一个调用者真正执行，其余立即返回后等 get()
+        runCatching { task.run() }
+        val result = runCatching { task.get() }.getOrNull()
+        inflight.remove(pkg, task)
+        return result ?: cache.get(pkg)
+    }
+
+    /** 真正干活的那一段（不进 inflight 表，避免自等）。 */
+    private fun decode(context: Context, pkg: String): Bitmap? {
         cache.get(pkg)?.let { return it }
         val bitmap = runCatching {
             context.packageManager.getApplicationIcon(pkg).toBitmap(ICON_SIZE_PX, ICON_SIZE_PX)

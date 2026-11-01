@@ -26,6 +26,8 @@
     <string name="portrait_preview">竖屏</string>
     <string name="landscape_preview">横屏</string>
     <string name="corner_preview">底角斜滑</string>
+    <!-- 扇形预览可点进布局编辑：读屏需要名称，否则只有 Canvas 的空白控件 -->
+    <string name="fan_preview_edit_a11y">编辑%1$s布局</string>
 
     <string name="apps_section">应用</string>
     <string name="select_apps">扇形应用</string>
@@ -48,9 +50,7 @@
     <string name="system_colors">系统配色</string>
     <string name="system_colors_summary">使用 HyperOS 系统动态颜色</string>
     <string name="invoke_section">操作设置</string>
-    <string name="invoke_settings_summary">滑动距离 %1$d dp · 呼出停顿 %2$d ms</string>
-    <string name="trigger_swipe_distance_title">滑动距离</string>
-    <string name="trigger_swipe_distance_summary">滑够这个距离后停顿才呼出；太短易误触，太长难触发。下次手势生效</string>
+    <string name="invoke_settings_summary">呼出停顿 %1$d ms</string>
     <string name="freeform_section">小窗</string>
     <string name="freeform_blank_tap_title">点空白处操作小窗</string>
     <string name="freeform_blank_tap_summary">开小窗后，在小窗外轻点一下就执行所选的动作；默认关闭</string>
@@ -76,23 +76,19 @@
     <string name="corner_swipe_summary">从屏幕左下/右下角向内上滑，直接呼出扇形（仅竖屏）；默认关闭</string>
     <string name="corner_suppress_title">底角斜滑独占</string>
     <string name="corner_suppress_summary">斜滑底角只出扇形，不再同时弹系统功能；关闭后两者都响应。约 1 秒生效</string>
-    <string name="fan_fog_title">板材质浓度</string>
-    <string name="fan_fog_summary">板的浓淡，调到 0 就是无底色；下次呼出生效</string>
+    <string name="corner_spy_fallback_title">底角斜滑兜底</string>
+    <string name="corner_spy_fallback_summary">游戏/全屏等场景底部导航栏被系统收起时，改由系统界面层识别底角斜滑再交给我们；底栏在屏时不接管。默认关闭</string>
+    <string name="fan_fog_title">材质浓度</string>
+    <string name="fan_fog_summary">亚克力的浓淡（也决定壁纸档的着色强度）；0 = 只剩描边与图标，下次呼出生效</string>
     <string name="fan_dim_title">背景压暗</string>
     <string name="fan_dim_summary">呼出时把背景变暗 24%，让菜单更清楚；下次呼出生效</string>
-    <string name="fan_scrim_fade_title">压暗过渡时长</string>
-    <string name="fan_scrim_fade_summary">背景变暗的渐变时长（毫秒）：小＝干脆，大＝柔和；下次呼出生效</string>
-    <string name="fan_blur_source_title">背景模糊来源</string>
-    <string name="fan_blur_source_auto">自动</string>
+    <string name="fan_blur_source_title">背景来源</string>
+    <string name="fan_blur_source_acrylic">亚克力</string>
     <string name="fan_blur_source_wallpaper">采样壁纸</string>
-    <string name="fan_blur_source_behind">后方屏幕全屏</string>
     <string name="fan_blur_source_transparent">透明</string>
-    <string name="fan_blur_source_off">关闭</string>
-    <string name="fan_blur_source_summary_auto">自动选：壁纸可用就用壁纸，否则用纯色板</string>
+    <string name="fan_blur_source_summary_acrylic">不取背后画面：主题色玻璃 + 提亮 + 颗粒，深浅由下方「材质浓度」决定</string>
     <string name="fan_blur_source_summary_wallpaper">用壁纸做磨砂；游戏里看到的是模糊壁纸，不是游戏画面</string>
-    <string name="fan_blur_source_summary_behind">整屏一起模糊，板内外一致；桌面好看，游戏慎用</string>
     <string name="fan_blur_source_summary_transparent">不做模糊和底色，只剩弧线与图标，透出背后画面</string>
-    <string name="fan_blur_source_summary_off">不做模糊；板的深浅全由「板材质浓度」决定，调到 0 即透明</string>
     <string name="restore_defaults">恢复默认值</string>
     <string name="restore_defaults_summary">将全部布局与交互参数恢复为默认值，下次呼出生效</string>
     <string name="restore_defaults_confirm">将全部布局与交互参数恢复为默认值，应用选择与快捷方式不受影响。</string>
@@ -117,10 +113,7 @@
     <string name="app_icon_content_desc">应用图标</string>
     <string name="about_info">应用信息</string>
     <string name="about_version">版本</string>
-    <string name="about_version_code">内部版本</string>
     <string name="version_code_copied">已复制到剪贴板</string>
-    <string name="about_based_on">基于</string>
-    <string name="about_based_on_value">LSPosed API %1$s · EzXHelper %2$s</string>
     <string name="about_sdk">编译 SDK</string>
     <string name="about_sdk_value">37</string>
     <string name="framework_info">设备与框架</string>
@@ -129,8 +122,6 @@
     <string name="framework_name">框架名称</string>
     <string name="framework_version">框架版本</string>
     <string name="api_version">API 版本</string>
-    <string name="about_links">相关链接</string>
-    <string name="about_author">作者</string>
     <string name="about_project_url">项目地址</string>
     <string name="open_link_failed">无法打开链接</string>
     <string name="update_check">检查更新</string>
@@ -205,10 +196,7 @@
 
     <!-- Shortcuts list -->
     <string name="shortcuts_add_section">添加快捷方式</string>
-    <string name="shortcuts_add_component">添加组件</string>
-    <string name="shortcuts_add_component_summary">Activity / Service，自动识别类型</string>
     <string name="shortcuts_add_intent_uri">Intent URI</string>
-    <string name="shortcuts_add_intent_uri_summary">通过 Intent URI 启动目标</string>
     <string name="shortcuts_empty_hint">暂无快捷方式，点击下方添加</string>
     <string name="shortcut_uri_unset">（未设置 URI）</string>
     <string name="shortcut_component_count">%1$s · %2$d 个组件</string>
@@ -218,13 +206,13 @@
     <string name="activity_picker_title">选择活动</string>
     <string name="activity_picker_search">搜索活动…</string>
     <string name="activity_picker_loading">正在加载…</string>
+    <!-- 选择器三态共用：扫描完成但结果为空 ≠ 还在加载（否则空结果永远显示"正在加载"） -->
+    <string name="picker_empty">没有可选项</string>
+    <string name="picker_failed">加载失败</string>
+    <string name="picker_retry">重试</string>
     <string name="activity_picker_count">%d 个活动</string>
     <string name="activity_picker_filter_targets">只看快捷方式 (%1$d)</string>
     <string name="activity_picker_filter_all">显示全部 (%1$d)</string>
-    <string name="shortcuts_add_qs_tile">添加快捷开关</string>
-    <string name="shortcuts_add_qs_tile_summary">选择系统快捷开关磁贴（无须 root，无须加入控制中心）</string>
-    <string name="shortcuts_add_group">新建快捷组</string>
-    <string name="shortcuts_add_group_summary">把 2~3 个现有快捷方式装成一组，扇形内悬停展开（类文件夹）</string>
     <string name="group_edit_title">快捷组</string>
     <string name="group_edit_name">组名</string>
     <string name="group_edit_members">成员（2~3 个，长按拖动调序）</string>
@@ -236,7 +224,7 @@
     <string name="group_edit_quota">存储配额 %1$d/%2$d（组与成员各占一位）</string>
     <string name="group_edit_quota_exceeded">超出存储上限：请先删减快捷方式（组与成员各占一位）</string>
     <string name="shortcut_add_title">添加快捷方式</string>
-    <string name="shortcut_empty_add_hint">暂无快捷方式，点击右上角＋添加</string>
+    <string name="shortcut_empty_add_hint">暂无快捷方式，点击右上角＋添加；长按任意条目可多选组成分组</string>
     <string name="shortcut_section_enabled">已启用 · 按扇形顺序</string>
     <string name="shortcut_section_disabled">未启用</string>
     <string name="shortcut_enabled_cap_toast">已启用 %d 项达上限（含面板占位），请先关闭其它项</string>
@@ -319,4 +307,46 @@
     <string name="stats_channel_corner">底角斜滑</string>
     <string name="stats_misclick_note">误触＝全程未进预选；时长分 L1/L2/L3 档，位移仅作原位/划过标签。样本＝最近 500 次展开</string>
     <string name="logs_verbose_summary">逐手势明细（g#N/s#N），排查呼出灵敏度时开启；默认关（关闭时零开销），开启后下次手势生效</string>
+
+    <!-- 2026-10-27 设置 UI 改版 -->
+    <string name="about_more">更多</string>
+    <string name="about_tech_info">技术栈与环境</string>
+    <string name="about_tech_info_summary">依赖库版本与运行环境</string>
+    <string name="about_dependencies">主要依赖</string>
+    <string name="lib_lsposed">LSPosed API（libxposed）</string>
+    <string name="lib_ezxhelper">EzXHelper</string>
+    <string name="lib_miuix">miuix（KMP UI 库）</string>
+    <string name="lib_compose">Compose BOM</string>
+    <string name="lib_kotlin">Kotlin</string>
+    <string name="lib_dexkit">DexKit</string>
+    <string name="activity_filter_all">全部</string>
+    <string name="activity_filter_title">筛选</string>
+    <string name="activity_filter_exported">仅导出</string>
+    <string name="activity_filter_unexported">仅非导出</string>
+    <string name="log_filter_all">全部</string>
+    <string name="log_proc_launcher">桌面</string>
+    <string name="log_proc_ui">执行端</string>
+    <string name="log_proc_app">本应用</string>
+    <string name="log_level_warn">警告+</string>
+    <string name="log_level_all">全级别</string>
+    <string name="log_keyword_hint">关键字过滤（tag 或内容）</string>
+    <string name="log_proc_status">进程状态</string>
+    <string name="log_count_format">日志（%1$d 条）</string>
+    <string name="shortcut_kind_component">应用组件</string>
+    <string name="shortcut_kind_activity">应用页面</string>
+    <string name="shortcut_kind_intent_uri">Intent URI</string>
+    <string name="shortcut_kind_toolbox">内置面板</string>
+    <string name="shortcut_kind_service">后台服务</string>
+    <string name="shortcut_kind_qs_tile">快捷磁贴</string>
+    <string name="shortcut_kind_shortcut_id">桌面快捷方式</string>
+    <string name="shortcut_kind_group">快捷组</string>
+
+    <!-- 添加 sheet 的三个 tab 短标签（TabRow 每格 62~84dp，标签须 ≤4 字） -->
+    <string name="shortcut_add_tab_component">组件</string>
+    <string name="shortcut_add_tab_intent">Intent</string>
+    <string name="shortcut_add_tab_shortcut">快捷方式</string>
+    <string name="shortcut_add_component_summary">Activity / Service，自动识别类型</string>
+    <string name="shortcut_add_intent_summary">通过 Intent URI 启动目标</string>
+    <string name="shortcut_add_shortcut_summary">系统快捷磁贴，或应用的桌面快捷方式</string>
+    <string name="shortcut_add_need_target">先选择一个目标</string>
 </resources>

@@ -6,8 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -22,7 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import com.lsp.hypersidebar.theme.LocalSemanticColors
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -39,9 +39,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
@@ -85,162 +83,180 @@ internal fun LogPage(
         }
     }
 
-    Column(
-        modifier
+    LazyColumn(
+        modifier = modifier
             .fillMaxSize()
-            .background(MiuixTheme.colorScheme.background)
-            .padding(horizontal = 16.dp)
+            .background(MiuixTheme.colorScheme.surface)
+            .settingsScroll()
+            .scrollEndHaptic(),
+        contentPadding = PaddingValues(
+            start = SettingsDimens.ScreenInset,
+            end = SettingsDimens.ScreenInset,
+            top = SettingsDimens.ListTop,
+            bottom = SettingsDimens.ListBottom
+        ),
+        verticalArrangement = Arrangement.spacedBy(SettingsDimens.SectionGap)
     ) {
-        Spacer(Modifier.padding(top = 8.dp))
-        // ===== 操作行：刷新 / 导出 / 高频开关 =====
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            TextButton(
-                text = stringResource(R.string.logs_refresh),
-                onClick = {
-                    LogCollector.request(context)
-                    Toast.makeText(context, R.string.logs_refreshing, Toast.LENGTH_SHORT).show()
-                },
-                modifier = Modifier.weight(1f)
-            )
-            TextButton(
-                text = if (exporting) stringResource(R.string.logs_exporting)
-                else stringResource(R.string.logs_export),
-                onClick = {
-                    if (exporting) return@TextButton
-                    exporting = true
-                    scope.launch {
-                        val path = withContext(Dispatchers.IO) {
-                            exportLogs(context, LogCollector.mergedForExport())
-                        }
-                        exporting = false
-                        Toast.makeText(
-                            context, context.getString(R.string.logs_export_done, path),
-                            Toast.LENGTH_LONG
-                        ).show()
+        // 头部控件组作为列表项随之滚走：原先固定头部在横屏/大字体下能把日志区挤成零高
+        item {
+            Column(Modifier.fillMaxWidth()) {
+                // ===== 操作行：刷新 / 导出 / 高频开关 =====
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(
+                        text = stringResource(R.string.logs_refresh),
+                        onClick = {
+                            LogCollector.request(context)
+                            Toast.makeText(context, R.string.logs_refreshing, Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        text = if (exporting) stringResource(R.string.logs_exporting)
+                        else stringResource(R.string.logs_export),
+                        onClick = {
+                            if (exporting) return@TextButton
+                            exporting = true
+                            scope.launch {
+                                val path = withContext(Dispatchers.IO) {
+                                    exportLogs(context, LogCollector.mergedForExport())
+                                }
+                                exporting = false
+                                Toast.makeText(
+                                    context, context.getString(R.string.logs_export_done, path),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        },
+                        enabled = !exporting,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            stringResource(R.string.logs_verbose),
+                            color = MiuixTheme.colorScheme.onBackground,
+                            style = MiuixTheme.textStyles.body1
+                        )
+                        Text(
+                            stringResource(R.string.logs_verbose_summary),
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            style = MiuixTheme.textStyles.footnote1,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis
+                        )
                     }
-                },
-                enabled = !exporting,
-                modifier = Modifier.weight(1f)
-            )
-        }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp),
-            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    stringResource(R.string.logs_verbose),
-                    color = MiuixTheme.colorScheme.onBackground,
-                    fontSize = 15.sp
+                    Switch(checked = verbose, onCheckedChange = { on ->
+                        verbose = on
+                        HLog.verboseEnabled = on
+                        runCatching { prefs.edit().putBoolean(PrefKeys.DEBUG_VERBOSE_LOGS, on).apply() }
+                        // 高频日志开关要热更新到三个进程（hook 侧 ConfigSync.applySync 也会就地刷新）
+                        com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged(PrefKeys.DEBUG_VERBOSE_LOGS)
+                    })
+                }
+                // ===== 进程过滤 chips =====
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SettingsChip(
+                        text = stringResource(R.string.log_filter_all),
+                        selected = procFilter == "all",
+                        onClick = { procFilter = "all" }
+                    )
+                    SettingsChip(
+                        text = stringResource(R.string.log_proc_launcher),
+                        selected = procFilter == HLog.PROC_LAUNCHER,
+                        onClick = { procFilter = HLog.PROC_LAUNCHER }
+                    )
+                    SettingsChip(
+                        text = stringResource(R.string.log_proc_ui),
+                        selected = procFilter == HLog.PROC_UI,
+                        onClick = { procFilter = HLog.PROC_UI }
+                    )
+                    SettingsChip(
+                        text = stringResource(R.string.log_proc_app),
+                        selected = procFilter == HLog.PROC_APP,
+                        onClick = { procFilter = HLog.PROC_APP }
+                    )
+                    SettingsChip(
+                        text = stringResource(
+                            if (warnOnly) R.string.log_level_warn else R.string.log_level_all
+                        ),
+                        selected = warnOnly,
+                        onClick = { warnOnly = !warnOnly }
+                    )
+                }
+                TextField(
+                    value = keyword,
+                    onValueChange = { keyword = it },
+                    label = stringResource(R.string.log_keyword_hint),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
                 )
-                Text(
-                    stringResource(R.string.logs_verbose_summary),
-                    color = MiuixTheme.colorScheme.onSecondaryContainer,
-                    fontSize = 12.sp,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis
-                )
-            }
-            Switch(checked = verbose, onCheckedChange = { on ->
-                verbose = on
-                HLog.verboseEnabled = on
-                runCatching { prefs.edit().putBoolean(PrefKeys.DEBUG_VERBOSE_LOGS, on).apply() }
-                // 高频日志开关要热更新到三个进程（hook 侧 ConfigSync.applySync 也会就地刷新）
-                com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged(PrefKeys.DEBUG_VERBOSE_LOGS)
-            })
-        }
-        // ===== 进程过滤 chips =====
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp)
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Chip("全部", procFilter == "all") { procFilter = "all" }
-            Chip("桌面", procFilter == HLog.PROC_LAUNCHER) { procFilter = HLog.PROC_LAUNCHER }
-            Chip("执行端", procFilter == HLog.PROC_UI) { procFilter = HLog.PROC_UI }
-            Chip("本应用", procFilter == HLog.PROC_APP) { procFilter = HLog.PROC_APP }
-            Chip(if (warnOnly) "警告+" else "全级别", warnOnly) { warnOnly = !warnOnly }
-        }
-        TextField(
-            value = keyword,
-            onValueChange = { keyword = it },
-            label = "关键字过滤（tag 或内容）",
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp)
-        )
         // ===== 状态快照（熔断等） =====
+            }
+        }
         val statuses = LogCollector.statuses.toMap()
         if (statuses.isNotEmpty()) {
-            SmallTitle(text = "进程状态")
-            Card(modifier = Modifier.fillMaxWidth()) {
-                statuses.forEach { (proc, json) ->
-                    Text(
-                        text = "$proc: ${statusLine(json)}",
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        color = MiuixTheme.colorScheme.onBackground,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
+            item { SectionTitle(text = stringResource(R.string.log_proc_status)) }
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    statuses.forEach { (proc, json) ->
+                        Text(
+                            text = "$proc: ${statusLine(json)}",
+                            style = MiuixTheme.textStyles.footnote1,
+                            fontFamily = FontFamily.Monospace,
+                            color = MiuixTheme.colorScheme.onBackground,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                        )
+                    }
                 }
             }
         }
-        SmallTitle(text = "日志（${entries.size} 条）")
+        item { SectionTitle(text = stringResource(R.string.log_count_format, entries.size)) }
         // ===== 日志列表 =====
         if (entries.isEmpty()) {
-            Text(
-                stringResource(R.string.logs_empty),
-                color = MiuixTheme.colorScheme.onSecondaryContainer,
-                fontSize = 13.sp,
-                modifier = Modifier.padding(vertical = 24.dp)
-            )
-        }
-        LazyColumn(
-            Modifier
-                .weight(1f)
-                .overScrollVertical()
-                .scrollEndHaptic()
-        ) {
-            items(entries, key = { "${it.wallMs}-${it.tag}-${it.msg.hashCode()}" }) { e ->
+            item {
                 Text(
-                    text = e.formatLine(),
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 3, overflow = TextOverflow.Ellipsis,
-                    color = when (e.level) {
-                        'E' -> Color(0xFFE0533D)
-                        'W' -> Color(0xFFC88719)
-                        else -> MiuixTheme.colorScheme.onBackground
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 2.dp)
+                    stringResource(R.string.logs_empty),
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    style = MiuixTheme.textStyles.footnote1,
+                    modifier = Modifier.padding(vertical = 24.dp)
                 )
             }
-            item { Spacer(Modifier.padding(bottom = 16.dp)) }
+        }
+        items(entries, key = { "${it.wallMs}-${it.tag}-${it.msg.hashCode()}" }) { e ->
+            Text(
+                text = e.formatLine(),
+                style = MiuixTheme.textStyles.footnote2,
+                lineHeight = 15.sp,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 3, overflow = TextOverflow.Ellipsis,
+                color = when (e.level) {
+                    'E' -> MiuixTheme.colorScheme.error
+                    'W' -> LocalSemanticColors.current.warning
+                    else -> MiuixTheme.colorScheme.onBackground
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 2.dp)
+            )
         }
     }
-}
-
-@Composable
-private fun Chip(label: String, selected: Boolean, onClick: () -> Unit) {
-    TextButton(
-        text = label,
-        onClick = onClick,
-        colors = if (selected) ButtonDefaults.textButtonColors(
-            color = MiuixTheme.colorScheme.primary
-        ) else ButtonDefaults.textButtonColors(),
-        modifier = Modifier.padding(vertical = 2.dp)
-    )
 }
 
 /** 熔断快照 JSON → 单行人话（open=true 红色由调用方不区分，保持简单） */

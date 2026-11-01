@@ -24,8 +24,6 @@ internal sealed interface SettingsKey : NavKey {
     /** 组编辑页（C8，计划 §B2）：建组/改名/成员勾选与调序/解散；编辑中数据随键携带（同 ShortcutEdit 语义） */
     data class GroupEdit(val group: ShortcutAction, val isNew: Boolean) : SettingsKey
 
-    /** 添加页（布局定稿 §3）：首页右上角＋进入，四类入口的中间页 */
-    data object ShortcutAdd : SettingsKey
     data object ShortcutPicker : SettingsKey
 
     /** C3（批次 3）：QS 磁贴专属选择器（平铺全部扫到的 TileService，编辑页磁贴分支进入） */
@@ -39,6 +37,9 @@ internal sealed interface SettingsKey : NavKey {
 
     /** 诊断与统计汇聚页（0909 用户拍板：诊断类功能收进关于页调试区，加一层父入口） */
     data object Diagnostics : SettingsKey
+
+    /** 技术栈与环境二级页（2026-10-27）：承接设备型号/系统版本/框架/API 与「基于」技术栈行 */
+    data object TechInfo : SettingsKey
 
     /** 操作设置二级页（原"呼出设置"，2026-10-17 改名并入小窗段）：呼出类 + 小窗类开关 */
     data object InvokeSettings : SettingsKey

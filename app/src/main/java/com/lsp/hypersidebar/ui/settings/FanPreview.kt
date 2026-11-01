@@ -29,14 +29,22 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -145,11 +153,23 @@ internal fun FanPreviewTabsCard(
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             )
+            val editA11yLabel = stringResource(
+                R.string.fan_preview_edit_a11y,
+                when (orientation) {
+                    LayoutOrientation.LANDSCAPE -> stringResource(R.string.landscape_preview)
+                    LayoutOrientation.CORNER -> stringResource(R.string.corner_preview)
+                    else -> stringResource(R.string.portrait_preview)
+                }
+            )
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(230.dp)
                     .sinkClickable(onClick = { onEditLayout(orientation) })
+                    .semantics {
+                        contentDescription = editA11yLabel
+                        role = Role.Button
+                    }
                     .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
             ) {
                 // 切 tab：新旧预览交叉淡入，避免硬切
@@ -309,7 +329,9 @@ private fun StaticFanPreview(
     BoxWithConstraints(
         modifier = modifier
             .squircleSurface(
-                color = MiuixTheme.colorScheme.surfaceContainerHigh,
+                // 画布比卡片高一档：浅色 #E8E8E8 衬白卡、深色 #2D2D2D 衬 #242424 卡
+                //（surfaceContainerHigh 在深色与卡片同色 #242424，弧带边界会整片消失）
+                color = MiuixTheme.colorScheme.surfaceContainerHighest,
                 cornerRadius = FanVisuals.PREVIEW_FRAME_CORNER
             )
             .squircleBorder(
@@ -333,38 +355,63 @@ private fun StaticFanPreview(
             val anchor = map(geometry.anchor)
             // 弧带内外缘与真机同源（fanBandRadii），虚拟系算好再乘 scale
             val (bandInnerR, bandOuterR) = fanBandRadii(geometry, PREVIEW_DENSITY)
-            val bandMidPx = (bandInnerR + bandOuterR) / 2f * scale
-            val bandThicknessPx = (bandOuterR - bandInnerR) * scale
             val outerPx = bandOuterR * scale
-            // 磨砂弧带剪影：抽象平涂（粗描边弧 = 圆角端扇环），替代旧填充饼 + 双轨道
-            drawArc(
-                color = colors.surfaceContainer.copy(alpha = FanVisuals.PREVIEW_BAND_FILL_ALPHA),
-                startAngle = geometry.startAngle,
-                sweepAngle = geometry.spanAngle,
-                useCenter = false,
-                topLeft = Offset(anchor.x - bandMidPx, anchor.y - bandMidPx),
-                size = Size(bandMidPx * 2f, bandMidPx * 2f),
-                style = Stroke(width = bandThicknessPx, cap = StrokeCap.Round)
+            val innerPx = bandInnerR * scale
+            // 与真机同构：真机 FanBoard 的板是「外弧 + 内弧 + 两条径向边」围成的扇环
+            // （bandPath 按窗口矩形裁，两条径向边与屏幕边重合）——预览也用扇环填充，
+            // 而不是粗描边弧：描边弧会有圆头两端，且没有径向边，形状与真机不一致
+            val sector = Path().apply {
+                arcTo(Rect(center = anchor, radius = outerPx), geometry.startAngle, geometry.spanAngle, true)
+                arcTo(
+                    Rect(center = anchor, radius = innerPx),
+                    geometry.startAngle + geometry.spanAngle,
+                    -geometry.spanAngle,
+                    false
+                )
+                close()
+            }
+            drawPath(
+                path = sector,
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        colors.primary.copy(alpha = FanVisuals.PREVIEW_BAND_TOP_ALPHA),
+                        colors.surfaceContainer.copy(alpha = FanVisuals.PREVIEW_BAND_FILL_ALPHA)
+                    ),
+                    center = anchor,
+                    radius = outerPx.coerceAtLeast(1f)
+                )
             )
-            // 最外层单条弧线（与真机 FanBoard ③ 层同口径）
+            // 内外缘各一条细线：深色下弧带填充与画布同为 #242424，没有描边就分不清边界
             drawArc(
-                color = colors.outline.copy(alpha = FanVisuals.BAND_STROKE_TOP_ALPHA_LIGHT),
+                color = colors.outline.copy(alpha = FanVisuals.PREVIEW_BAND_OUTLINE_ALPHA),
                 startAngle = geometry.startAngle,
                 sweepAngle = geometry.spanAngle,
                 useCenter = false,
                 topLeft = Offset(anchor.x - outerPx, anchor.y - outerPx),
                 size = Size(outerPx * 2f, outerPx * 2f),
-                style = Stroke(width = FanVisuals.BAND_STROKE_WIDTH.toPx(), cap = StrokeCap.Round)
+                style = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Butt)
+            )
+            drawArc(
+                color = colors.outline.copy(alpha = FanVisuals.PREVIEW_BAND_INNER_ALPHA),
+                startAngle = geometry.startAngle,
+                sweepAngle = geometry.spanAngle,
+                useCenter = false,
+                topLeft = Offset(anchor.x - innerPx, anchor.y - innerPx),
+                size = Size(innerPx * 2f, innerPx * 2f),
+                style = Stroke(width = 1.dp.toPx(), cap = StrokeCap.Butt)
             )
         }
 
-        geometry.items.forEach { item ->
+        val tilePalette = previewTilePalette()
+        geometry.items.forEachIndexed { index, item ->
             // 直接使用实机 layoutFanItems 的真实坐标（消除预览自算半径的漂移）
             val center = map(Offset(item.centerX, item.centerY))
             val iconSizePx = geometry.iconSize * PREVIEW_DENSITY * scale
             val iconSizeDp = with(density) { iconSizePx.toDp() }
             PreviewIcon(
                 size = iconSizeDp.value,
+                palette = tilePalette,
+                index = index,
                 modifier = Modifier.offset {
                     IntOffset(
                         x = (center.x - iconSizePx / 2f).toInt(),
@@ -434,25 +481,51 @@ private fun previewViewport(geometry: FanGeometry): PreviewViewport {
     )
 }
 
+/**
+ * 预览色片基色：同色相三档明度（primary 系）。
+ * 不用多彩轮转 —— 五色相轮转在缩略图里就是"东一块西一块"的色卡，不像一排图标。
+ */
+@Composable
+private fun previewTilePalette(): List<Color> = listOf(
+    MiuixTheme.colorScheme.primary,
+    MiuixTheme.colorScheme.primary.copy(alpha = 0.72f),
+    MiuixTheme.colorScheme.primary.copy(alpha = 0.46f)
+)
+
+/**
+ * 预览色片：squircle 底 + 细描边 + 顶部玻璃高光。
+ * 不加载任何真实图标 —— 预览只示意排布，真机图标尺寸/形状差异会误导调参。
+ */
 @Composable
 private fun PreviewIcon(
     size: Float,
+    palette: List<Color>,
+    index: Int,
     modifier: Modifier = Modifier
 ) {
-    // 占位图标：统一配色的圆角方块（不描摹真实应用图标，仅示意排布）
-    val colors = currentFanThemeColors()
+    val base = palette[index % palette.size]
+    val corner = (size * FanVisuals.ICON_CORNER_RATIO).dp
+    // draw 相位里不能再取主题（MiuixTheme.colorScheme 是 @Composable），先捕获
+    val sheen = MiuixTheme.colorScheme.surface.copy(alpha = FanVisuals.PREVIEW_TILE_SHEEN_ALPHA)
+    val borderColor = MiuixTheme.colorScheme.outline.copy(alpha = FanVisuals.PREVIEW_TILE_BORDER_ALPHA)
     Box(
         modifier = modifier
             .size(size.dp)
-            .squircleSurface(
-                color = placeholderColor(colors),
-                cornerRadius = (size * FanVisuals.ICON_CORNER_RATIO).dp
+            .squircleSurface(color = base, cornerRadius = corner)
+            .squircleBorder(
+                width = 0.5.dp,
+                color = borderColor,
+                cornerRadius = corner
             )
+            .drawWithContent {
+                drawContent()
+                // 顶部玻璃高光（surface 低透明度竖向渐变）
+                drawRect(
+                    brush = Brush.verticalGradient(listOf(sheen, Color.Transparent))
+                )
+            }
     )
 }
-
-private fun placeholderColor(colors: FanThemeColors): Color =
-    colors.primaryContainer.copy(alpha = FanVisuals.PREVIEW_PLACEHOLDER_ALPHA)
 
 @Composable
 private fun PreviewQuickBar(
@@ -493,13 +566,17 @@ private fun PreviewQuickBar(
         horizontalArrangement = Arrangement.spacedBy((iconSizeDp.value * QUICK_BAR_GAP_RATIO).dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        geometry.quickApps.take(QUICK_BAR_MAX_ICONS).forEach { _ ->
+        val quickPalette = previewTilePalette()
+        geometry.quickApps.take(QUICK_BAR_MAX_ICONS).forEachIndexed { i, _ ->
+            val corner = (iconSizeDp.value * 0.25f).dp
             Box(
                 modifier = Modifier
                     .size(iconSizeDp.value.dp)
-                    .squircleSurface(
-                        color = placeholderColor(colors),
-                        cornerRadius = (iconSizeDp.value * 0.25f).dp
+                    .squircleSurface(color = quickPalette[(i + 100) % quickPalette.size], cornerRadius = corner)
+                    .squircleBorder(
+                        width = 0.5.dp,
+                        color = colors.outline.copy(alpha = FanVisuals.PREVIEW_TILE_BORDER_ALPHA),
+                        cornerRadius = corner
                     )
             )
         }

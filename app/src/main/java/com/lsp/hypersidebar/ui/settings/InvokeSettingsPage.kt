@@ -34,11 +34,11 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 /**
  * **操作设置**二级页（2026-10-17 由"呼出设置"改名并并入小窗段；0913 用户拍板建页，首页交互区入口进入）。
  *
- * 本页 = 一切的"操作"开关：呼出类（滑动距离 / 呼出停顿 / 呼出后常驻）+ 小窗类
+ * 本页 = 一切的"操作"开关：呼出类（呼出停顿 / 呼出后常驻）+ 小窗类
  * （点击空白处缩小/关闭 + 动作档）。2026-10-17 用户要求把小窗设置并进来，避免二级页碎片化。
+ * 2026-10-31 删掉"滑动距离"滑条：固定为 GestureThresholds.SWIPE_CONFIRM_DP（15dp，= 旧默认值），
+ * 底角通道由角锥的 CORNER_INWARD_MIN_DP 隐含——两条通道本来就不该共用一个滑条。
  *
- * - 滑动距离 = 呼出确认线（PrefKeys.TRIGGER_MIN_DISTANCE，dp）：hook 侧两通道 DOWN 换算
- *   px 缓存，下次手势生效；滑回重置=确认距离一半（GestureThresholds.SWIPE_RESET_RATIO 滞回）
  * - 呼出停顿 = 锚点圆 dwell（PrefKeys.TRIGGER_DWELL_MS，ms）：停顿判定逐手势现读，即时生效
  *
  * 滑条同款"拖动暂存、松手落盘（=一次 ConfigSync 广播）"节奏；revision 通道回读外部改动
@@ -53,38 +53,26 @@ internal fun InvokeSettingsPage(prefs: SharedPreferences, modifier: Modifier = M
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .overScrollVertical(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+            .settingsScroll(),
+        contentPadding = PaddingValues(
+            start = SettingsDimens.ScreenInset,
+            end = SettingsDimens.ScreenInset,
+            top = SettingsDimens.ListTop,
+            bottom = SettingsDimens.ListBottom
+        ),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        item { SmallTitle(text = stringResource(R.string.invoke_section)) }
+        item { SectionTitle(text = stringResource(R.string.invoke_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
                     // 量程/步进契约取自 LayoutDefaults（禁止内联），刻度数与吸附由辅助函数推导
-                    val distanceMin = LayoutDefaults.TRIGGER_SWIPE_DISTANCE_MIN_DP.toFloat()
-                    val distanceMax = LayoutDefaults.TRIGGER_SWIPE_DISTANCE_MAX_DP.toFloat()
-                    val distanceStep = LayoutDefaults.TRIGGER_SWIPE_DISTANCE_STEP_DP.toFloat()
                     val dwellMin = LayoutDefaults.TRIGGER_DWELL_MIN_MS.toFloat()
                     val dwellMax = LayoutDefaults.TRIGGER_DWELL_MAX_MS.toFloat()
                     val dwellStep = LayoutDefaults.TRIGGER_DWELL_STEP_MS.toFloat()
-                    var swipeDp by remember(effectivePrefs, repo.revision) {
-                        mutableStateOf(repo.triggerMinDistanceDp().roundToInt())
-                    }
-                    SliderPreference(
-                        title = stringResource(R.string.trigger_swipe_distance_title),
-                        summary = stringResource(R.string.trigger_swipe_distance_summary),
-                        valueText = "$swipeDp dp",
-                        value = swipeDp.toFloat(),
-                        valueRange = distanceMin..distanceMax,
-                        steps = sliderSteps(distanceMin, distanceMax, distanceStep),
-                        onValueChange = {
-                            swipeDp = quantizeToStep(it, distanceMin, distanceMax, distanceStep).roundToInt()
-                        },
-                        onValueChangeFinished = {
-                            repo.save(PrefKeys.TRIGGER_MIN_DISTANCE, swipeDp.toFloat())
-                        }
-                    )
+                    // 呼出距离不再可调（2026-10-31 用户走查："调到最大也没什么区别"）：
+                    // 边缘通道固定 GestureThresholds.SWIPE_CONFIRM_DP，底角通道由角锥
+                    // CORNER_INWARD_MIN_DP 隐含——两条通道本来就不该共用一个滑条。
                     var dwellMs by remember(effectivePrefs, repo.revision) {
                         mutableStateOf(repo.triggerDwellMs())
                     }
@@ -121,7 +109,7 @@ internal fun InvokeSettingsPage(prefs: SharedPreferences, modifier: Modifier = M
                 }
             }
         }
-        item { SmallTitle(text = stringResource(R.string.freeform_section)) }
+        item { SectionTitle(text = stringResource(R.string.freeform_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {

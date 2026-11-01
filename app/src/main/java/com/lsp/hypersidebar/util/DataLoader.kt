@@ -82,6 +82,10 @@ object DataLoader {
     fun releaseForReload() {
         runCatching { executor.shutdownNow() }
             .onFailure { HLog.w(TAG, "executor shutdown failed: ${it.message}") }
+        // 主线程侧的回调同样要摘（2026-10-31 补）：5min 兜底看门狗与预热重试都挂在 mainHandler 上，
+        // 不摘则旧代 Runnable 跨代继续跑（钉住旧 classloader，且可能把旧数据写回缓存）
+        runCatching { mainHandler.removeCallbacksAndMessages(null) }
+            .onFailure { HLog.w(TAG, "main handler cleanup failed: ${it.message}") }
         runCatching { HLog.i(TAG, "releaseForReload: done") }
     }
     fun loadApps(context: Context): List<String> {

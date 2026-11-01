@@ -16,16 +16,19 @@ import com.lsp.hypersidebar.prefs.PrefsFiles
 import com.lsp.hypersidebar.util.RelayToken
 import com.lsp.hypersidebar.util.ShortcutRootCatalog
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -36,17 +39,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
@@ -268,19 +269,30 @@ object ManifestShortcutsBridge {
 }
 
 /**
- * 快捷开关/应用快捷方式三级选择器（用户 2026-09-05 定稿：
- * L1 类型分组「磁贴/快捷方式」→ L2 应用列表 → L3 可用条目）。
+ * 快捷开关/应用快捷方式三级选择器面板（页模式与添加 sheet 共用）。
  * 磁贴选中→QS_TILE（SystemUI hook 数据层直点，无须 root、无须固定在控制中心）；
- * 快捷方式选中→
- * COMPONENT（am start 直启目标 activity）。动态 shortcut 因平台约束
- * （B2 归档）不在列。
+ * 快捷方式选中→COMPONENT（am start 直启目标 activity）。动态 shortcut 因平台约束（B2 归档）不在列。
+ *
+ * @param handleSystemBack 页模式接管系统返回（L3→L2 一级）；sheet 内 false
+ * @param bar 顶栏刷新桥（仅页模式；sheet 内 null = 每次打开天然重扫）
  */
 @Composable
-internal fun QsTilePickerPage(
+internal fun QsTilePickerPane(
     onSelected: (item: QsTileInfo, isTile: Boolean) -> Unit,
-    onBack: () -> Unit
+    modifier: Modifier = Modifier,
+    handleSystemBack: Boolean = true,
+    bar: RefreshBar? = null,
+    /** sheet 内为 false：OverlayBottomSheet 自己处理嵌套滚动 */
+    enablePullToRefresh: Boolean = true
 ) {
     val context = LocalContext.current
+
+    var refreshToken by remember { mutableStateOf(0) }
+    var refreshing by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(true) }
+    var loadFailed by remember { mutableStateOf(false) }
+    /** 失败自动重试只允许一次（跨跑次存活，避免异常时循环） */
+    var autoRetried by remember { mutableStateOf(false) }
 
     // manifest 快捷方式桥：注册应答接收器 + 请求 launcher 查询（到达后 key2 驱动重组）
     DisposableEffect(Unit) {
@@ -292,12 +304,43 @@ internal fun QsTilePickerPage(
     val apps by produceState<List<QsTileAppInfo>>(
         initialValue = emptyList(),
         key1 = context.applicationContext,
-        key2 = bridgedShortcuts
+        key2 = bridgedShortcuts + refreshToken.toString()
     ) {
-        value = withContext(Dispatchers.IO) {
-            buildTileApps(context, bridgedShortcuts.ifEmpty { loadManifestShortcuts(context) })
+        loading = true
+        loadFailed = false
+        try {
+            value = withContext(Dispatchers.IO) {
+                buildTileApps(context, bridgedShortcuts.ifEmpty { loadManifestShortcuts(context) })
+            }
+            // 成功优先于任何被取代跑次留下的陈旧失败标记
+            if (isActive) loadFailed = false
+        } catch (c: CancellationException) {
+            // 初次打开时 ManifestShortcutsBridge 的应答会改 key2 ⇒ 上一轮被取消；
+            // 取消不是失败（旧代码当异常捕获 ⇒ 数据已到位却显示「加载失败」）
+            throw c
+        } catch (t: Throwable) {
+            Log.w("HsQsTilePicker", "buildTileApps failed", t)
+            // 被取代的一轮不许写失败态（同 loading）：否则新一轮已填好列表、界面仍挂失败卡
+            if (isActive) loadFailed = true
+        } finally {
+            if (isActive) {
+                // 完成即收指示器（原实现用 apps.size 变化判断，等长结果时指示器一闪即灭）
+                loading = false
+                refreshing = false
+            }
         }
+        // 失败自动重试一次：manifest 桥首答与本地扫描可能同时发生，失败多半是这一次竞态；
+        // 上限一次，避免异常时循环
+        if (isActive && loadFailed && !autoRetried) {
+            autoRetried = true
+            Log.w("HsQsTilePicker", "first load failed, auto retry once")
+            refreshToken++
+        }
+        if (refreshToken > 0) ManifestShortcutsBridge.request(context)
     }
+
+    SideEffect { bar?.onRefresh = { refreshing = true; refreshToken++ } }
+    DisposableEffect(Unit) { onDispose { bar?.onRefresh = null } }
 
     // 顶部同级类型 Tab（用户 2026-09-05：随时切换）+ 单级返回栈：L3 → L2 → 关闭选择器
     var selectedGroup by remember { mutableStateOf(true) } // true=磁贴 false=快捷方式
@@ -305,43 +348,34 @@ internal fun QsTilePickerPage(
     var searchQuery by remember { mutableStateOf("") }
 
     val activity = LocalContext.current as? ComponentActivity
-    DisposableEffect(activity, selectedPackage) {
-        val callback = object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (selectedPackage != null) selectedPackage = null else onBack()
+    // 内部返回栈只到 L2（某应用的条目列表）；L1 的返回交给 nav3 NavDisplay 弹栈
+    if (handleSystemBack) {
+        DisposableEffect(activity, selectedPackage) {
+            val callback = object : OnBackPressedCallback(selectedPackage != null) {
+                override fun handleOnBackPressed() {
+                    selectedPackage = null
+                }
             }
+            activity?.onBackPressedDispatcher?.addCallback(callback)
+            onDispose { callback.remove() }
         }
-        activity?.onBackPressedDispatcher?.addCallback(callback)
-        onDispose { callback.remove() }
     }
 
-    val loading = apps.isEmpty()
-    val tileAppCount = apps.count { it.tiles.isNotEmpty() }
-    val shortcutAppCount = apps.count { it.shortcuts.isNotEmpty() }
 
+    val list: @Composable () -> Unit = {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
             .overScrollVertical()
             .scrollEndHaptic(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+        contentPadding = PaddingValues(
+            start = SettingsDimens.ScreenInset,
+            end = SettingsDimens.ScreenInset,
+            top = SettingsDimens.ListTop,
+            bottom = SettingsDimens.ListBottom
+        ),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        item {
-            BasicComponent(
-                title = stringResource(R.string.qs_tile_picker_title),
-                startAction = {
-                    Icon(
-                        imageVector = MiuixIcons.Back,
-                        contentDescription = stringResource(R.string.back),
-                        modifier = Modifier.size(20.dp),
-                        tint = MiuixTheme.colorScheme.primary
-                    )
-                },
-                onClick = onBack
-            )
-        }
-
         // 类型 Tab（同级，随时切换；切换即回到该类型的应用列表）
         item {
             Row(
@@ -350,7 +384,7 @@ internal fun QsTilePickerPage(
                     .padding(vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                GroupTab(
+                SettingsChip(
                     text = stringResource(R.string.qs_tile_group_tiles),
                     selected = selectedGroup,
                     modifier = Modifier.weight(1f),
@@ -359,7 +393,7 @@ internal fun QsTilePickerPage(
                         selectedPackage = null
                     }
                 )
-                GroupTab(
+                SettingsChip(
                     text = stringResource(R.string.qs_tile_group_shortcuts),
                     selected = !selectedGroup,
                     modifier = Modifier.weight(1f),
@@ -371,14 +405,31 @@ internal fun QsTilePickerPage(
             }
         }
 
-        if (loading) {
+        // 状态卡只在"没有列表可看"时出现（2026-10-31）：旧门 `loading || loadFailed || apps.isEmpty()`
+        // 会在**已有列表**时再插一张卡——首开竞态下用户看到「加载失败」压在已经加载出来的列表上方。
+        if (apps.isEmpty() && (loading || loadFailed)) {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        text = stringResource(R.string.qs_tile_picker_loading),
-                        modifier = Modifier.padding(16.dp),
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                    )
+                    Column {
+                        Text(
+                            text = stringResource(
+                                when {
+                                    loading -> R.string.qs_tile_picker_loading
+                                    loadFailed -> R.string.picker_failed
+                                    else -> R.string.picker_empty
+                                }
+                            ),
+                            modifier = Modifier.padding(16.dp),
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        )
+                        if (loadFailed) {
+                            TextButton(
+                                text = stringResource(R.string.picker_retry),
+                                onClick = { refreshing = true; refreshToken++ },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -451,24 +502,29 @@ internal fun QsTilePickerPage(
             }
         }
     }
+    }
+    if (enablePullToRefresh) {
+        PullToRefresh(
+            isRefreshing = refreshing,
+            onRefresh = { refreshing = true; refreshToken++ },
+            topAppBarScrollBehavior = LocalTopAppBarScrollBehavior.current,
+            modifier = modifier.fillMaxSize()
+        ) { list() }
+    } else {
+        Box(modifier.fillMaxSize()) { list() }
+    }
 }
 
-/** 类型切换 Tab（同层级、随时可切；选中态 primary 高亮）。 */
+/** 页模式薄壳：顶栏刷新桥（返回行统一由 MainScreen 顶栏承担）。 */
 @Composable
-private fun GroupTab(
-    text: String,
-    selected: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
+internal fun QsTilePickerPage(
+    onSelected: (item: QsTileInfo, isTile: Boolean) -> Unit,
+    bar: RefreshBar? = null
 ) {
-    TextButton(
-        text = text,
-        onClick = onClick,
-        modifier = modifier,
-        colors = ButtonDefaults.textButtonColors(
-            color = if (selected) MiuixTheme.colorScheme.primary
-            else MiuixTheme.colorScheme.onSurfaceVariantSummary
-        )
+    QsTilePickerPane(
+        onSelected = onSelected,
+        handleSystemBack = true,
+        bar = bar
     )
 }
 

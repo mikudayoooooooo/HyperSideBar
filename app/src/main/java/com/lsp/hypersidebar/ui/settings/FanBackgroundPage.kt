@@ -32,10 +32,11 @@ import top.yukonga.miuix.kmp.utils.overScrollVertical
 /**
  * 扇形背景二级页（0913 用户拍板，首页交互区入口进入）。
  *
- * Route D（0915 重构）：两条轴各自可控 ——
- * - 板材质轴：「板材质浓度」滑条，统一驱动板的混色/提亮/颗粒（miuix textureBlur 管线）
- * - 背景模糊轴：「背景模糊来源」单项下拉（自动/系统裁剪模糊/采样壁纸/后方屏幕全屏/关闭），
- *   来源失效时由 host 自动降级，保证板永远有材质
+ * Route D（0915 重构，2026-10-25 收敛为三档）：两条轴各自可控 ——
+ * - 背景来源：「亚克力 / 采样壁纸 / 透明」单项下拉；来源失效（如壁纸未就绪）时由 host
+ *   自动降级为无来源档，保证板永远有材质
+ * - 板材质轴：「材质浓度」滑条，统一驱动板的混色/提亮/颗粒（miuix textureBlur 管线）。
+ *   **只在会用到它的来源下展示**（透明档整块板不画，滑条无意义），且排在下拉之后
  * 另有「背景压暗」opt-in。均"拖动/选择即落盘（=一次 ConfigSync 广播）"节奏，
  * 改动下次呼出生效；revision 通道回读外部改动。
  */
@@ -48,33 +49,19 @@ internal fun FanBackgroundPage(prefs: SharedPreferences, modifier: Modifier = Mo
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .overScrollVertical(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+            .settingsScroll(),
+        contentPadding = PaddingValues(
+            start = SettingsDimens.ScreenInset,
+            end = SettingsDimens.ScreenInset,
+            top = SettingsDimens.ListTop,
+            bottom = SettingsDimens.ListBottom
+        ),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        item { SmallTitle(text = stringResource(R.string.fan_background_section)) }
+        item { SectionTitle(text = stringResource(R.string.fan_background_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
-                    // 量程/步进契约取自 LayoutDefaults（禁止内联），刻度数与吸附由辅助函数推导
-                    val fogMin = LayoutDefaults.FAN_FOG_MIN
-                    val fogMax = LayoutDefaults.FAN_FOG_MAX
-                    val fogStep = LayoutDefaults.FAN_FOG_STEP
-                    var fog by remember(effectivePrefs, repo.revision) {
-                        mutableStateOf(repo.fanFogIntensity())
-                    }
-                    SliderPreference(
-                        title = stringResource(R.string.fan_fog_title),
-                        summary = stringResource(R.string.fan_fog_summary),
-                        valueText = "${(fog * 100).roundToInt()}%",
-                        value = fog,
-                        valueRange = fogMin..fogMax,
-                        steps = sliderSteps(fogMin, fogMax, fogStep),
-                        onValueChange = { fog = quantizeToStep(it, fogMin, fogMax, fogStep) },
-                        onValueChangeFinished = {
-                            repo.save(PrefKeys.FAN_FOG_INTENSITY, fog)
-                        }
-                    )
                     var dimOn by remember(effectivePrefs, repo.revision) {
                         mutableStateOf(repo.fanDimEnabled())
                     }
@@ -91,18 +78,14 @@ internal fun FanBackgroundPage(prefs: SharedPreferences, modifier: Modifier = Mo
                     // 取值顺序 = 契约 LayoutDefaults.FAN_BLUR_SOURCE_VALUES，下标映射不得内联
                     val sourceValues = LayoutDefaults.FAN_BLUR_SOURCE_VALUES
                     val sourceOptions = listOf(
-                        stringResource(R.string.fan_blur_source_auto),
+                        stringResource(R.string.fan_blur_source_acrylic),
                         stringResource(R.string.fan_blur_source_wallpaper),
-                        stringResource(R.string.fan_blur_source_behind),
-                        stringResource(R.string.fan_blur_source_transparent),
-                        stringResource(R.string.fan_blur_source_off)
+                        stringResource(R.string.fan_blur_source_transparent)
                     )
                     val sourceSummaries = listOf(
-                        stringResource(R.string.fan_blur_source_summary_auto),
+                        stringResource(R.string.fan_blur_source_summary_acrylic),
                         stringResource(R.string.fan_blur_source_summary_wallpaper),
-                        stringResource(R.string.fan_blur_source_summary_behind),
-                        stringResource(R.string.fan_blur_source_summary_transparent),
-                        stringResource(R.string.fan_blur_source_summary_off)
+                        stringResource(R.string.fan_blur_source_summary_transparent)
                     )
                     var blurSource by remember(effectivePrefs, repo.revision) {
                         mutableStateOf(repo.fanBlurSource())
@@ -119,6 +102,29 @@ internal fun FanBackgroundPage(prefs: SharedPreferences, modifier: Modifier = Mo
                             repo.save(PrefKeys.FAN_BLUR_SOURCE, value)
                         }
                     )
+                    // 材质浓度只对「会画板材质」的来源有意义：透明档整块板不画（FanBoard 直接跳过
+                    // textureBlur），滑条拖了也不会生效 ⇒ 该档下整行不展示，避免"调了没反应"。
+                    if (blurSource != PrefKeys.FAN_BLUR_SOURCE_TRANSPARENT) {
+                        // 量程/步进契约取自 LayoutDefaults（禁止内联），刻度数与吸附由辅助函数推导
+                        val fogMin = LayoutDefaults.FAN_FOG_MIN
+                        val fogMax = LayoutDefaults.FAN_FOG_MAX
+                        val fogStep = LayoutDefaults.FAN_FOG_STEP
+                        var fog by remember(effectivePrefs, repo.revision) {
+                            mutableStateOf(repo.fanFogIntensity())
+                        }
+                        SliderPreference(
+                            title = stringResource(R.string.fan_fog_title),
+                            summary = stringResource(R.string.fan_fog_summary),
+                            valueText = "${(fog * 100).roundToInt()}%",
+                            value = fog,
+                            valueRange = fogMin..fogMax,
+                            steps = sliderSteps(fogMin, fogMax, fogStep),
+                            onValueChange = { fog = quantizeToStep(it, fogMin, fogMax, fogStep) },
+                            onValueChangeFinished = {
+                                repo.save(PrefKeys.FAN_FOG_INTENSITY, fog)
+                            }
+                        )
+                    }
                 }
             }
         }

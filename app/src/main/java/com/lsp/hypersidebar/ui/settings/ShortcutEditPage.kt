@@ -2,10 +2,10 @@ package com.lsp.hypersidebar.ui.settings
 
 import android.content.SharedPreferences
 import android.util.Log
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -24,7 +26,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.util.DefaultLaunchStrategy
@@ -37,31 +38,42 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 private const val TAG = "ShortcutSettings"
 
+/**
+ * 编辑页顶栏桥（同 GroupEditBar 模式）：右上角 ✓ = 保存。
+ * 页面写、MainScreen 顶栏读——页面内不再放保存按钮。
+ */
+internal class ShortcutEditBar {
+    var onSave: (() -> Unit)? = null
+}
+
 @Composable
 internal fun ShortcutEditPage(
     shortcut: ShortcutAction,
     isNew: Boolean,
     prefs: SharedPreferences,
+    bar: ShortcutEditBar? = null,
     initialTargetSpec: SplitResult = SplitResult("", ""),
     onSave: (ShortcutAction) -> Unit,
     onDelete: (() -> Unit)?,
     onPickActivity: () -> Unit,
     onPickQsTile: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /** 嵌进添加 sheet 时目标已在第一步选好，不再重复「选择应用/磁贴」入口 */
+    showPickButtons: Boolean = true
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -97,28 +109,92 @@ internal fun ShortcutEditPage(
         }
     }
 
+    // 顶栏 ✓ = 保存（内容与原底部保存按钮逐行一致）
+    fun saveAction() {
+        val updated = shortcut.copy(
+            label = label.ifEmpty { context.getString(R.string.shortcut_unnamed) },
+            packageName = when (shortcut.kind) {
+                ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.pkg.ifEmpty { null }
+                else -> packageName.ifEmpty { null }
+            },
+            activityName = when (shortcut.kind) {
+                ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.act.ifEmpty { null }
+                else -> null
+            },
+            serviceName = when (shortcut.kind) {
+                // QS_TILE 类名同样存 serviceName（选择器回填/保存共用此字段）
+                ShortcutKind.SERVICE, ShortcutKind.QS_TILE -> serviceName.ifEmpty { null }
+                else -> null
+            },
+            intentUri = intentUri.ifEmpty { null },
+            enabled = enabled,
+            iconPackageName = when (shortcut.kind) {
+                ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.pkg.ifEmpty { shortcut.iconPackageName }
+                ShortcutKind.SERVICE, ShortcutKind.QS_TILE -> packageName.ifEmpty { shortcut.iconPackageName }
+                else -> shortcut.iconPackageName
+            }
+        )
+        onSave(updated)
+    }
+
+    /** 试启动：草稿页与 sheet 内嵌表单共用。 */
+    fun testLaunch() {
+        testing = true
+        testResult = null
+        val testShortcut = shortcut.copy(
+            label = label,
+            packageName = when (shortcut.kind) {
+                ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.pkg.ifEmpty { null }
+                ShortcutKind.SERVICE -> packageName.ifEmpty { null }
+                else -> packageName.ifEmpty { null }
+            },
+            activityName = when (shortcut.kind) {
+                ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.act.ifEmpty { null }
+                else -> null
+            },
+            serviceName = when (shortcut.kind) {
+                ShortcutKind.SERVICE, ShortcutKind.QS_TILE -> serviceName.ifEmpty { null }
+                else -> null
+            },
+            intentUri = intentUri.ifEmpty { null }
+        )
+        scope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    ShortcutLauncher.launch(context, testShortcut, DefaultLaunchStrategy())
+                }
+                testResult = when (result) {
+                    is LaunchResult.Success ->
+                        context.getString(R.string.shortcut_test_success, result.componentName?.flattenToShortString() ?: "OK")
+                    is LaunchResult.Failure ->
+                        context.getString(R.string.shortcut_test_failure, result.reason, result.detail)
+                }
+            } catch (e: Exception) {
+                testResult = context.getString(R.string.shortcut_test_error, e.message ?: "Unknown error")
+                Log.e(TAG, "Test launch failed", e)
+            } finally {
+                testing = false
+            }
+        }
+    }
+
+    if (bar != null) {
+        SideEffect { bar.onSave = { saveAction() } }
+        DisposableEffect(Unit) { onDispose { bar.onSave = null } }
+    }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .overScrollVertical(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+            .settingsScroll(),
+        contentPadding = PaddingValues(
+            start = SettingsDimens.ScreenInset,
+            end = SettingsDimens.ScreenInset,
+            top = SettingsDimens.ListTop,
+            bottom = SettingsDimens.ListBottom
+        ),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        item {
-            BasicComponent(
-                title = stringResource(if (isNew) R.string.shortcut_new else R.string.shortcut_edit),
-                startAction = {
-                    Icon(
-                        imageVector = MiuixIcons.Back,
-                        contentDescription = stringResource(R.string.back),
-                        modifier = Modifier.size(20.dp),
-                        tint = MiuixTheme.colorScheme.primary
-                    )
-                },
-                onClick = onBack
-            )
-        }
-
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 SwitchPreference(
@@ -129,7 +205,7 @@ internal fun ShortcutEditPage(
             }
         }
 
-        item { SmallTitle(text = stringResource(R.string.shortcut_basic_info)) }
+        item { SectionTitle(text = stringResource(R.string.shortcut_basic_info)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -144,7 +220,7 @@ internal fun ShortcutEditPage(
             }
         }
 
-        item { SmallTitle(text = stringResource(R.string.shortcut_target_config)) }
+        item { SectionTitle(text = stringResource(R.string.shortcut_target_config)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -157,18 +233,14 @@ internal fun ShortcutEditPage(
                                 onValueChange = { targetSpec = it },
                                 label = stringResource(R.string.shortcut_component_hint)
                             )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = stringResource(R.string.shortcut_component_desc),
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                style = MiuixTheme.textStyles.footnote1
-                            )
                             Spacer(Modifier.height(12.dp))
-                            Button(
-                                onClick = onPickActivity,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(stringResource(R.string.shortcut_pick_activity))
+                            if (showPickButtons) {
+                                Button(
+                                    onClick = onPickActivity,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(stringResource(R.string.shortcut_pick_activity))
+                                }
                             }
                         }
                         ShortcutKind.ACTIVITY -> {
@@ -179,18 +251,14 @@ internal fun ShortcutEditPage(
                                 onValueChange = { targetSpec = it },
                                 label = stringResource(R.string.shortcut_component_hint)
                             )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = stringResource(R.string.shortcut_package_activity_hint),
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                style = MiuixTheme.textStyles.footnote1
-                            )
                             Spacer(Modifier.height(12.dp))
-                            Button(
-                                onClick = onPickActivity,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(stringResource(R.string.shortcut_pick_activity))
+                            if (showPickButtons) {
+                                Button(
+                                    onClick = onPickActivity,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(stringResource(R.string.shortcut_pick_activity))
+                                }
                             }
                         }
                         ShortcutKind.INTENT_URI -> {
@@ -200,12 +268,6 @@ internal fun ShortcutEditPage(
                                 value = intentUri,
                                 onValueChange = { intentUri = it },
                                 label = stringResource(R.string.shortcut_intent_uri_hint)
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                text = stringResource(R.string.shortcut_intent_uri_desc),
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                style = MiuixTheme.textStyles.footnote1
                             )
                             Spacer(Modifier.height(8.dp))
                             Text(text = stringResource(R.string.shortcut_package_optional), style = MiuixTheme.textStyles.body1)
@@ -250,12 +312,6 @@ internal fun ShortcutEditPage(
                                 onValueChange = { serviceName = it },
                                 label = stringResource(R.string.shortcut_service_name_hint)
                             )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = stringResource(R.string.shortcut_service_root_note),
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                style = MiuixTheme.textStyles.footnote1
-                            )
                         }
                         ShortcutKind.QS_TILE -> {
                             // 磁贴组件只读展示（由选择器扫描回填，SystemUI hook 直点触发）
@@ -267,145 +323,53 @@ internal fun ShortcutEditPage(
                                 style = MiuixTheme.textStyles.footnote1
                             )
                             Spacer(Modifier.height(12.dp))
-                            Button(
-                                onClick = onPickQsTile,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(stringResource(R.string.qs_tile_pick))
-                            }
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = stringResource(R.string.shortcut_qs_tile_note),
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                                style = MiuixTheme.textStyles.footnote1
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        item { SmallTitle(text = stringResource(R.string.shortcut_test_section)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = {
-                            testing = true
-                            testResult = null
-                            val testShortcut = shortcut.copy(
-                                label = label,
-                                packageName = when (shortcut.kind) {
-                                    ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.pkg.ifEmpty { null }
-                                    ShortcutKind.SERVICE -> packageName.ifEmpty { null }
-                                    else -> packageName.ifEmpty { null }
-                                },
-                                activityName = when (shortcut.kind) {
-                                    ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.act.ifEmpty { null }
-                                    else -> null
-                                },
-                                serviceName = when (shortcut.kind) {
-                                    ShortcutKind.SERVICE, ShortcutKind.QS_TILE -> serviceName.ifEmpty { null }
-                                    else -> null
-                                },
-                                intentUri = intentUri.ifEmpty { null }
-                            )
-                            scope.launch {
-                                try {
-                                    val result = withContext(Dispatchers.IO) {
-                                        ShortcutLauncher.launch(
-                                            context, testShortcut, DefaultLaunchStrategy()
-                                        )
-                                    }
-                                    testResult = when (result) {
-                                        is LaunchResult.Success ->
-                                            context.getString(R.string.shortcut_test_success, result.componentName?.flattenToShortString() ?: "OK")
-                                        is LaunchResult.Failure ->
-                                            context.getString(R.string.shortcut_test_failure, result.reason, result.detail)
-                                    }
-                                } catch (e: Exception) {
-                                    testResult = context.getString(R.string.shortcut_test_error, e.message ?: "Unknown error")
-                                    Log.e(TAG, "Test launch failed", e)
-                                } finally {
-                                    testing = false
+                            if (showPickButtons) {
+                                Button(
+                                    onClick = onPickQsTile,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(stringResource(R.string.qs_tile_pick))
                                 }
                             }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(if (testing) stringResource(R.string.shortcut_testing) else stringResource(R.string.shortcut_test))
+                        }
                     }
-                    testResult?.let { result ->
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            text = result,
-                            color = if (result.startsWith(context.getString(R.string.shortcut_test_success, "").substringBefore(":")))
-                                MiuixTheme.colorScheme.primary
-                            else
-                                MiuixTheme.colorScheme.error,
-                            style = MiuixTheme.textStyles.footnote1
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = stringResource(R.string.shortcut_test_note),
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        style = MiuixTheme.textStyles.footnote1
-                    )
                 }
             }
         }
 
+        // 底部动作一排：测试（次要）+ 删除（危险，红字）；保存归顶栏 ✓
         item {
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    val updated = shortcut.copy(
-                        label = label.ifEmpty { context.getString(R.string.shortcut_unnamed) },
-                        packageName = when (shortcut.kind) {
-                            ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.pkg.ifEmpty { null }
-                            else -> packageName.ifEmpty { null }
-                        },
-                        activityName = when (shortcut.kind) {
-                            ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.act.ifEmpty { null }
-                            else -> null
-                        },
-                        serviceName = when (shortcut.kind) {
-                            // QS_TILE 类名同样存 serviceName（选择器回填/保存共用此字段）
-                            ShortcutKind.SERVICE, ShortcutKind.QS_TILE -> serviceName.ifEmpty { null }
-                            else -> null
-                        },
-                        intentUri = intentUri.ifEmpty { null },
-                        enabled = enabled,
-                        iconPackageName = when (shortcut.kind) {
-                            ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> resolved.pkg.ifEmpty { shortcut.iconPackageName }
-                            ShortcutKind.SERVICE, ShortcutKind.QS_TILE -> packageName.ifEmpty { shortcut.iconPackageName }
-                            else -> shortcut.iconPackageName
-                        }
+            Column {
+                Row(horizontalArrangement = Arrangement.spacedBy(SettingsDimens.SectionGap)) {
+                    TextButton(
+                        text = stringResource(
+                            if (testing) R.string.shortcut_testing else R.string.shortcut_test
+                        ),
+                        onClick = { testLaunch() },
+                        enabled = !testing,
+                        modifier = Modifier.weight(1f)
                     )
-                    onSave(updated)
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.shortcut_save))
-            }
-        }
-
-        // 删除入口：仅编辑已有快捷方式时显示
-        if (onDelete != null) {
-            item {
-                Spacer(Modifier.height(4.dp))
-                Card(modifier = Modifier.fillMaxWidth()) {
+                    if (onDelete != null) {
+                        TextButton(
+                            text = stringResource(R.string.shortcut_delete),
+                            onClick = { onDelete!!() },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.textButtonColors(
+                                textColor = MiuixTheme.colorScheme.error
+                            )
+                        )
+                    }
+                }
+                testResult?.let { result ->
                     Text(
-                        text = stringResource(R.string.shortcut_delete),
-                        color = MiuixTheme.colorScheme.error,
-                        style = MiuixTheme.textStyles.body1,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .sinkClickable(onClick = onDelete!!)
-                            .padding(vertical = 12.dp),
-                        textAlign = TextAlign.Center
+                        text = result,
+                        color = if (result.startsWith(context.getString(R.string.shortcut_test_success, "").substringBefore(":"))) {
+                            MiuixTheme.colorScheme.primary
+                        } else {
+                            MiuixTheme.colorScheme.error
+                        },
+                        style = MiuixTheme.textStyles.footnote1,
+                        modifier = Modifier.padding(top = 4.dp)
                     )
                 }
             }

@@ -24,6 +24,14 @@ object AppMetaCache {
 
     @Volatile private var diskLabels: Map<String, String>? = null
 
+    /**
+     * 只查缓存/盘灌镜像，**不碰 PackageManager**（零 binder）。
+     *
+     * AllApps 用它做"先出列表、后补标签"的第一段发布（2026-10-31）：整表等 PM 回来才有
+     * 内容可看是首屏慢的主因；miss 的项先显示包名，第二段再覆盖。
+     */
+    fun peek(pkg: String): String? = labels.get(pkg) ?: diskLabels?.get(pkg)
+
     fun label(context: Context, pkg: String): String {
         labels.get(pkg)?.let { return it }
         diskLabels?.get(pkg)?.let {

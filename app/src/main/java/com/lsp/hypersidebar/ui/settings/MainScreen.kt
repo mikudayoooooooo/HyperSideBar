@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -39,16 +41,19 @@ import top.yukonga.miuix.kmp.anim.AccelerateEasing
 import top.yukonga.miuix.kmp.anim.DecelerateEasing
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.NavigationBar
 import top.yukonga.miuix.kmp.basic.NavigationBarDisplayMode
 import top.yukonga.miuix.kmp.basic.NavigationBarItem
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.basic.Check
 import top.yukonga.miuix.kmp.icon.extended.Add
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Info
+import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.icon.extended.SelectAll
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.nav.core.NavDisplay
@@ -114,6 +119,12 @@ internal fun MainScreen(
 
     // 组详情顶栏＋桥（添加成员 → 页内选择器）
     val groupEditBar = remember { GroupEditBar() }
+    // 快捷方式编辑页顶栏保存桥（✓ 归顶栏）
+    val shortcutEditBar = remember { ShortcutEditBar() }
+    // 外部数据源三页（App 选择 / 组件选择 / QS 磁贴选择）共用的顶栏刷新桥
+    val refreshBar = remember { RefreshBar() }
+    // 大标题随滚动收起（页面通过 LocalTopAppBarScrollBehavior 取它去挂 nestedScroll）
+    val topAppBarScrollBehavior = MiuixScrollBehavior()
 
     val selectAppsTitle = stringResource(R.string.select_apps)
     // miuix-nav 的 NavBackStack 元素类型是 NavKey（非泛型），取栈顶要显式收回 SettingsKey
@@ -121,14 +132,15 @@ internal fun MainScreen(
         SettingsKey.TabSettings -> stringResource(R.string.tab_settings)
         SettingsKey.TabAbout -> stringResource(R.string.tab_about)
         is SettingsKey.AppSelection -> top.title
-        SettingsKey.ShortcutList, SettingsKey.ShortcutPicker, SettingsKey.QsTilePicker ->
-            stringResource(R.string.shortcuts_add_section)
+        SettingsKey.ShortcutList -> stringResource(R.string.shortcuts_add_section)
+        SettingsKey.ShortcutPicker -> stringResource(R.string.activity_picker_title)
+        SettingsKey.QsTilePicker -> stringResource(R.string.qs_tile_picker_title)
         SettingsKey.Logs -> stringResource(R.string.logs_title)
         SettingsKey.Stats -> stringResource(R.string.stats_title)
         SettingsKey.Diagnostics -> stringResource(R.string.diagnostics_entry)
         is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
         is SettingsKey.GroupEdit -> stringResource(R.string.group_edit_title)
-        SettingsKey.ShortcutAdd -> stringResource(R.string.shortcut_add_title)
+        SettingsKey.TechInfo -> stringResource(R.string.about_tech_info)
         SettingsKey.InvokeSettings -> stringResource(R.string.invoke_section)
         SettingsKey.FanBackground -> stringResource(R.string.fan_background_section)
     }
@@ -137,6 +149,11 @@ internal fun MainScreen(
     val shortcutSelectionBar = remember { ShortcutSelectionBar() }
     val inBatchSelection = activeStack.lastOrNull() == SettingsKey.ShortcutList &&
         shortcutSelectionBar.active
+
+    // 切页时把大标题收起状态归零：否则从详情页滚到收起态返回后，新页会带着旧的高度偏移
+    LaunchedEffect(activeStack.last()) {
+        topAppBarScrollBehavior.state.heightOffset = 0f
+    }
 
     Scaffold(
         topBar = {
@@ -149,6 +166,7 @@ internal fun MainScreen(
                 // 批量模式取小标题形态：miuix TopAppBar 小标题自动水平居中，
                 // 与 HyperOS 闹钟批量顶栏（居中"已选择N项"）同款
                 largeTitle = if (inBatchSelection) "" else currentTitle,
+                scrollBehavior = topAppBarScrollBehavior,
                 navigationIcon = {
                     if (inBatchSelection) {
                         // 批量模式：返回箭头 → ✕ 退出选择（HyperOS 批量惯例）
@@ -180,6 +198,7 @@ internal fun MainScreen(
                     }
                 },
                 actions = {
+                    val top = activeStack.last()
                     if (inBatchSelection) {
                         // 右侧全选图标（HyperOS 闹钟批量顶栏同槽位）；标签恒"全选"，
                         // 行为=全选/取消全选切换（MIUI 批量惯例）
@@ -189,37 +208,69 @@ internal fun MainScreen(
                                 contentDescription = stringResource(R.string.shortcut_select_all)
                             )
                         }
-                    } else if (activeStack.last() == SettingsKey.ShortcutList) {
-                        // 首页右上角＋（布局定稿 §2.1）：进入添加页；批量模式不显示
-                        IconButton(onClick = { settingsStack.add(SettingsKey.ShortcutAdd) }) {
-                            Icon(
-                                imageVector = MiuixIcons.Add,
-                                contentDescription = stringResource(R.string.shortcut_add_title)
-                            )
+                    } else when {
+                        top == SettingsKey.ShortcutList -> {
+                            // 首页右上角＋：打开添加 sheet（添加页已取消）。
+                            // 该页读本地盘，不加刷新图标——revision 令牌已覆盖「添加后不更新」
+                            IconButton(onClick = { shortcutSelectionBar.onAdd?.invoke() }) {
+                                Icon(
+                                    imageVector = MiuixIcons.Add,
+                                    contentDescription = stringResource(R.string.shortcut_add_title)
+                                )
+                            }
                         }
-                    } else if (activeStack.last() is SettingsKey.GroupEdit) {
-                        // 组详情右上角＋（布局 §5.1）：添加现有成员（页内选择器）
-                        IconButton(onClick = { groupEditBar.onAddMember?.invoke() }) {
-                            Icon(
-                                imageVector = MiuixIcons.Add,
-                                contentDescription = stringResource(R.string.group_member_picker_title)
-                            )
+                        top is SettingsKey.GroupEdit -> {
+                            // 组详情：＋添加成员（页内选择器）+ ✓ 保存
+                            IconButton(onClick = { groupEditBar.onAddMember?.invoke() }) {
+                                Icon(
+                                    imageVector = MiuixIcons.Add,
+                                    contentDescription = stringResource(R.string.group_member_picker_title)
+                                )
+                            }
+                            IconButton(onClick = { groupEditBar.onSave?.invoke() }) {
+                                Icon(
+                                    imageVector = MiuixIcons.Basic.Check,
+                                    contentDescription = stringResource(R.string.group_edit_save),
+                                    tint = MiuixTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        top is SettingsKey.ShortcutEdit -> {
+                            IconButton(onClick = { shortcutEditBar.onSave?.invoke() }) {
+                                Icon(
+                                    imageVector = MiuixIcons.Basic.Check,
+                                    contentDescription = stringResource(R.string.shortcut_save),
+                                    tint = MiuixTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        top == SettingsKey.ShortcutPicker ||
+                            top == SettingsKey.QsTilePicker -> {
+                            // 数据源在 App 之外（PM / LauncherApps / :ui 准入）→ 主动刷新
+                            IconButton(onClick = { refreshBar.onRefresh?.invoke() }) {
+                                Icon(
+                                    imageVector = MiuixIcons.Refresh,
+                                    contentDescription = stringResource(R.string.logs_refresh),
+                                    tint = MiuixTheme.colorScheme.onSurface
+                                )
+                            }
                         }
                     }
                 }
             )
         }
     ) { padding ->
-        NavDisplay(
-            backStack = activeStack,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            effects = NavDisplayEffects(
-                cornerClipRadius = rememberNavSystemCornerRadius(),
-                backdropColor = MiuixTheme.colorScheme.background
-            )
-        ) {
+        CompositionLocalProvider(LocalTopAppBarScrollBehavior provides topAppBarScrollBehavior) {
+            NavDisplay(
+                backStack = activeStack,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                effects = NavDisplayEffects(
+                    cornerClipRadius = rememberNavSystemCornerRadius(),
+                    backdropColor = MiuixTheme.colorScheme.surface
+                )
+            ) {
             entry<SettingsKey.TabSettings> {
                 RootPageContainer(
                     activeTab = activeTab,
@@ -259,6 +310,9 @@ internal fun MainScreen(
                         prefsRevision = prefsRevision,
                         onNavigateToDiagnostics = {
                             aboutStack.add(SettingsKey.Diagnostics)
+                        },
+                        onNavigateToTechInfo = {
+                            aboutStack.add(SettingsKey.TechInfo)
                         },
                         modifier = Modifier.weight(1f)
                     )
@@ -305,42 +359,6 @@ internal fun MainScreen(
                     )
                 }
             }
-            entry<SettingsKey.ShortcutAdd> {
-                DetailPageContainer {
-                    ShortcutAddPage(
-                        prefs = prefs,
-                        // 选择类型即替换本页进入新建流程：保存/取消后直接回列表
-                        onAddKind = { kind ->
-                            popLast(settingsStack)
-                            settingsStack.add(
-                                SettingsKey.ShortcutEdit(
-                                    ShortcutAction(
-                                        id = UUID.randomUUID().toString(),
-                                        kind = kind,
-                                        label = "",
-                                        enabled = true
-                                    ),
-                                    isNew = true
-                                )
-                            )
-                        },
-                        onAddGroup = {
-                            popLast(settingsStack)
-                            settingsStack.add(
-                                SettingsKey.GroupEdit(
-                                    com.lsp.hypersidebar.util.ShortcutAction(
-                                        id = UUID.randomUUID().toString(),
-                                        kind = com.lsp.hypersidebar.util.ShortcutKind.GROUP,
-                                        label = "",
-                                        enabled = true
-                                    ),
-                                    isNew = true
-                                )
-                            )
-                        }
-                    )
-                }
-            }
             entry<SettingsKey.GroupEdit> { key ->
                 DetailPageContainer {
                     GroupEditPage(
@@ -367,6 +385,7 @@ internal fun MainScreen(
                         shortcut = key.shortcut,
                         isNew = key.isNew,
                         prefs = prefs,
+                        bar = shortcutEditBar,
                         initialTargetSpec = SplitResult(
                             pkg = key.shortcut.packageName ?: "",
                             act = key.shortcut.activityName ?: ""
@@ -416,6 +435,14 @@ internal fun MainScreen(
                     )
                 }
             }
+            entry<SettingsKey.TechInfo> {
+                DetailPageContainer {
+                    TechInfoPage(
+                        service = service,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
             entry<SettingsKey.InvokeSettings> {
                 DetailPageContainer {
                     InvokeSettingsPage(
@@ -435,6 +462,7 @@ internal fun MainScreen(
             entry<SettingsKey.QsTilePicker> {
                 DetailPageContainer {
                     QsTilePickerPage(
+                        bar = refreshBar,
                         onSelected = { item, isTile ->
                             // 与 ShortcutPicker 同款回填：原地替换栈中编辑键 + 弹出选择器。
                             // 磁贴→QS_TILE（类名存 serviceName）；应用快捷方式→COMPONENT
@@ -463,14 +491,14 @@ internal fun MainScreen(
                                 )
                             }
                             popLast(settingsStack)
-                        },
-                        onBack = { popLast(settingsStack) }
+                        }
                     )
                 }
             }
             entry<SettingsKey.ShortcutPicker> {
                 DetailPageContainer {
                     ActivityPickerPage(
+                        bar = refreshBar,
                         onSelected = { pkg, act, label, isQsTile ->
                             // 选择器回填：原地替换栈中编辑键 + 弹出选择器（同帧），
                             // 编辑页从更新后的 shortcut 重建字段（等价旧 when() 销毁重建语义）
@@ -498,10 +526,10 @@ internal fun MainScreen(
                                 )
                             }
                             popLast(settingsStack)
-                        },
-                        onBack = { popLast(settingsStack) }
+                        }
                     )
                 }
+            }
             }
         }
     }
@@ -521,7 +549,7 @@ private fun RootPageContainer(
     Column(
         Modifier
             .fillMaxSize()
-            .background(MiuixTheme.colorScheme.background)
+            .background(MiuixTheme.colorScheme.surface)
     ) {
         content()
         RootTabBar(activeTab = activeTab, onSelect = onSelectTab)
@@ -530,7 +558,12 @@ private fun RootPageContainer(
 
 @Composable
 private fun RootTabBar(activeTab: Int, onSelect: (Int) -> Unit) {
-    NavigationBar(mode = NavigationBarDisplayMode.IconAndText) {
+    // defaultWindowInsetsPadding=false：Scaffold 已把系统栏高度作为内容 padding 给到本容器，
+    // 底栏再吃一次 navigationBars insets ⇒ 底栏比 HyperOS 原生高出一个手势条高度
+    NavigationBar(
+        mode = NavigationBarDisplayMode.IconAndText,
+        defaultWindowInsetsPadding = false
+    ) {
         NavigationBarItem(
             selected = activeTab == 0,
             onClick = { onSelect(0) },
@@ -548,11 +581,13 @@ private fun RootTabBar(activeTab: Int, onSelect: (Int) -> Unit) {
 
 @Composable
 private fun DetailPageContainer(content: @Composable () -> Unit) {
-    // U0 教训：NavDisplay 过渡期新旧 scene 同组合，页面必须带不透明背景
+    // U0 教训：NavDisplay 过渡期新旧 scene 同组合，页面必须带不透明背景。
+    // 用 surface（非 background）：卡片是 surfaceContainer，浅色 #FFF 卡压在 #F7F7F7 页上，
+    // 深色 #242424 卡压在 #000 页上 —— 这才是 miuix 的层级（background 与卡片同色，边界会消失）
     Box(
         Modifier
             .fillMaxSize()
-            .background(MiuixTheme.colorScheme.background)
+            .background(MiuixTheme.colorScheme.surface)
     ) {
         content()
     }

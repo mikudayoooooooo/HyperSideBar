@@ -139,7 +139,7 @@ internal fun SettingsPage(
     }
 
     SettingsList(modifier = modifier) {
-        item { SmallTitle(text = stringResource(R.string.module_section)) }
+        item { SectionTitle(text = stringResource(R.string.module_section)) }
         item {
             // 大色块状态卡（§2.5 反馈轮）：绿=正常 / 黄=通道异常（明细拼进卡内，熔断可点重试）
             // / 红=未激活；探针两端行不常显，异常才有存在感
@@ -163,7 +163,7 @@ internal fun SettingsPage(
             }
         }
 
-        item { SmallTitle(text = stringResource(R.string.fan_layout_section)) }
+        item { SectionTitle(text = stringResource(R.string.fan_layout_section)) }
         item {
             // 三形态（竖/横/底角）一张卡：miuix TabRow 切换 + 铺满预览，点击进对应布局 sheet
             FanPreviewTabsCard(
@@ -176,15 +176,12 @@ internal fun SettingsPage(
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
-                    val swipeDp = remember(effectivePrefs, effectiveRepo.revision) {
-                        effectiveRepo.triggerMinDistanceDp().roundToInt()
-                    }
                     val dwellMs = remember(effectivePrefs, effectiveRepo.revision) {
                         effectiveRepo.triggerDwellMs()
                     }
                     ArrowPreference(
                         title = stringResource(R.string.invoke_section),
-                        summary = stringResource(R.string.invoke_settings_summary, swipeDp, dwellMs),
+                        summary = stringResource(R.string.invoke_settings_summary, dwellMs),
                         onClick = onNavigateToInvokeSettings
                     )
                     val fogPct = remember(effectivePrefs, effectiveRepo.revision) {
@@ -205,7 +202,7 @@ internal fun SettingsPage(
             }
         }
 
-        item { SmallTitle(text = stringResource(R.string.apps_section)) }
+        item { SectionTitle(text = stringResource(R.string.apps_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
@@ -225,7 +222,7 @@ internal fun SettingsPage(
             }
         }
 
-        item { SmallTitle(text = stringResource(R.string.appearance)) }
+        item { SectionTitle(text = stringResource(R.string.appearance)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
@@ -275,8 +272,13 @@ private fun SettingsList(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .overScrollVertical(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+            .settingsScroll(),
+        contentPadding = PaddingValues(
+            start = SettingsDimens.ScreenInset,
+            end = SettingsDimens.ScreenInset,
+            top = SettingsDimens.ListTop,
+            bottom = SettingsDimens.ListBottom
+        ),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         content = content
     )

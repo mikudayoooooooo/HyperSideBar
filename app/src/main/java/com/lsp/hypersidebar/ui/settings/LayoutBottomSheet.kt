@@ -328,6 +328,15 @@ private fun LayoutSheetContent(
                     checked = repo.cornerSuppressEnabled(),
                     onCheckedChange = { repo.putDraft(PrefKeys.CORNER_SUPPRESS_ENABLED, it) }
                 )
+                // 兜底（2026-10-31）：三键导航（无小白条）时 launcher 的 NavStubView 不存在，
+                // 底角斜滑无人接收 ⇒ 打开后改由 SystemUI 输入面识别并转发 :ui。
+                // 默认关：这是"系统没有的行为"，装完模块不该悄悄接管角区手势。
+                SwitchPreference(
+                    title = stringResource(R.string.corner_spy_fallback_title),
+                    summary = stringResource(R.string.corner_spy_fallback_summary),
+                    checked = repo.cornerSpyFallbackEnabled(),
+                    onCheckedChange = { repo.putDraft(PrefKeys.CORNER_SPY_FALLBACK, it) }
+                )
             }
         }
 
@@ -387,30 +396,7 @@ private fun LayoutSheetContent(
                 onValueChange = { putOuterCount(it.toInt()) },
                 onValueChangeFinished = {}
             )
-            // 压暗过渡时长（2026-10-17）：不随方向变化 ⇒ 不走 spec；draft-aware ⇒ 拖滑条即时预览，
-            // 下次呼出生效（scrim 时长在呼出时由 ComposeFanHost 读一次）。
-            val scrimFade = repo.fanScrimFadeMs()
-            val scrimStep = LayoutDefaults.FAN_SCRIM_FADE_STEP_MS
-            SliderPreference(
-                title = stringResource(R.string.fan_scrim_fade_title),
-                summary = stringResource(R.string.fan_scrim_fade_summary),
-                valueText = "$scrimFade ms",
-                value = scrimFade.toFloat().coerceIn(
-                    LayoutDefaults.FAN_SCRIM_FADE_MIN_MS.toFloat()..
-                        LayoutDefaults.FAN_SCRIM_FADE_MAX_MS.toFloat()
-                ),
-                valueRange = LayoutDefaults.FAN_SCRIM_FADE_MIN_MS.toFloat()..
-                    LayoutDefaults.FAN_SCRIM_FADE_MAX_MS.toFloat(),
-                steps = (LayoutDefaults.FAN_SCRIM_FADE_MAX_MS - LayoutDefaults.FAN_SCRIM_FADE_MIN_MS) /
-                    scrimStep - 1,
-                onValueChange = {
-                    val v = (kotlin.math.round(it / scrimStep) * scrimStep).toInt().coerceIn(
-                        LayoutDefaults.FAN_SCRIM_FADE_MIN_MS, LayoutDefaults.FAN_SCRIM_FADE_MAX_MS
-                    )
-                    repo.putDraft(PrefKeys.FAN_SCRIM_FADE_MS, v)
-                },
-                onValueChangeFinished = {}
-            )
+            // 压暗过渡时长 2026-10-25 删除：时长回归 FanMenuCompose 常量（用户反馈"没必要可调"）
         }
 
         if (clampedHint) {

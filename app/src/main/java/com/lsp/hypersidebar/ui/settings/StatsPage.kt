@@ -6,6 +6,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -21,9 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.util.ChannelRate
 import com.lsp.hypersidebar.util.FanChannel
@@ -36,7 +35,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -76,9 +74,9 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
     Column(
         modifier
             .fillMaxSize()
-            .background(MiuixTheme.colorScheme.background)
-            .padding(horizontal = 16.dp)
-            .overScrollVertical()
+            .background(MiuixTheme.colorScheme.surface)
+            .padding(horizontal = SettingsDimens.ScreenInset)
+            .settingsScroll()
             .verticalScroll(rememberScrollState())
     ) {
         Spacer(Modifier.padding(top = 8.dp))
@@ -111,7 +109,7 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
             )
         }
 
-        SmallTitle(text = stringResource(R.string.stats_today))
+        SectionTitle(text = stringResource(R.string.stats_today))
         Card(Modifier.fillMaxWidth()) {
             MetricRow(stringResource(R.string.stats_invocations), today[StatsRecorder.MetricKeys.SHOWS])
             MetricRow(stringResource(R.string.stats_opens), today[StatsRecorder.MetricKeys.OPENS])
@@ -127,12 +125,12 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
             MetricRow(stringResource(R.string.stats_avg_gap), avgSecs(samples.gapMs), suffix = "s")
         }
 
-        SmallTitle(text = stringResource(R.string.stats_misclick_title))
+        SectionTitle(text = stringResource(R.string.stats_misclick_title))
         Card(Modifier.fillMaxWidth()) {
             if (misfire.isEmpty()) {
                 Text(
                     stringResource(R.string.stats_misclick_empty),
-                    fontSize = 13.sp,
+                    style = MiuixTheme.textStyles.footnote1,
                     color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                 )
@@ -147,12 +145,12 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
         }
         Text(
             stringResource(R.string.stats_misclick_note),
-            fontSize = 11.sp,
+            style = MiuixTheme.textStyles.footnote2,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
         )
 
-        SmallTitle(text = stringResource(R.string.stats_total))
+        SectionTitle(text = stringResource(R.string.stats_total))
         Card(Modifier.fillMaxWidth()) {
             MetricRow(stringResource(R.string.stats_invocations), total[StatsRecorder.MetricKeys.SHOWS])
             MetricRow(stringResource(R.string.stats_opens), total[StatsRecorder.MetricKeys.OPENS])
@@ -168,9 +166,8 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
         }
         Text(
             stringResource(R.string.stats_note),
-            fontSize = 11.sp,
-            color = MiuixTheme.colorScheme.onSecondaryContainer,
-            maxLines = 3, overflow = TextOverflow.Ellipsis,
+            style = MiuixTheme.textStyles.footnote2,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
         )
     }
@@ -183,15 +180,26 @@ private fun MetricRow(label: String, value: Any?, isRate: Boolean = false, suffi
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
-        Text(label, fontSize = 14.sp, color = MiuixTheme.colorScheme.onBackground)
-        Spacer(Modifier.weight(1f))
+        // 标签让位给数值：长中文标签在窄屏/大字体下会把值挤成 0 宽（原实现两个 Text 都无约束）
+        Text(
+            label,
+            style = MiuixTheme.textStyles.body2,
+            color = MiuixTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(Modifier.width(12.dp))
         val text = when {
             value == null -> "--"
             isRate -> "$value%"
             suffix != null -> "$value $suffix"
             else -> "$value"
         }
-        Text(text, fontSize = 14.sp, color = MiuixTheme.colorScheme.primary)
+        Text(
+            text,
+            style = MiuixTheme.textStyles.body2,
+            color = MiuixTheme.colorScheme.primary,
+            maxLines = 1
+        )
     }
 }
 
@@ -218,12 +226,12 @@ private fun MisclickRow(rate: ChannelRate) {
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         Row(Modifier.fillMaxWidth()) {
-            Text(label, fontSize = 14.sp, color = MiuixTheme.colorScheme.onBackground)
+            Text(label, style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onBackground)
             Spacer(Modifier.weight(1f))
             Text(
                 if (rate.hasSample) stringResource(R.string.stats_misclick_value, pct(rate.r1), pct(rate.r))
                 else "--",
-                fontSize = 14.sp,
+                style = MiuixTheme.textStyles.body2,
                 color = valueColor
             )
         }
@@ -233,13 +241,13 @@ private fun MisclickRow(rate: ChannelRate) {
                 rate.expands, rate.validExpands, rate.l1, rate.l2, rate.l3,
                 rate.fixL1 + rate.fixL2, rate.chains, rate.sweeps
             ),
-            fontSize = 11.sp,
+            style = MiuixTheme.textStyles.footnote2,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary
         )
         if (rate.hasSample) {
             Text(
                 stringResource(R.string.stats_misclick_alt, pct(rate.rExclFix), pct(rate.browseExitRate)),
-                fontSize = 11.sp,
+                style = MiuixTheme.textStyles.footnote2,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary
             )
         }

@@ -57,10 +57,11 @@ object FanPrewarmer {
     }
     fun onFanShown(context: Context, tileTargets: List<Pair<String, String>>, fanAppPkgs: List<String>, token: String?) {
         val appCtx = context.applicationContext
-        // 图标预热：扇形固定应用+快捷栏宿主优先 + AllApps 首屏（进程级 LruCache ≈2-3MB，无进程语义）
-        val iconPkgs = (fanAppPkgs.asSequence() + DataLoader.loadApps(appCtx).asSequence())
-            .distinct().take(ICON_PRELOAD_COUNT).toList()
-        AppIconCache.preload(appCtx, iconPkgs)
+        // 图标预热：只灌本进程会画的那批（扇形固定应用+快捷栏宿主）。旧实现并把
+        // DataLoader.loadApps() 的结果也灌进来（注释说是"AllApps 首屏"）——但 AppIconCache
+        // 是**进程级 object**，而 AllApps 面板跑在模块进程（AndroidManifest 无 android:process），
+        // :ui 灌的这份对面板完全不可见 ⇒ 纯浪费（2026-10-31 核实后删）。
+        AppIconCache.preload(appCtx, fanAppPkgs.distinct().take(ICON_PRELOAD_COUNT))
         if (tileTargets.isEmpty()) return
         executor.execute {
             runCatching {

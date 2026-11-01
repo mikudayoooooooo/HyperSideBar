@@ -278,6 +278,31 @@ object ShortcutStore {
         }
     }
 
+    /** 添加裁决结果：要么带着（可能降级的）条目保存，要么因存储满被拒。 */
+    sealed interface AddDecision {
+        /** [disabledByCap] = 因启用上限被降级为未启用（调用方据此提示用户）。 */
+        data class Save(val item: ShortcutAction, val disabledByCap: Boolean) : AddDecision
+        data object RejectedStorageFull : AddDecision
+    }
+
+    /**
+     * 添加前的容量裁决（纯函数，可 JVM 单测）：调用方在添加 sheet 保存时用它决定
+     * ①能不能存（存储上限）②要不要降级为未启用（启用上限）。
+     *
+     * 背景：这条路径原先既不查 [ENABLED_CAP] 也不看 [addShortcut] 的返回值——用户
+     * 填完一整轮表单后可能什么都没存下，或者产出第 6 个启用项。
+     */
+    fun decideAdd(
+        candidate: ShortcutAction,
+        enabledCount: Int,
+        storageUnits: Int
+    ): AddDecision = when {
+        storageUnits >= MAX_STORED_SHORTCUTS -> AddDecision.RejectedStorageFull
+        candidate.enabled && enabledCount >= ENABLED_CAP ->
+            AddDecision.Save(candidate.copy(enabled = false), disabledByCap = true)
+        else -> AddDecision.Save(candidate, disabledByCap = false)
+    }
+
     /**
      * 添加一个用户快捷方式（存储上限按 storageUnits 计——组占 1+子项数，与
      * GroupEditPage/设置页同口径，2026-10-25 统一）。

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
@@ -36,6 +38,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -70,6 +74,8 @@ private const val TAG = "GroupEditPage"
  */
 internal class GroupEditBar {
     var onAddMember: (() -> Unit)? = null
+    /** 顶栏 ✓：保存（校验失败时留在页内提示，见 save()） */
+    var onSave: (() -> Unit)? = null
 }
 
 /**
@@ -222,9 +228,17 @@ internal fun GroupEditPage(
         selectedMemberIds = emptySet()
     }
 
-    // 顶栏＋桥（添加成员 → 页内选择器）
-    SideEffect { bar?.onAddMember = { showPicker = true } }
-    DisposableEffect(Unit) { onDispose { bar?.onAddMember = null } }
+    // 顶栏＋桥（添加成员 → 页内选择器）；顶栏 ✓ = 保存
+    SideEffect {
+        bar?.onAddMember = { showPicker = true }
+        bar?.onSave = { save() }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            bar?.onAddMember = null
+            bar?.onSave = null
+        }
+    }
 
     val memberIds = members.map { it.id }.toSet()
     val candidates = topList.filter {
@@ -252,22 +266,30 @@ internal fun GroupEditPage(
             state = listState,
             modifier = Modifier
                 .weight(1f)
-                .overScrollVertical(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+                .settingsScroll(),
+            contentPadding = PaddingValues(
+                start = SettingsDimens.ScreenInset,
+                end = SettingsDimens.ScreenInset,
+                top = SettingsDimens.ListTop,
+                bottom = SettingsDimens.ListBottom
+            ),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             item { SmallTitle(text = stringResource(R.string.group_edit_name)) }
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        // 组预览：借用图标优先（与扇形端一致），否则三角拼贴
-                        GroupPreview(group = group, members = members, name = name)
-                        Spacer(Modifier.size(12.dp))
-                        TextField(
-                            value = name,
-                            onValueChange = { name = it; error = null },
-                            label = stringResource(R.string.group_edit_name)
-                        )
+                        // 图标与组名同一栏（用户定案）：组预览在左，名称输入占满剩余宽度
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            GroupIconPreview(group = group, members = members, name = name)
+                            Spacer(Modifier.width(SettingsDimens.ScreenInset))
+                            TextField(
+                                value = name,
+                                onValueChange = { name = it; error = null },
+                                label = stringResource(R.string.group_edit_name),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                         BasicComponent(
                             title = stringResource(R.string.group_edit_group_switch),
                             summary = "",
@@ -315,18 +337,20 @@ internal fun GroupEditPage(
                         val checked = member.id in selectedMemberIds
                         BasicComponent(
                             title = member.label.ifBlank { member.id },
-                            summary = member.kind.name,
+                            summary = stringResource(shortcutKindLabelRes(member.kind)),
                             endActions = { SelectionCircle(checked = checked) },
                             onClick = {
                                 selectedMemberIds = if (checked) selectedMemberIds - member.id
                                 else selectedMemberIds + member.id
-                            }
+                            },
+                            // 选中态写进语义树：SelectionCircle 只是绘制，读屏原来看不到
+                            modifier = Modifier.semantics { this.selected = checked }
                         )
                     } else {
                         val memberIconPkg = member.iconPackageName ?: member.packageName
                         BasicComponent(
                             title = member.label.ifBlank { member.id },
-                            summary = member.kind.name,
+                            summary = stringResource(shortcutKindLabelRes(member.kind)),
                             startAction = if (memberIconPkg != null) {
                                 { SettingsAppIcon(packageName = memberIconPkg, appName = member.label, size = 32f) }
                             } else null,
@@ -342,7 +366,9 @@ internal fun GroupEditPage(
                                 Box(
                                     modifier = Modifier
                                         .padding(start = 8.dp)
-                                        .size(40.dp)
+                                        .size(48.dp)
+                                        // 与快捷方式列表同一仲裁：手柄按下消费 down，别让整行长按抢进多选
+                                        .suppressRowLongPress()
                                         .draggableHandle(
                                             onDragStarted = {
                                                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -418,23 +444,19 @@ internal fun GroupEditPage(
                     Text(stringResource(R.string.group_member_delete))
                 }
             }
-        } else {
-            // 收底动作：保存 + 解散
-            Card(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    TextButton(
-                        text = stringResource(R.string.group_edit_save),
-                        onClick = { save() },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    if (!isNew) {
-                        TextButton(
-                            text = stringResource(R.string.group_edit_dissolve),
-                            onClick = { showDissolveConfirm = true },
-                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-                        )
-                    }
-                }
+        } else if (!isNew) {
+            // 收底只剩危险操作（保存已移顶栏 ✓）；新建态无解散
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(SettingsDimens.ScreenInset)
+            ) {
+                TextButton(
+                    text = stringResource(R.string.group_edit_dissolve),
+                    onClick = { showDissolveConfirm = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.textButtonColors(textColor = MiuixTheme.colorScheme.error)
+                )
             }
         }
     }
@@ -449,37 +471,43 @@ internal fun GroupEditPage(
             onDismissRequest = { showPicker = false },
             content = {
                 Column {
-                    candidates.take(12).forEach { cand ->
-                        val checked = cand.id in pickerSel
-                        BasicComponent(
-                            title = cand.label.ifBlank { cand.id },
-                            summary = cand.kind.name,
-                            endActions = { SelectionCircle(checked = checked) },
-                            onClick = {
-                                pickerSel = if (checked) pickerSel - cand.id
-                                else if (pickerSel.size < room) pickerSel + cand.id
-                                else pickerSel
-                            },
-                            modifier = Modifier.fillMaxWidth()
+                    if (candidates.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.group_edit_add_members),
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.padding(SettingsDimens.CardInner)
                         )
+                    } else {
+                        // 全量可滚动（旧实现 take(12) 静默截断：候选超过 12 个时第 13 个永远选不到）
+                        LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                            items(candidates, key = { it.id }) { cand ->
+                                val checked = cand.id in pickerSel
+                                BasicComponent(
+                                    title = cand.label.ifBlank { cand.id },
+                                    summary = stringResource(shortcutKindLabelRes(cand.kind)),
+                                    endActions = { SelectionCircle(checked = checked) },
+                                    onClick = {
+                                        pickerSel = if (checked) pickerSel - cand.id
+                                        else if (pickerSel.size < room) pickerSel + cand.id
+                                        else pickerSel
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .semantics { this.selected = checked }
+                                )
+                            }
+                        }
                     }
-                    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                        TextButton(
-                            text = stringResource(R.string.layout_sheet_cancel),
-                            onClick = { showPicker = false }
-                        )
-                        TextButton(
-                            text = stringResource(R.string.group_member_picker_confirm, pickerSel.size),
-                            onClick = {
-                                members = members + candidates.filter { it.id in pickerSel }
-                                showPicker = false
-                                error = null
-                            },
-                            colors = if (pickerSel.isEmpty()) ButtonDefaults.textButtonColors(
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-                            ) else ButtonDefaults.textButtonColors()
-                        )
-                    }
+                    ConfirmCancelRow(
+                        confirmText = stringResource(R.string.group_member_picker_confirm, pickerSel.size),
+                        onConfirm = {
+                            members = members + candidates.filter { it.id in pickerSel }
+                            showPicker = false
+                            error = null
+                        },
+                        onCancel = { showPicker = false },
+                        confirmEnabled = pickerSel.isNotEmpty()
+                    )
                 }
             }
         )
@@ -493,23 +521,15 @@ internal fun GroupEditPage(
             summary = stringResource(R.string.group_dissolve_confirm),
             onDismissRequest = { showDissolveConfirm = false },
             content = {
-                Row(horizontalArrangement = Arrangement.SpaceBetween) {
-                    TextButton(
-                        text = stringResource(R.string.layout_sheet_cancel),
-                        onClick = { showDissolveConfirm = false },
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(Modifier.width(20.dp))
-                    TextButton(
-                        text = stringResource(R.string.group_edit_dissolve),
-                        onClick = {
-                            showDissolveConfirm = false
-                            dissolveWith(members)
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.textButtonColors(color = MiuixTheme.colorScheme.error)
-                    )
-                }
+                ConfirmCancelRow(
+                    confirmText = stringResource(R.string.group_edit_dissolve),
+                    onConfirm = {
+                        showDissolveConfirm = false
+                        dissolveWith(members)
+                    },
+                    onCancel = { showDissolveConfirm = false },
+                    danger = true
+                )
             }
         )
     }
@@ -525,59 +545,21 @@ internal fun GroupEditPage(
                 pendingMemberOp = null
             },
             content = {
-                Row(horizontalArrangement = Arrangement.SpaceBetween) {
-                    TextButton(
-                        text = stringResource(R.string.layout_sheet_cancel),
-                        onClick = {
-                            showUnderflowConfirm = false
-                            pendingMemberOp = null
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(Modifier.width(20.dp))
-                    TextButton(
-                        text = stringResource(R.string.group_underfall_continue),
-                        onClick = {
-                            showUnderflowConfirm = false
-                            val op = pendingMemberOp
-                            pendingMemberOp = null
-                            if (op != null) applyMemberOp(op, confirmed = true)
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.textButtonColors(color = MiuixTheme.colorScheme.error)
-                    )
-                }
-            }
-        )
-    }
-}
-
-/** 组预览：借用图标优先（与扇形端一致），否则上1下2三角拼贴（仅启用成员，与展开一致） */
-@Composable
-private fun GroupPreview(group: ShortcutAction, members: List<ShortcutAction>, name: String) {
-    val borrowed = group.iconPackageName
-    if (borrowed != null) {
-        SettingsAppIcon(packageName = borrowed, appName = name, size = 56f)
-        return
-    }
-    val cell = 56f
-    val child = cell * 0.46f
-    val gap = cell * 0.04f
-    val enabledMembers = members.filter { it.enabled }.take(3)
-    Box(modifier = Modifier.size(cell.dp)) {
-        enabledMembers.forEachIndexed { i, m ->
-            val mod = when (i) {
-                0 -> Modifier.offset(x = ((cell - child) / 2f).dp, y = gap.dp)
-                1 -> Modifier.offset(x = gap.dp, y = (cell - child - gap).dp)
-                else -> Modifier.offset(x = (cell - child - gap).dp, y = (cell - child - gap).dp)
-            }
-            Box(modifier = mod) {
-                SettingsAppIcon(
-                    packageName = m.iconPackageName ?: m.packageName ?: "",
-                    appName = m.label,
-                    size = child
+                ConfirmCancelRow(
+                    confirmText = stringResource(R.string.group_underfall_continue),
+                    onConfirm = {
+                        showUnderflowConfirm = false
+                        val op = pendingMemberOp
+                        pendingMemberOp = null
+                        if (op != null) applyMemberOp(op, confirmed = true)
+                    },
+                    onCancel = {
+                        showUnderflowConfirm = false
+                        pendingMemberOp = null
+                    },
+                    danger = true
                 )
             }
-        }
+        )
     }
 }

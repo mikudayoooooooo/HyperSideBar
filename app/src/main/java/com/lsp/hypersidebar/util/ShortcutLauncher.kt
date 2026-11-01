@@ -70,17 +70,38 @@ class DefaultLaunchStrategy : LaunchStrategy {
 class SystemLaunchStrategy : LaunchStrategy {
     override val name = "SYSTEM"
 
+    private companion object {
+        /** 反射查表缓存（2026-10-30）：每次扇形启动都走这条方法，原来每调用一次
+         *  `getMethod` + `isAccessible` + 名字拼接，热路径无谓开销。
+         *  以 context 运行时类名 + 用户句柄为键（ContextImpl 唯一，但别假设）。 */
+        @Volatile private var cachedClass: String? = null
+        @Volatile private var cachedMethod: java.lang.reflect.Method? = null
+    }
+
     override fun startActivity(context: Context, intent: Intent): Boolean {
+        // 前置可解析校验（2026-10-31）：`startActivityAsUser` 对不存在/未导出的目标可能
+        // 静默返回而不抛 ⇒ 旧实现恒 true，调用方据此报"启动成功"（用户症状"失败但没提示"）。
+        val resolvable = runCatching {
+            intent.resolveActivity(context.packageManager) != null
+        }.getOrDefault(true)
+        if (!resolvable) {
+            HLog.w(TAG, "SYSTEM strategy: target unresolved, refusing (${intent.component})")
+            return false
+        }
         return try {
             val userHandle = android.os.Process.myUserHandle()
             // 必须用运行时类（ContextImpl）查找：startActivityAsUser 不声明在抽象 Context 上，
             // 用 Context::class.java 会永远 NoSuchMethodException 然后静默降级
-            val method = context.javaClass.getMethod(
+            val cls = context.javaClass
+            val method = cachedMethod?.takeIf { cachedClass == cls.name } ?: cls.getMethod(
                 FreeformLauncher.START_ACTIVITY_AS_USER, Intent::class.java, UserHandle::class.java
-            )
-            method.isAccessible = true
+            ).also {
+                it.isAccessible = true
+                cachedClass = cls.name
+                cachedMethod = it
+            }
             method.invoke(context, intent, userHandle)
-            Log.d(TAG, "startActivityAsUser invoked via ${context.javaClass.name}")
+            Log.d(TAG, "startActivityAsUser invoked via ${cls.name}")
             true
         } catch (e: NoSuchMethodException) {
             Log.d(TAG, "startActivityAsUser not found, fallback to startActivity")
@@ -239,9 +260,18 @@ object ShortcutLauncher {
             return validation
         }
 
-        // 5. 使用策略启动
+        // 5. 使用策略启动 —— 返回值如实反映（2026-10-31）：旧实现忽略 boolean，
+        //    即使策略明确拒绝也打印 "SUCCESS" 并返回 Success ⇒ 用户看到"失败但没提示"。
         return try {
-            strategy.startActivity(context, intent)
+            if (!strategy.startActivity(context, intent)) {
+                HLog.w(TAG, "launch: strategy refused (${strategy.name}), component=${intent.component}")
+                return if (allowRootFallback && isRootAvailable()) {
+                    HLog.i(TAG, "launch: strategy refused, trying ROOT fallback")
+                    launchViaRoot(action, intent)
+                } else {
+                    LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, "strategy refused")
+                }
+            }
             val cn = intent.component ?: intent.resolveActivity(context.packageManager)
             HLog.i(TAG, "launch: SUCCESS via ${strategy.name}, component=$cn")
             LaunchResult.Success(cn)
@@ -253,8 +283,16 @@ object ShortcutLauncher {
                 LaunchResult.Failure(FailureReason.SECURITY_EXCEPTION, e.message ?: "Permission denied")
             }
         } catch (e: android.content.ActivityNotFoundException) {
+            // 组件缺失但包存在时，非导出目标仍可由 root（shell 身份）启动——与
+            // tryLaunchDirect 对齐，别直接判死
             HLog.e(TAG, "launch: ActivityNotFoundException via ${strategy.name}", e)
-            LaunchResult.Failure(FailureReason.ACTIVITY_NOT_FOUND, e.message ?: "Activity not found")
+            val targetPkg = action.packageName ?: intent.`package`
+            if (allowRootFallback && isRootAvailable() && !targetPkg.isNullOrEmpty()) {
+                HLog.i(TAG, "launch: ANF with existing package, trying ROOT fallback")
+                launchViaRoot(action, intent)
+            } else {
+                LaunchResult.Failure(FailureReason.ACTIVITY_NOT_FOUND, e.message ?: "Activity not found")
+            }
         } catch (e: Exception) {
             HLog.e(TAG, "launch: exception via ${strategy.name}", e)
             if (allowRootFallback && isRootAvailable()) {
@@ -1181,7 +1219,15 @@ object ShortcutLauncher {
         allowRootFallback: Boolean
     ): LaunchResult {
         return try {
-            strategy.startActivity(context, intent)
+            if (!strategy.startActivity(context, intent)) {
+                HLog.w(TAG, "tryLaunchDirect: strategy refused (${strategy.name}), component=${intent.component}")
+                return if (allowRootFallback && isRootAvailable()) {
+                    HLog.i(TAG, "tryLaunchDirect: strategy refused, trying ROOT fallback")
+                    launchViaRoot(action, intent)
+                } else {
+                    LaunchResult.Failure(FailureReason.LAUNCH_EXCEPTION, "strategy refused")
+                }
+            }
             val cn = intent.component ?: intent.resolveActivity(context.packageManager)
             HLog.i(TAG, "tryLaunchDirect: SUCCESS via ${strategy.name}, component=$cn")
             LaunchResult.Success(cn)

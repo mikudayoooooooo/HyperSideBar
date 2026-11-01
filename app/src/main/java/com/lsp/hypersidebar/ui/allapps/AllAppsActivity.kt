@@ -41,6 +41,9 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -93,7 +96,6 @@ import java.util.Locale
 
 private const val TAG = "AllAppsActivity"
 private const val PREFS_NAME = PrefsFiles.APP_LOCAL
-private const val MAX_DATA_WAIT_MS = 1500L
 
 /** 磁贴圆角（A3：14→18dp，MIUI 抽屉近亲）。squircle 直接吃 Dp，无 Shape 分配。 */
 private val TILE_CORNER = 18.dp
@@ -288,6 +290,9 @@ private fun AllAppsScreen(
     LaunchedEffect(prefs, initialSuggestions, retryKey) {
         if (!initialSuggestions.isNullOrEmpty()) {
             allPkgs = initialSuggestions
+            // 图标预灌**提前到拿到列表这一刻**（2026-10-30）：此前只在组装完成后才开始，
+            // 与 label 的冷 PM 循环（实测 769ms）串行；现在与它重叠，冷开少一段等待。
+            AppIconCache.preload(context, initialSuggestions)
             // 后台写回保鲜：内容没变不写（AllApps 高频打开，实际写盘趋近于零）
             withContext(Dispatchers.IO) {
                 val json = org.json.JSONArray(initialSuggestions).toString()
@@ -307,16 +312,17 @@ private fun AllAppsScreen(
                     (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotEmpty() }
                 }
             }.getOrNull().orEmpty()
-            if (cached.isNotEmpty()) allPkgs = cached
-            // 2) 等待 DataLoader 新数据（维持既有 1.5s 上限循环），拿到非空即覆盖 + 写回
-            var list = DataLoader.loadApps(context)
-            val deadline = System.currentTimeMillis() + MAX_DATA_WAIT_MS
-            while (list.isEmpty() && System.currentTimeMillis() < deadline) {
-                delay(250)
-                list = DataLoader.loadApps(context)
+            if (cached.isNotEmpty()) {
+                allPkgs = cached
+                AppIconCache.preload(context, cached)
             }
+            // 2) 最后兜底 DataLoader（模块进程反射被 hidden API blocklist 拒绝 ⇒ 恒空）。
+            //    2026-10-30：删掉原来的 1.5s、每 250ms 一次的等待循环——那条路在本进程
+            //    从来没成功过，冷开白等最多 1.5s，还会让 loadFailed 三态延迟落定。
+            val list = DataLoader.loadApps(context)
             if (list.isNotEmpty()) {
                 allPkgs = list
+                AppIconCache.preload(context, list)
                 withContext(Dispatchers.IO) {
                     runCatching {
                         prefs.edit().putString(PrefKeys.CACHED_SUGGESTIONS, org.json.JSONArray(list).toString()).apply()
@@ -325,7 +331,7 @@ private fun AllAppsScreen(
             }
             // 3) 全部落空且无缓存：allPkgs 保持空 → 空态文案兜底
             else if (allPkgs.isEmpty()) {
-                // §11.4：等待超时且无任何数据（缓存/extras 全空）→ 显式失败态
+                // §11.4：无任何数据（缓存/extras 全空）→ 显式失败态
                 //（固定应用也空才算失败——有固定区时列表仍可用）
                 loadFailed = true
             }
@@ -334,33 +340,50 @@ private fun AllAppsScreen(
 
     // 数据组装单次 IO 化（1C P1）：label 的 PM binder 与 buildGroups 的逐条 ICU 转写
     // 全部离开主线程（此前 label 回填帧在主线程整段分组，219 项转写卡一帧），
-    // 主线程只收最终 entries
-    LaunchedEffect(prefs, allPkgs) {
+    // 主线程只收最终 entries。
+    // 2026-10-30：key 从 `prefs` 实例改成 `prefsIsFallback` 布尔 —— remotePrefs 绑定完成会换
+    // prefs 对象（并连带 allPkgs 重设），旧 key 让本 effect 连环重启（代码原注释实测 3 次、
+    // 冷组装 769ms 被顶到 1376ms）。现在绑定只触发**一次**重跑（布尔翻转），数据到达也不再重启。
+    LaunchedEffect(allPkgs, prefsIsFallback) {
         val pkgs = allPkgs
-        val fixed = runCatching {
-            prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty()
-        }.getOrDefault(emptySet())
-        // D7 诊断：prefs 实例来源 + fixed 实读数量（绑定切换前后各一条）
-        Log.i(TAG, "assemble: prefsIsFallback=$prefsIsFallback, fixed=${fixed.size}, allPkgs=${pkgs.size}")
-        if (pkgs.isEmpty() && fixed.isEmpty()) {
+        val t0 = System.currentTimeMillis()
+        // 主线程不再读 prefs / 碰 PM：固定区与顺序键都在 IO 里读（私有 prefs 的首次 XML 解析
+        // 也是毫秒级，放主线程没有必要）
+        var labels: Map<String, String> = emptyMap()
+        val meta = withContext(Dispatchers.IO) {
+            val fixed = runCatching {
+                prefs.getStringSet(PrefKeys.CUSTOM_APPS, emptySet()).orEmpty()
+            }.getOrDefault(emptySet())
+            // D7 诊断：prefs 实例来源 + fixed 实读数量（绑定切换前后各一条）
+            Log.i(TAG, "assemble: prefsIsFallback=$prefsIsFallback, fixed=${fixed.size}, allPkgs=${pkgs.size}")
+            if (pkgs.isEmpty() && fixed.isEmpty()) return@withContext null
+            // 固定区按用户拖动排序展示（§2.4），无序键时按 label 字母序兜底
+            val fixedOrder = runCatching {
+                prefs.getString(PrefKeys.CUSTOM_APPS_ORDER, null)?.let { s ->
+                    val arr = org.json.JSONArray(s)
+                    (0 until arr.length()).map { arr.optString(it) }
+                }
+            }.getOrNull() ?: emptyList()
+            // 冷启动盘灌：上次会话的 label 快照先顶住，miss 才回 PM（实测冷组装 769ms 的主构成）
+            AppMetaCache.warmFromDisk(context)
+            // ===== 第一段：只用缓存/盘灌 label（零 binder）先出一版 =====
+            // 旧实现等全量 PM label 回来才发布 entries，骨架屏因此要挡到整表组装完。
+            val peeked = (pkgs + fixed).distinct().associateWith { AppMetaCache.peek(it) ?: it }
+            val stage1 = buildEntries(pkgs, sortFixed(fixed, fixedOrder, peeked), peeked)
+            Triple(fixed, fixedOrder, stage1)
+        }
+        if (meta == null) {
             hasFixedApps = false
             entries = emptyList()
             return@LaunchedEffect
         }
-        // 耗时锚点（冷启动段位测量）：本段 cost 与 RemotePrefsBridge "onServiceBind"、
-        // AppIconCache "preload" 日志的时间戳差 = 绑定等待/组装/图标预灌各段占比
-        val t0 = System.currentTimeMillis()
-        // 固定区按用户拖动排序展示（§2.4），无序键时按 label 字母序兜底
-        val fixedOrder = runCatching {
-            prefs.getString(PrefKeys.CUSTOM_APPS_ORDER, null)?.let { s ->
-                val arr = org.json.JSONArray(s)
-                (0 until arr.length()).map { arr.optString(it) }
-            }
-        }.getOrNull() ?: emptyList()
-        var labels: Map<String, String> = emptyMap()
+        val (fixed, fixedOrder, stage1) = meta
+        hasFixedApps = fixed.isNotEmpty()
+        entries = stage1
+        Log.i(TAG, "assemble stage1: entries=${stage1.size} cost=${System.currentTimeMillis() - t0}ms")
+
+        // ===== 第二段：全量 label（PM 兜底）覆盖发布 =====
         val result = withContext(Dispatchers.IO) {
-            // 冷启动盘灌：上次会话的 label 快照先顶住，miss 才回 PM（实测冷组装 769ms 的主构成）
-            AppMetaCache.warmFromDisk(context)
             // 绑定/数据到达窗口内本 effect 会连环重启（实测 3 次）：被取消的跑次逐包
             // ensureActive 立即终止，避免多份冷 PM label 循环并发互抢（769ms 被顶到 1376ms）
             val fetched = mutableMapOf<String, String>()
@@ -369,12 +392,8 @@ private fun AllAppsScreen(
                 fetched[pkg] = AppMetaCache.label(context, pkg)
             }
             labels = fetched
-            val fixedSorted = fixed
-                .sortedBy { pkg -> fixedOrder.indexOf(pkg).let { if (it >= 0) it else Int.MAX_VALUE } }
-                .map { it to (fetched[it] ?: it) }
-            buildEntries(pkgs, fixedSorted, fetched)
+            buildEntries(pkgs, sortFixed(fixed, fixedOrder, fetched), fetched)
         }
-        hasFixedApps = fixed.isNotEmpty()
         entries = result
         Log.i(TAG, "assemble done: entries=${result.size} cost=${System.currentTimeMillis() - t0}ms")
         // 本地镜像（IO）：CACHED_SUGGESTIONS/CUSTOM_APPS/CUSTOM_APPS_ORDER 写入模块本地
@@ -401,9 +420,10 @@ private fun AllAppsScreen(
             }
             AppMetaCache.persistToDisk(context, labels)
         }
-        // 图标全量预灌（后台 4 线程并行）：快滑时新磁贴基本同帧命中缓存，消除
-        // 逐磁贴 miss 的解码风暴与重组洪水；未及覆盖的格子由 AppTile miss 路径兜底
-        AppIconCache.preload(context, pkgs + fixed)
+        // 固定区图标补灌（全部列表的预灌已在拿到数据那一刻起，见上面的数据 effect）：
+        // 固定区来自 CUSTOM_APPS，可能含不在建议列表里的包，这里补一份；
+        // single-flight 保证与在途的预灌/磁贴 miss 不重复解码
+        AppIconCache.preload(context, fixed.toList())
     }
 
     val gridState = rememberLazyGridState()
@@ -651,10 +671,8 @@ private fun SkeletonGrid(modifier: Modifier = Modifier) {
                     Modifier
                         .size(52.dp)
                         .alpha(alpha.value)
-                        .squircleSurface(
-                            color = MiuixTheme.colorScheme.secondaryContainer,
-                            cornerRadius = 14.dp
-                        )
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(MiuixTheme.colorScheme.secondaryContainer)
                 )
                 Spacer(Modifier.padding(top = 8.dp))
                 Box(
@@ -663,10 +681,8 @@ private fun SkeletonGrid(modifier: Modifier = Modifier) {
                         .padding(bottom = 4.dp)
                         .height(10.dp)
                         .alpha(alpha.value)
-                        .squircleSurface(
-                            color = MiuixTheme.colorScheme.secondaryContainer,
-                            cornerRadius = 5.dp
-                        )
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(MiuixTheme.colorScheme.secondaryContainer)
                 )
             }
         }
@@ -687,7 +703,9 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
     }
     // Painter 随位图记忆化：否则每次重组（含同位图）都重建 BitmapPainter/asImageBitmap
     val painter = remember(bitmap) { bitmap?.let { BitmapPainter(it.asImageBitmap()) } }
-    // A3 按压反馈：改用 miuix pressable + SinkFeedback 下沉反馈（无 ripple，贴合 MIUI 磁贴观感）
+    // A3 按压反馈：miuix pressable + SinkFeedback 下沉反馈（无 ripple，贴合 MIUI 磁贴观感）。
+    // 2026-11-01 试过把两个指针 modifier 合成一个 `clickable(indication=SinkFeedback())`：
+    // 冷启无可测收益（872ms vs 862ms，噪声内），而按压下沉明显变弱 ⇒ 回滚，保留原写法。
     val interactionSource = remember { MutableInteractionSource() }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -717,10 +735,8 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .squircleSurface(
-                            color = MiuixTheme.colorScheme.surfaceContainerHigh,
-                            cornerRadius = TILE_CORNER
-                        ),
+                        .clip(RoundedCornerShape(TILE_CORNER))
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(label.take(1), style = MiuixTheme.textStyles.title4, color = MiuixTheme.colorScheme.onSurface)
@@ -754,16 +770,31 @@ private fun buildEntries(
     }
 }
 
+/** 固定区按用户拖动顺序排序，未在顺序表里的排后面（两段发布共用同一规则）。 */
+private fun sortFixed(
+    fixed: Set<String>,
+    order: List<String>,
+    labels: Map<String, String>
+): List<Pair<String, String>> = fixed
+    .sortedBy { pkg -> order.indexOf(pkg).let { if (it >= 0) it else Int.MAX_VALUE } }
+    .map { it to (labels[it] ?: it) }
+
 private fun buildGroups(items: List<Pair<String, String>>): List<LetterGroup> {
+    // letterFor 是 ICU 转写（首字符 → 字母）：旧实现把它放进 groupBy **和**排序比较器里，
+    // 每次比较都重算一遍（200+ 项 ≈ n log n 次转写）。先算一次进 Map，再分组/排序。
+    val letterOf = HashMap<String, String>(items.size * 2)
+    items.forEach { letterOf[it.second] = letterFor(it.second) }
     return items
-        .groupBy { letterFor(it.second) }
+        .groupBy { letterOf.getValue(it.second) }
         .toSortedMap(compareBy({ it == "#" }, { it }))
         .map { (letter, list) ->
+            // 排序键同样预计算（lowercase 每次比较都分配一份新串）
+            val decorated = list.map { it to (letterOf.getValue(it.second) to it.second.lowercase(Locale.ROOT)) }
             LetterGroup(
                 letter,
-                list.sortedWith(
-                    compareBy({ letterFor(it.second) == "#" }, { it.second.lowercase(Locale.ROOT) })
-                )
+                decorated
+                    .sortedWith(compareBy({ it.second.first == "#" }, { it.second.second }))
+                    .map { it.first }
             )
         }
 }

@@ -5,11 +5,15 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
-import android.os.Build
 import android.widget.Toast
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -25,7 +29,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -33,6 +36,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -52,18 +64,28 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.sin
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Checkbox
-import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.blur.BlendColorEntry
+import top.yukonga.miuix.kmp.blur.BlurBlendMode
+import top.yukonga.miuix.kmp.blur.BlurColors
+import top.yukonga.miuix.kmp.blur.BlurDefaults
+import top.yukonga.miuix.kmp.blur.layerBackdrop
+import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
+import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.squircle.squircleSurface
+import top.yukonga.miuix.kmp.theme.Colors
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.window.WindowDialog
 
 @Composable
@@ -72,6 +94,7 @@ internal fun AboutPage(
     prefs: SharedPreferences,
     prefsRevision: Int,
     onNavigateToDiagnostics: () -> Unit = {},
+    onNavigateToTechInfo: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -94,33 +117,6 @@ internal fun AboutPage(
     val repo = remember(effectivePrefs) { SettingsRepository(effectivePrefs) }
     DisposableEffect(repo) { onDispose { repo.dispose() } }
     var showResetConfirm by remember { mutableStateOf(false) }
-    val deviceModel = remember { Build.MODEL.ifEmpty { Build.DEVICE } }
-    val systemVersion = remember { "Android ${Build.VERSION.RELEASE}（API ${Build.VERSION.SDK_INT}）" }
-    val frameworkName by produceState(
-        initialValue = context.getString(R.string.unknown),
-        key1 = service
-    ) {
-        value = withContext(Dispatchers.IO) {
-            runCatching { service?.frameworkName?.toString() }.getOrNull()
-                ?: context.getString(R.string.unknown)
-        }
-    }
-    val frameworkVersion by produceState(
-        initialValue = "--",
-        key1 = service
-    ) {
-        value = withContext(Dispatchers.IO) {
-            runCatching { service?.frameworkVersion?.toString() }.getOrNull() ?: "--"
-        }
-    }
-    val apiVersion by produceState(
-        initialValue = "--",
-        key1 = service
-    ) {
-        value = withContext(Dispatchers.IO) {
-            runCatching { service?.apiVersion?.toString() }.getOrNull() ?: "--"
-        }
-    }
 
     val updateScope = rememberCoroutineScope()
     var updateState by remember { mutableStateOf<UpdateCheckState>(UpdateCheckState.Idle) }
@@ -172,51 +168,44 @@ internal fun AboutPage(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .overScrollVertical(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .settingsScroll(),
+        contentPadding = PaddingValues(
+            start = SettingsDimens.ScreenInset,
+            end = SettingsDimens.ScreenInset,
+            top = SettingsDimens.ListTop,
+            bottom = SettingsDimens.ListBottom
+        ),
+        verticalArrangement = Arrangement.spacedBy(SettingsDimens.SectionGap)
     ) {
         item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                        contentDescription = stringResource(R.string.app_icon_content_desc),
-                        modifier = Modifier
-                            .size(68.dp)
-                            .squircleSurface(
-                                color = MiuixTheme.colorScheme.primaryContainer,
-                                cornerRadius = 17.dp
-                            )
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = stringResource(R.string.app_name),
-                        style = MiuixTheme.textStyles.title3,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = stringResource(R.string.module_description),
-                        style = MiuixTheme.textStyles.body2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier.padding(top = 6.dp)
-                    )
-                }
-            }
+            AboutHero(
+                cs = MiuixTheme.colorScheme,
+                modifier = Modifier.padding(bottom = SettingsDimens.SectionGap)
+            )
         }
 
-        item { SmallTitle(text = stringResource(R.string.about_info)) }
+        item { SectionTitle(text = stringResource(R.string.about_info)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
+                    // 版本号与内部版本合并成一行（点击复制内部版本），不再另占一行
                     BasicComponent(
                         title = stringResource(R.string.about_version),
-                        summary = versionName
+                        summary = "$versionName · ${BuildConfig.VERSION_CODE}",
+                        onClick = {
+                            context.getSystemService(ClipboardManager::class.java)
+                                .setPrimaryClip(
+                                    ClipData.newPlainText(
+                                        "versionCode",
+                                        BuildConfig.VERSION_CODE.toString()
+                                    )
+                                )
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.version_code_copied),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
                     )
                     BasicComponent(
                         title = stringResource(R.string.update_check),
@@ -229,83 +218,21 @@ internal fun AboutPage(
                             }
                         }
                     )
-                    BasicComponent(
-                        title = stringResource(R.string.about_version_code),
-                        summary = BuildConfig.VERSION_CODE.toString(),
-                        onClick = {
-                            val versionCode = BuildConfig.VERSION_CODE.toString()
-                            context.getSystemService(ClipboardManager::class.java)
-                                .setPrimaryClip(ClipData.newPlainText("versionCode", versionCode))
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.version_code_copied),
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    )
-                    BasicComponent(
-                        title = stringResource(R.string.about_based_on),
-                        summary = stringResource(
-                            R.string.about_based_on_value,
-                            BuildConfig.XPOSED_API_VERSION,
-                            BuildConfig.EZXHELPER_VERSION
-                        )
-                    )
-                    BasicComponent(
-                        title = stringResource(R.string.about_sdk),
-                        summary = stringResource(R.string.about_sdk_value)
-                    )
-                }
-            }
-        }
-
-        item { SmallTitle(text = stringResource(R.string.framework_info)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    BasicComponent(
-                        title = stringResource(R.string.device_model),
-                        summary = deviceModel
-                    )
-                    BasicComponent(
-                        title = stringResource(R.string.system_version),
-                        summary = systemVersion
-                    )
-                    BasicComponent(
-                        title = stringResource(R.string.framework_name),
-                        summary = frameworkName
-                    )
-                    BasicComponent(
-                        title = stringResource(R.string.framework_version),
-                        summary = frameworkVersion
-                    )
-                    BasicComponent(
-                        title = stringResource(R.string.api_version),
-                        summary = apiVersion
-                    )
-                }
-            }
-        }
-
-        item { SmallTitle(text = stringResource(R.string.about_links)) }
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column {
-                    ArrowPreference(
-                        title = stringResource(R.string.about_author),
-                        summary = AUTHOR_HANDLE,
-                        onClick = { openExternalUrl(context, AUTHOR_URL) }
-                    )
                     ArrowPreference(
                         title = stringResource(R.string.about_project_url),
                         summary = PROJECT_URL.removePrefix("https://"),
                         onClick = { openExternalUrl(context, PROJECT_URL) }
                     )
+                    ArrowPreference(
+                        title = stringResource(R.string.about_tech_info),
+                        summary = stringResource(R.string.about_tech_info_summary),
+                        onClick = onNavigateToTechInfo
+                    )
                 }
             }
         }
 
-        item { SmallTitle(text = stringResource(R.string.debug_section)) }
+        item { SectionTitle(text = stringResource(R.string.about_more)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 // 恢复默认值（0922 从首页迁入）：低频破坏性操作不再占首页一个分区；
@@ -315,12 +242,19 @@ internal fun AboutPage(
                     summary = stringResource(R.string.restore_defaults_summary),
                     onClick = { showResetConfirm = true }
                 )
-                // 诊断与统计（0909 拍板）：调试区只留一个父入口，点进去再选
+                // 诊断与统计（0909 拍板）：只留一个父入口，点进去再选
                 // 运行日志/使用统计/导出自检报告——本页不再平铺诊断功能行
                 ArrowPreference(
                     title = stringResource(R.string.diagnostics_entry),
                     summary = stringResource(R.string.diagnostics_entry_summary),
                     onClick = onNavigateToDiagnostics
+                )
+                // 重启 hook 宿主不限 debug（0912 拍板：仅失联开关 debug 专属）——
+                // 远程排障/模块更新后重启三宿主是运维规程，release 用户同样需要
+                ArrowPreference(
+                    title = stringResource(R.string.debug_host_restart),
+                    summary = stringResource(R.string.debug_host_restart_summary),
+                    onClick = { showHostRestart = true }
                 )
                 if (com.lsp.hypersidebar.BuildConfig.DEBUG) SwitchPreference(
                     title = stringResource(R.string.debug_relay_blackhole),
@@ -338,13 +272,6 @@ internal fun AboutPage(
                             effectivePrefs.savePref(PrefKeys.DEBUG_RELAY_BLACKHOLE, false)
                         }
                     }
-                )
-                // 重启 hook 宿主不限 debug（0912 拍板：调试区仅失联开关 debug 专属）——
-                // 远程排障/模块更新后重启三宿主是运维规程，release 用户同样需要
-                ArrowPreference(
-                    title = stringResource(R.string.debug_host_restart),
-                    summary = stringResource(R.string.debug_host_restart_summary),
-                    onClick = { showHostRestart = true }
                 )
             }
         }
@@ -373,29 +300,21 @@ internal fun AboutPage(
                 style = MiuixTheme.textStyles.footnote1
             )
             Spacer(Modifier.height(14.dp))
-            Row(horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(
-                    text = stringResource(R.string.layout_sheet_cancel),
-                    onClick = { showBlackholeConfirm = false },
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(modifier = Modifier.width(20.dp))
-                TextButton(
-                    text = if (countdown > 0) {
-                        stringResource(R.string.debug_relay_confirm_action_counting, countdown)
-                    } else {
-                        stringResource(R.string.debug_relay_confirm_action)
-                    },
-                    onClick = {
-                        relayBlackhole = true
-                        effectivePrefs.savePref(PrefKeys.DEBUG_RELAY_BLACKHOLE, true)
-                        showBlackholeConfirm = false
-                    },
-                    enabled = countdown <= 0,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.textButtonColors(color = MiuixTheme.colorScheme.error)
-                )
-            }
+            ConfirmCancelRow(
+                confirmText = if (countdown > 0) {
+                    stringResource(R.string.debug_relay_confirm_action_counting, countdown)
+                } else {
+                    stringResource(R.string.debug_relay_confirm_action)
+                },
+                onConfirm = {
+                    relayBlackhole = true
+                    effectivePrefs.savePref(PrefKeys.DEBUG_RELAY_BLACKHOLE, true)
+                    showBlackholeConfirm = false
+                },
+                onCancel = { showBlackholeConfirm = false },
+                confirmEnabled = countdown <= 0,
+                danger = true
+            )
         }
     )
 
@@ -442,25 +361,14 @@ internal fun AboutPage(
                 }
             }
             Spacer(Modifier.height(14.dp))
-            Row(horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(
-                    text = stringResource(R.string.layout_sheet_cancel),
-                    onClick = {
-                        selectedRestarts = emptySet()
-                        showHostRestart = false
-                    },
-                    enabled = !hostRestartBusy,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(modifier = Modifier.width(20.dp))
-                TextButton(
-                    text = stringResource(
-                        if (hostRestartBusy) R.string.debug_host_restart_busy
-                        else R.string.debug_host_restart_action
-                    ),
-                    onClick = {
-                        val targets = HostRestarter.HOSTS.filter { it.pkg in selectedRestarts }
-                        if (targets.isEmpty() || hostRestartBusy) return@TextButton
+            ConfirmCancelRow(
+                confirmText = stringResource(
+                    if (hostRestartBusy) R.string.debug_host_restart_busy
+                    else R.string.debug_host_restart_action
+                ),
+                onConfirm = {
+                    val targets = HostRestarter.HOSTS.filter { it.pkg in selectedRestarts }
+                    if (targets.isNotEmpty() && !hostRestartBusy) {
                         hostRestartBusy = true
                         updateScope.launch {
                             val result = withContext(Dispatchers.IO) {
@@ -478,12 +386,16 @@ internal fun AboutPage(
                             }
                             Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                         }
-                    },
-                    enabled = !hostRestartBusy && selectedRestarts.isNotEmpty(),
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.textButtonColors(color = MiuixTheme.colorScheme.error)
-                )
-            }
+                    }
+                },
+                onCancel = {
+                    selectedRestarts = emptySet()
+                    showHostRestart = false
+                },
+                confirmEnabled = !hostRestartBusy && selectedRestarts.isNotEmpty(),
+                cancelEnabled = !hostRestartBusy,
+                danger = true
+            )
         }
     )
 
@@ -517,27 +429,17 @@ private fun ResetConfirmDialog(
         summary = stringResource(R.string.restore_defaults_confirm),
         onDismissRequest = onDismiss,
         content = {
-            Row(horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(
-                    text = stringResource(R.string.layout_sheet_cancel),
-                    onClick = onDismiss,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(modifier = Modifier.width(20.dp))
-                TextButton(
-                    text = stringResource(R.string.reset_confirm),
-                    onClick = onConfirm,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.textButtonColorsPrimary()
-                )
-            }
+            ConfirmCancelRow(
+                confirmText = stringResource(R.string.reset_confirm),
+                onConfirm = onConfirm,
+                onCancel = onDismiss,
+                primary = true
+            )
         }
     )
 }
 
-// 项目地址与作者链接（0912 收口）：仓库名单源 UpdateChecker.REPO_PATH——改仓库只改那里
-private const val AUTHOR_HANDLE = "mikudayoooooooo"
-private const val AUTHOR_URL = "https://github.com/" + AUTHOR_HANDLE
+// 项目地址（0912 收口）：仓库名单源 UpdateChecker.REPO_PATH——改仓库只改那里
 private const val PROJECT_URL = UpdateChecker.REPO_URL
 
 /** 检查更新 UI 态；Failed 可重试，Available 点击跳 Release 页 */
@@ -554,5 +456,178 @@ private fun openExternalUrl(context: android.content.Context, url: String) {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     }.onFailure {
         Toast.makeText(context, context.getString(R.string.open_link_failed), Toast.LENGTH_SHORT).show()
+    }
+}
+
+// ===== About hero：动态渐变背景 + 前景模糊玻璃牌（2026-10-27）=====
+
+private val HERO_HEIGHT = 200.dp
+private val HERO_PLATE_CORNER = 22.dp
+
+/** 一次完整旋转周期；6s 转一圈偏快，9s 更像"呼吸"。 */
+private const val HERO_STAGE_PERIOD_MS = 9000
+private const val HERO_PLATE_BLUR_DP = 30f
+private const val HERO_PLATE_SHEEN_ALPHA = 0.16f
+
+/**
+ * hero 专用取色：**只借 base 的色相**，饱和度与明度由 hero 自己给。
+ *
+ * 不能对主题色做 satScale/valScale：Monet（TonalSpot + Spec2025）的 primary 本身低彩度，
+ * 放大 1.1 倍依旧是灰蓝，三段渐变会糊成一片；锁死 S/V 才能保证
+ * 深浅模式 × 莫奈/非莫奈 四种组合都够"重"。
+ */
+private fun heroColor(base: Color, hueDelta: Float, saturation: Float, value: Float): Color {
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(base.toArgb(), hsv)
+    hsv[0] = (hsv[0] + hueDelta + 360f) % 360f
+    hsv[1] = saturation.coerceIn(0f, 1f)
+    hsv[2] = value.coerceIn(0f, 1f)
+    return Color(android.graphics.Color.HSVToColor(hsv))
+}
+
+private fun DrawScope.drawHeroGradient(cs: Colors, stage: Float, isDark: Boolean) {
+    val a = stage * 2f * PI.toFloat()
+    val w = size.width
+    val h = size.height
+    val center = Offset(w / 2f, h / 2f)
+    // 覆盖整卡（含旋转后的四角）
+    val radius = hypot(w.toDouble(), h.toDouble()).toFloat() / 2f
+
+    // 三段蓝紫：hero 自定的色相/饱和，再按比例混入主题容器色（莫奈开启时这些是
+    // 由 seed 生成的调色板色，混进去 hero 才有"跟主题同一套"的观感）
+    val deep = lerp(
+        heroColor(cs.primary, hueDelta = -16f, saturation = 1f, value = if (isDark) 0.44f else 0.72f),
+        cs.primaryContainer,
+        0.28f
+    )
+    val mid = lerp(
+        heroColor(cs.primary, hueDelta = 8f, saturation = 0.92f, value = if (isDark) 0.60f else 0.86f),
+        cs.primaryVariant,
+        0.22f
+    )
+    val glow = lerp(
+        heroColor(cs.primary, hueDelta = 42f, saturation = 0.82f, value = if (isDark) 0.82f else 0.96f),
+        cs.tertiaryContainer,
+        0.22f
+    )
+
+    // 主运动：锥形渐变整卡旋转（一圈 = 一个周期）。只靠漂移色斑在缩略尺寸下几乎看不出动，
+    // 旋转锥面才让"在动"这件事一眼可见
+    withTransform({ rotate(stage * 360f, center) }) {
+        drawCircle(
+            brush = Brush.sweepGradient(
+                colors = listOf(deep, mid, glow, mid, deep),
+                center = center
+            ),
+            radius = radius,
+            center = center
+        )
+    }
+
+    // 两团漂移色斑补充层次（同样 SrcOver：backdrop 录制层起始透明，
+    // Screen/Plus 在"透明底"与"屏上"结果不同，会让玻璃牌糊到的颜色与观感不一致）
+    fun blob(cx: Float, cy: Float, r: Float, color: Color) {
+        drawRect(
+            brush = Brush.radialGradient(
+                colors = listOf(color, Color.Transparent),
+                center = Offset(cx, cy),
+                radius = r
+            )
+        )
+    }
+    val breathe = 1f + 0.12f * sin(a * 0.9f)
+    blob(
+        w * (0.24f + 0.30f * cos(a)),
+        h * (0.32f + 0.26f * sin(a)),
+        w * 0.42f * breathe,
+        heroColor(cs.primary, 72f, 0.62f, 1f).copy(alpha = if (isDark) 0.50f else 0.38f)
+    )
+    blob(
+        w * (0.74f + 0.22f * sin(a * 1.15f)),
+        h * (0.74f + 0.20f * cos(a * 0.85f)),
+        w * 0.34f * breathe,
+        cs.onPrimary.copy(alpha = if (isDark) 0.26f else 0.30f)
+    )
+}
+
+/**
+ * hero 卡：渐变层既上屏又被录进 backdrop，玻璃牌（textureBlur）采样同一 backdrop
+ * ⇒ 牌后恒有内容可糊（旧版采样普通 surface 时看不出效果正是这个原因）。
+ * 渐变相位只在 draw 相位读取，12s 周期内不会触发整页重组。
+ */
+@Composable
+private fun AboutHero(cs: Colors, modifier: Modifier = Modifier) {
+    val stage = remember { Animatable(0f) }
+    val isDark = cs.surface.luminance() < 0.5f
+    LaunchedEffect(Unit) {
+        while (true) {
+            stage.animateTo(
+                targetValue = stage.value + 1f,
+                animationSpec = tween(HERO_STAGE_PERIOD_MS, easing = LinearEasing)
+            )
+        }
+    }
+    val backdrop = rememberLayerBackdrop { drawHeroGradient(cs, stage.value, isDark) }
+
+    Card(modifier = modifier.fillMaxWidth()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(HERO_HEIGHT)
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .layerBackdrop(backdrop)
+                    .drawBehind { drawHeroGradient(cs, stage.value, isDark) }
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .textureBlur(
+                        backdrop = backdrop,
+                        shape = RoundedCornerShape(HERO_PLATE_CORNER),
+                        blurRadius = HERO_PLATE_BLUR_DP,
+                        noiseCoefficient = BlurDefaults.NoiseCoefficient,
+                        colors = BlurColors(
+                            blendColors = listOf(
+                                BlendColorEntry(
+                                    cs.onPrimary.copy(alpha = HERO_PLATE_SHEEN_ALPHA),
+                                    BlurBlendMode.Screen
+                                )
+                            ),
+                            brightness = 0f,
+                            contrast = 1f,
+                            saturation = 1f
+                        )
+                    )
+                    .padding(horizontal = 28.dp, vertical = 18.dp)
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                        contentDescription = stringResource(R.string.app_icon_content_desc),
+                        modifier = Modifier
+                            .size(64.dp)
+                            .squircleSurface(
+                                color = cs.onPrimary.copy(alpha = 0.18f),
+                                cornerRadius = 17.dp
+                            )
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = stringResource(R.string.app_name),
+                        style = MiuixTheme.textStyles.title3.copy(
+                            // 标题用渐变字（白 → 淡紫），与系统「关于本机」那种发光字一致；
+                            // 底色是蓝紫渐变，文字不能用 onBackground
+                            brush = Brush.linearGradient(
+                                listOf(cs.onPrimary, heroColor(cs.primary, 70f, 0.55f, 1f))
+                            )
+                        ),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
     }
 }

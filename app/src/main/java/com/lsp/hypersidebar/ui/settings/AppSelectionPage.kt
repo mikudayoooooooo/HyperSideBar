@@ -12,6 +12,7 @@ import android.os.Looper
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +24,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -55,6 +59,7 @@ import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.InputField
+import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.basic.SearchBar
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
@@ -88,6 +93,9 @@ internal fun AppSelectionPage(
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     var searchExpanded by remember { mutableStateOf(false) }
+    // 数据源在 App 之外（:ui 准入列表 + PM）⇒ 支持顶栏刷新与下拉刷新
+    var refreshToken by remember { mutableStateOf(0) }
+    var refreshing by remember { mutableStateOf(false) }
     var selectedApps by remember(prefs, prefsKey) {
         mutableStateOf(prefs.getStringSet(prefsKey, emptySet()).orEmpty().toSet())
     }
@@ -122,49 +130,57 @@ internal fun AppSelectionPage(
 
     val loadState by produceState<AppLoadState>(
         initialValue = cachedApps?.let(AppLoadState::Loaded) ?: AppLoadState.Loading,
-        key1 = context.applicationContext
+        key1 = context.applicationContext,
+        key2 = refreshToken
     ) {
-        if (cachedApps != null) return@produceState  // 会话缓存已随 initialValue 命中
-        val appContext = context.applicationContext
+        try {
+            // 仅在「没有刷新请求」时才允许命中会话缓存；否则刷新永远拿不到新数据
+            if (cachedApps != null && refreshToken == 0) return@produceState
+            val appContext = context.applicationContext
 
-        // ① 读"之前的"：模块本地准入列表缓存（:ui 上次回带后落库），秒开且不依赖 :ui 存活。
-        // 准入数据源（PRD §7.3.3"无小窗资格的应用在数据源层面即不展示"）取代原 PM 全列表
-        val cached = readCachedSuggestions(prefs)
-        if (cached.isNotEmpty()) {
-            val items = withContext(Dispatchers.IO) {
-                withMissingPinned(appContext, prefs, prefsKey, loadAdmissionItems(appContext, cached))
+            // ① 读"之前的"：模块本地准入列表缓存（:ui 上次回带后落库），秒开且不依赖 :ui 存活。
+            // 准入数据源（PRD §7.3.3"无小窗资格的应用在数据源层面即不展示"）取代原 PM 全列表
+            val cached = readCachedSuggestions(prefs)
+            if (cached.isNotEmpty()) {
+                val items = withContext(Dispatchers.IO) {
+                    withMissingPinned(appContext, prefs, prefsKey, loadAdmissionItems(appContext, cached))
+                }
+                cachedApps = items
+                value = AppLoadState.Loaded(items)
             }
-            cachedApps = items
-            value = AppLoadState.Loaded(items)
-        }
 
-        // ② 有序广播向 :ui 刷新（探针同款信道，PRD 准入列表权威源）：应答非空且与缓存
-        // 不同才重排 + 落库，页面无感更新
-        val fresh: List<String>? = suspendCoroutine { cont ->
-            requestSuggestionsFromUi(appContext) { cont.resume(it) }
-        }
-        if (fresh != null && fresh != cached) {
-            val items = withContext(Dispatchers.IO) {
-                withMissingPinned(appContext, prefs, prefsKey, loadAdmissionItems(appContext, fresh))
+            // ② 有序广播向 :ui 刷新（探针同款信道，PRD 准入列表权威源）：应答非空且与缓存
+            // 不同才重排 + 落库，页面无感更新
+            val fresh: List<String>? = suspendCoroutine { cont ->
+                requestSuggestionsFromUi(appContext) { cont.resume(it) }
             }
-            persistCachedSuggestions(prefs, fresh)
-            cachedApps = items
-            value = AppLoadState.Loaded(items)
-            return@produceState
-        }
-        if (cached.isNotEmpty()) return@produceState
+            if (fresh != null && fresh != cached) {
+                val items = withContext(Dispatchers.IO) {
+                    withMissingPinned(appContext, prefs, prefsKey, loadAdmissionItems(appContext, fresh))
+                }
+                persistCachedSuggestions(prefs, fresh)
+                cachedApps = items
+                value = AppLoadState.Loaded(items)
+                return@produceState
+            }
+            if (cached.isNotEmpty()) return@produceState
 
-        // ③ 兜底：无缓存且 :ui 无应答/空缓存 → PM 全列表（模块进程被 blocklist 拒绝调
-        // 准入 API，原现状路径；此时扇形端也必然无准入数据，此处固定项不会被消费）
-        value = runCatching {
-            withContext(Dispatchers.IO) { loadInstalledApps(appContext) }
-        }.fold(
-            onSuccess = { apps ->
-                cachedApps = apps
-                AppLoadState.Loaded(apps)
-            },
-            onFailure = { AppLoadState.Failed }
-        )
+            // ③ 兜底：无缓存且 :ui 无应答/空缓存 → PM 全列表（模块进程被 blocklist 拒绝调
+            // 准入 API，原现状路径；此时扇形端也必然无准入数据，此处固定项不会被消费）
+            value = runCatching {
+                withContext(Dispatchers.IO) { loadInstalledApps(appContext) }
+            }.fold(
+                onSuccess = { apps ->
+                    cachedApps = apps
+                    AppLoadState.Loaded(apps)
+                },
+                onFailure = { AppLoadState.Failed }
+            )
+        } finally {
+            // 扫描结束即收指示器：原实现看 loadState 是否变 Loaded，但新数据同尺寸时
+            // produceState 不写新值 ⇒ 指示器挂在旧 Loaded 上立刻熄灭（"刷新没反应"）
+            refreshing = false
+        }
     }
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -183,14 +199,14 @@ internal fun AppSelectionPage(
             onExpandedChange = { searchExpanded = it },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .padding(horizontal = SettingsDimens.ScreenInset, vertical = 8.dp)
         ) { }
 
         Text(
             text = stringResource(R.string.selected_apps_count, selectedApps.size),
             style = MiuixTheme.textStyles.footnote1,
             color = MiuixTheme.colorScheme.primary,
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+            modifier = Modifier.padding(horizontal = SettingsDimens.TitleInset, vertical = 4.dp)
         )
 
         when (val state = loadState) {
@@ -217,6 +233,8 @@ internal fun AppSelectionPage(
                     apps = filteredApps,
                     showGroups = searchQuery.isBlank(),
                     selectedApps = selectedApps,
+                    refreshing = refreshing,
+                    onRefresh = { refreshing = true; refreshToken++ },
                     onToggle = { toggle(it) },
                     onReorder = { fromPkg, toPkg ->
                         val from = selectedOrder.indexOf(fromPkg)
@@ -282,6 +300,8 @@ private fun AppList(
     apps: List<AppItem>,
     showGroups: Boolean,
     selectedApps: Set<String>,
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
     onToggle: (String) -> Unit,
     onReorder: (fromPkg: String, toPkg: String) -> Unit,
     onReorderFinished: () -> Unit
@@ -320,16 +340,26 @@ private fun AppList(
         if (fromPkg != null && toPkg != null && toPkg in selectedApps) onReorder(fromPkg, toPkg)
     }
     val haptics = LocalHapticFeedback.current
+    PullToRefresh(
+        isRefreshing = refreshing,
+        onRefresh = onRefresh,
+        topAppBarScrollBehavior = LocalTopAppBarScrollBehavior.current,
+        modifier = Modifier.fillMaxSize()
+    ) {
     LazyColumn(
         state = listState,
         modifier = Modifier
             .fillMaxSize()
             .overScrollVertical()
-            .scrollEndHaptic()
+            .scrollEndHaptic(),
+        contentPadding = PaddingValues(
+            start = SettingsDimens.ScreenInset,
+            end = SettingsDimens.ScreenInset
+        )
     ) {
         items(cells, key = { it.key }) { cell ->
             when (cell) {
-                is HeaderCell -> SmallTitle(text = cell.text)
+                is HeaderCell -> SectionTitle(text = cell.text)
                 is RowCell -> {
                     val pkg = cell.app.packageName
                     val checked = pkg in selectedApps
@@ -365,6 +395,7 @@ private fun AppList(
                 }
             }
         }
+    }
     }
 }
 
@@ -427,12 +458,12 @@ private fun AppSelectionRow(
                 state = if (isChecked) ToggleableState.On else ToggleableState.Off,
                 onClick = onToggle
             )
-            // 拖动排序手柄：40dp 触摸热区（图标视觉 24dp），长按起拖，仅已选项可挂
+            // 拖动排序手柄：48dp 触摸热区（Android 最小触摸目标的建议值；图标视觉仍 24dp），仅已选项可挂
             if (isChecked) {
                 Box(
                     modifier = Modifier
                         .padding(start = 8.dp)
-                        .size(40.dp)
+                        .size(48.dp)
                         .then(handleModifier),
                     contentAlignment = Alignment.Center
                 ) {

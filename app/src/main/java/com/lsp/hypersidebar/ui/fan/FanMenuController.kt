@@ -63,6 +63,17 @@ class FanMenuController(
         mainHandler.post { host?.setReleased(true) }
     }
 
+    /**
+     * 松手后是否保留扇形（hook 侧 UP 分支的唯一判据）。
+     *
+     * 除"呼出后常驻"开关外，**组弹层打开时必须保留**：点组图标只是展开入口（不启动、
+     * 不 onShortcut），若照旧 `dismiss()`，弹层会随窗口一起消失 ⇒ 用户看到"快捷组无法展开"。
+     * 保留后转入点选态（released），下一次 DOWN 由 `handlePopupTouch` 接管。
+     */
+    fun stayAfterRelease(): Boolean =
+        com.lsp.hypersidebar.prefs.SettingsRepository(prefs).fanPersistentOnRelease() ||
+            (host?.isGroupPopupOpen() == true)
+
     // ===== 数据记录（§11.3） =====
     private var showStartElapsed = 0L
     @Volatile private var exitAfterLaunch = false
@@ -327,6 +338,9 @@ class FanMenuController(
         idleHost?.let { return it }
         val ctx = activeContext ?: throw IllegalStateException("activeContext missing")
         return ComposeFanHost(ctx, prefs).apply {
+            // 窗口自身收到的触摸也要续看门狗：常驻模式下触摸直接投给 overlay 窗口，
+            // 不经过 dispatchTouchEvent 转发路径，旧实现 10s 后即使手指一直在点也会自收
+            onWindowTouch = { touchHeartbeat() }
             onAppSelected = { appInfo ->
                 HLog.i(TAG, tl() + "onAppSelected: ${appInfo.packageName}")
                 val context = activeContext
@@ -351,13 +365,9 @@ class FanMenuController(
                 HLog.i(TAG, tl() + "onQuickAppSelected: ${appInfo.packageName}")
                 val context = activeContext
                 if (context != null) {
+                    // 组不在回调里出现：组图标的展开由宿主弹层自理（ComposeFanHost.openGroupPopup），
+                    // 弹层子项也走本回调，且子项恒无 group。
                     when {
-                        // 组（C7 三分支，计划 §B4）：只展开——不 onShortcut、不
-                        // exitAfterLaunch、不 dismiss（四步全跳过；handleQuickBarTap
-                        // 汇同一回调 ⇒ 单点覆盖两路）。展开由宿主换几何实现
-                        appInfo.group != null -> {
-                            this@apply.expandQuickGroup(appInfo)
-                        }
                         appInfo.actionHandle != null -> {
                             StatsRecorder.onShortcut()
                             exitAfterLaunch = true

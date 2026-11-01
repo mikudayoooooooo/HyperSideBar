@@ -50,6 +50,13 @@ data class FanTouchState(
     val selectedQuickIndex: Int = -1
 )
 
+/** 组弹层显示态（宿主 → Compose）。[selectedIndex] = 当前命中子项（-1=无）。 */
+internal data class GroupPopupUi(
+    val popup: GroupPopup,
+    val children: List<FanAppInfo>,
+    val selectedIndex: Int = -1
+)
+
 class ComposeFanHost(
     private val context: Context,
     private val prefs: SharedPreferences
@@ -58,22 +65,9 @@ class ComposeFanHost(
     private var composeView: ComposeView? = null
     private var windowManager: WindowManager? = null
     private var lifecycleOwner: FanLifecycleOwner? = null
+    /** 上一次 MOVE/DOWN 解析出的高亮项 = 本次手势的提交目标（2026-10-31：高亮即提交）。 */
     private var lastSelectedFanIndex = -1
     private var lastSelectedQuickIndex = -1
-    private var selectedSince = 0L
-    /** 当前"连续悬停"的起点（手指第一次落到任一图标/快捷项的时刻）。换项不清零。 */
-    private var streakSince = 0L
-    private val DWELL_MS = 150L
-    /**
-     * 最后一个图标的最小停留（连续悬停语义的防误触半环）。
-     *
-     * 2026-10-17 真机实测（OS2 侧滑停顿通道）：手指沿弧轻微漂移会在图标间反复换项
-     * （`sel change: 4->3->2->1`，间隔 648/100/85ms），而旧逻辑"每次换项都重置
-     * selectedSince"⇒ 150ms 门要等手指**完全停稳**才起算 ⇒ 观感"要比角滑停更久才能打开"。
-     * 现改为：换项只重置 [selectedSince]（本项停留），[streakSince] 持续累计 ⇒
-     * 只要整体悬停够 150ms 且最终项停留 ≥ 本值即启动（快速扫过多项仍被这一项拦住）。
-     */
-    private val FINAL_MIN_MS = 60L
 
     // ===== 池化复用（1C P2，方案对比后选"池=1 实例重配"）=====
     // composition/lifecycle/视图树跨呼出存活（只摘窗口），把暖呼出从 ~250-300ms
@@ -192,14 +186,23 @@ class ComposeFanHost(
     @Volatile private var released = false
     var onOutsideTap: (() -> Unit)? = null
 
-    // ===== 组展开态（C7，计划 §B4；无组数据时全链休眠=今日行为）=====
-    /** 当前快捷栏是否含组条目（show 时刷新）——true 时触摸走 QuickExpandMachine 路径 */
-    private var quickHasGroups = false
-    private var expandState = QuickExpandMachine.State()
-    /** 展开前的根栏输入 stash（收回时还原） */
-    private var rootQuickStash: GeometryInput? = null
-    /** 展开子栏的锚定中心 X（原组图标中心；null=未展开）——传给 computeFanGeometry */
-    private var expandedAnchorCenterX: Float? = null
+    // ===== 组竖向弹层（2026-10-31；替代 QuickExpandMachine 的悬停展开 + 换几何）=====
+    /** 当前打开的组弹层（null=未打开）。弹层打开期间触摸只走 [handlePopupTouch]。 */
+    private val popupState: MutableState<GroupPopupUi?> = mutableStateOf(null)
+    /** 打开弹层对应的快捷栏索引（-1=未打开），用于"再点组图标=收起" */
+    private var popupGroupIndex = -1
+
+    /** 窗口自身收到的触摸（不经 controller 转发的路径）；controller 用它续看门狗。 */
+    var onWindowTouch: (() -> Unit)? = null
+
+    /** 悬停展开组：当前悬停的组图标索引与起点（-1=不在组上；换项即重置）。 */
+    private var hoverGroupIndex = -1
+    private var hoverGroupSince = 0L
+    /** 点组图标收起弹层后，同一条手势的 UP 必须被吞掉——否则主路径会把它当"点了组图标"再展开。 */
+    private var swallowUpAfterPopupClose = false
+
+    /** 组弹层是否开着（宿主 → 控制器的"松手后别收窗"判据）。 */
+    fun isGroupPopupOpen(): Boolean = popupState.value != null
 
     /**
      * 孤儿 UP 防护（OS4 借道路径实测，2026-10-04）：
@@ -258,7 +261,6 @@ class ComposeFanHost(
                 "dim=${readBoolean(PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED)}"
         )
         pendingInput = GeometryInput(anchorX, anchorY, apps, quickApps, isLandscape, cornerAnchor)
-        quickHasGroups = quickApps.any { it.group != null }
         resetInteractionState()
         // 壁纸磨砂（0914 用户拍板"优先 miuix 内部采样"）：launcher 与 :ui 双宿主同接、
         // 共用同一张壁纸图（0915 用户拍板）——竖屏桌面采样内容=真实背景；横屏 :ui 垫的
@@ -286,27 +288,20 @@ class ComposeFanHost(
             val tAddMs = SystemClock.elapsedRealtime()
             // 世代自增：在场的收拢回调/兜底定时器全部失效（收拢中再呼出=打断收拢直接重开）
             attachGen++
-            // 背景模糊来源解析（Route D 0915 定稿：单项下拉，取代旧三开关互斥）。两条通道：
+            // 背景来源解析（Route D 0915 定稿：单项下拉，取代旧三开关互斥）。三档：
+            //  · 亚克力（默认）——不取背后内容，板自身即材质（主题混色 + 提亮 + 颗粒）
             //  · 采样壁纸——miuix 内部采样，板材质完整生效，形状任意（横竖屏共用同一张壁纸）
-            //  · 后方屏幕全屏景深——FLAG_BLUR_BEHIND（MIUI 实现为全屏糊，非局部）
-            // 另有「透明」（不取背后内容也不加材质）与「关闭」（板自身即材质）两档。
-            // 失效则降级：所选来源不可用时退无来源，板永远有材质。
-            // 注：原「系统裁剪模糊（Dialog 背景模糊）」已退役——AOSP 背景模糊区域恒等于窗口
-            // 矩形，与楔形板形必然打架，只能给出一个圆角大矩形，用户否决。
-            val crossBlur = windowManager?.isCrossWindowBlurEnabled ?: false
+            //  · 透明——不取背后内容也不加材质
+            // 失效则降级：壁纸档拿不到位图时退无来源，板永远有材质。
+            // 注：原「系统裁剪模糊（Dialog 背景模糊）」与「FLAG_BLUR_BEHIND 全屏景深」都已退役
+            //（前者区域恒等于窗口矩形，与楔形板形打架；后者 MIUI 实现为整屏糊，2026-10-25 撤档）。
             blurSource = resolveBlurSource(
                 pref = readString(PrefKeys.FAN_BLUR_SOURCE, LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT),
-                crossWindowBlurEnabled = crossBlur,
                 wallpaperReady = wallpaperBitmap != null
             )
             // 壁纸对位的窗口原点不在这里清零：由 computeAndPublishGeometry 在挂窗后实测覆盖
             //（首帧绘制前，晚于本处；见该函数注释）
             val params = buildWindowParams()
-            if (blurSource == FanBackdropSource.BEHIND_SCREEN) {
-                params.flags = params.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
-                // 半径单位 px（AOSP 建议 20px 起、上限 150px），不乘 density
-                params.blurBehindRadius = LayoutDefaults.FAN_BEHIND_BLUR_RADIUS_PX.toInt()
-            }
             currentParams = params
             // 新会话：本窗展示时刻 + 未见过 DOWN（孤儿 UP 防护的判据基线，见 sawDownInSession）
             shownUptime = SystemClock.uptimeMillis()
@@ -326,35 +321,23 @@ class ComposeFanHost(
     }
 
     /**
-     * 背景模糊来源解析（Route D 0915）。auto = 按能力自动选路，优先级体现「哪条路
-     * 能做出完整的 miuix 板」：壁纸就绪 → 采样壁纸（唯一拿得到真像素、模糊/混色/
-     * 噪点全部生效、形状任意；横竖屏共用同一张图，0915 用户拍板）→ 否则无来源
-     * （板自身即材质，最稳）。显式指定失效时同样降级。
+     * 背景来源解析（Route D 0915，2026-10-25 收敛为三档）：亚克力 = 无来源（板自身即材质，
+     * 最稳、默认）；采样壁纸 = 唯一拿得到真像素的通道（模糊/混色/噪点全部生效、形状任意；
+     * 横竖屏共用同一张图，0915 用户拍板），壁纸未就绪则降级为无来源；透明直通。
      */
     private fun resolveBlurSource(
         pref: String,
-        crossWindowBlurEnabled: Boolean,
         wallpaperReady: Boolean
     ): FanBackdropSource = when (pref) {
-        // auto 与 wallpaper 现行为一致：壁纸就绪即采样（横竖屏皆可）
-        PrefKeys.FAN_BLUR_SOURCE_AUTO,
+        PrefKeys.FAN_BLUR_SOURCE_ACRYLIC -> FanBackdropSource.NONE
+
         PrefKeys.FAN_BLUR_SOURCE_WALLPAPER ->
             if (wallpaperReady) FanBackdropSource.WALLPAPER else FanBackdropSource.NONE
 
-        PrefKeys.FAN_BLUR_SOURCE_BEHIND ->
-            if (crossWindowBlurEnabled) FanBackdropSource.BEHIND_SCREEN
-            else FanBackdropSource.NONE
-
         PrefKeys.FAN_BLUR_SOURCE_TRANSPARENT -> FanBackdropSource.TRANSPARENT
 
-        PrefKeys.FAN_BLUR_SOURCE_OFF -> FanBackdropSource.NONE
-
-        // 非法/未知取值：按默认档解析（单一来源，改默认无需改这里；递归必达已知取值）
-        else -> resolveBlurSource(
-            LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT,
-            crossWindowBlurEnabled,
-            wallpaperReady
-        )
+        // 非法/未知取值（含旧 auto/behind/off/dialog）：按默认档解析（单一来源，改默认无需改这里）
+        else -> resolveBlurSource(LayoutDefaults.FAN_BLUR_SOURCE_DEFAULT, wallpaperReady)
     }
 
     /** 逐呼出重置交互态（几何清空 → 首帧前不渲染，touch/选中态归零）。 */
@@ -363,12 +346,12 @@ class ComposeFanHost(
         touchState.value = FanTouchState(0f, 0f, 3, -1)
         lastSelectedFanIndex = -1
         lastSelectedQuickIndex = -1
-        selectedSince = 0L
         originValid = false
-        // 组展开态随呼出清零（§6 断言：重复呼出 20 次无展开残留）
-        expandState = QuickExpandMachine.State()
-        rootQuickStash = null
-        expandedAnchorCenterX = null
+        // 组弹层随呼出清零（重复呼出 20 次无残留）
+        popupState.value = null
+        popupGroupIndex = -1
+        hoverGroupIndex = -1
+        hoverGroupSince = 0L
     }
 
     private fun computeAndPublishGeometry() {
@@ -384,9 +367,7 @@ class ComposeFanHost(
             Offset(input.anchorX - loc[0], input.anchorY - loc[1]),
             IntSize(wrapper.width, wrapper.height),
             input.apps, input.quickApps, config, density, input.isLandscape,
-            input.cornerAnchor,
-            // 组展开锚定（C6 参数）：子栏以原组图标中心排布，几何连续无平移跳变
-            quickBarCenterX = expandedAnchorCenterX
+            input.cornerAnchor
         )
         geometryState.value = g
         HLog.i(
@@ -418,6 +399,7 @@ class ComposeFanHost(
                         FanMenuCompose(
                             geometry = g,
                             touchState = touchState,
+                            popup = popupState,
                             colors = themeColors,
                             // 路线 C 视觉参数：逐呼出随重组重读（几何状态变化驱动），
                             // 与 extractFanThemeColors 同一读取模式
@@ -426,9 +408,6 @@ class ComposeFanHost(
                             ),
                             dimEnabled = readBoolean(
                                 PrefKeys.FAN_DIM_ENABLED, LayoutDefaults.FAN_DIM_ENABLED
-                            ),
-                            scrimFadeMs = readInt(
-                                PrefKeys.FAN_SCRIM_FADE_MS, LayoutDefaults.FAN_SCRIM_FADE_MS
                             ),
                             source = blurSource,
                             wallpaper = if (blurSource == FanBackdropSource.WALLPAPER) wallpaperBitmap else null,
@@ -507,20 +486,28 @@ class ComposeFanHost(
                     sawDownInSession = true
                     sessionDownTime = event.downTime
                 }
-                // 组触摸路径（C7，计划 §B4）：快捷栏含组（或已展开）时，quick 交互整体走
-                // QuickExpandMachine——含普通项的选中/计时/提交（与组共用一套状态）；
-                // fan 侧选中仍用 resolveFanSelection 保持滞回。无组时本路径休眠=今日行为
-                if ((quickHasGroups || expandState.expanded) &&
-                    handleGroupTouch(event, geometry, x, y, dx, dy, dist, deadZonePx)
-                ) {
-                    return true
+                onWindowTouch?.invoke()
+                // 组弹层打开时独占触摸：弹层内点选/收层，弹层外点按 = 收起（不启动弧上应用）
+                popupState.value?.let { ui ->
+                    // 返回 false = 这条手势已离开弹层（或 DOWN 落在弹层外）：已关层，
+                    // **落回主路径**继续按普通选中处理（否则"展开后收不起/选不了别的组"）。
+                    if (handlePopupTouch(event, ui, geometry, x, y)) return true
+                }
+                // 刚用"再点组图标"收起弹层：这条手势的 UP 不能再走主路径（会被当成重新展开）
+                if (swallowUpAfterPopupClose) {
+                    if (event.action == MotionEvent.ACTION_UP ||
+                        event.action == MotionEvent.ACTION_CANCEL
+                    ) {
+                        swallowUpAfterPopupClose = false
+                        return true
+                    }
                 }
                 when (event.action) {
                     MotionEvent.ACTION_DOWN -> {
                         lastSelectedFanIndex = -1
                         lastSelectedQuickIndex = -1
-                        selectedSince = 0L
-                        streakSince = 0L
+                        hoverGroupIndex = -1
+                        hoverGroupSince = 0L
                         // 采集层 v2：DOWN 即起点，位移从这一刻开始累加
                         StatsRecorder.onFanMove(x, y)
                         val (fanSel, quickSel) = resolveSelection(
@@ -536,9 +523,6 @@ class ComposeFanHost(
                             return true
                         }
                         if (fanSel != -1 || quickSel != -1) {
-                            val t = SystemClock.uptimeMillis()
-                            selectedSince = t
-                            streakSince = t
                             StatsRecorder.onFanPreselected()
                         }
                         touchState.value = FanTouchState(x, y, 0, fanSel, quickSel)
@@ -551,16 +535,13 @@ class ComposeFanHost(
                         val prevQuick = lastSelectedQuickIndex
 
                         // 外取消豁免（迭代四 §1.1）：快捷栏在锚点 712px 外本就落在外取消
-                        // 半径之外，栏上滑动会被 CLEAR/重命中振荡清掉 dwell 致点按不启动
-                        // （1C 实测）。命中圈(0.8 图标距)覆盖栏间隙，栏外空白仍正常取消；
-                        // 内取消（滑回锚点）不豁免
+                        // 半径之外，栏上滑动会被 CLEAR/重命中振荡清掉高亮（1C 实测）。
+                        // 命中圈(0.8 图标距)覆盖栏间隙，栏外空白仍正常取消；内取消（滑回锚点）不豁免
                         val inCancelZone = dist < innerCancelPx ||
                             (dist > outerCancelPx && calcQuickAppCandidate(x, y, geometry) == -1)
                         if (inCancelZone && (prevFan != -1 || prevQuick != -1)) {
                             lastSelectedFanIndex = -1
                             lastSelectedQuickIndex = -1
-                            selectedSince = 0L
-                            streakSince = 0L
                             touchState.value = FanTouchState(x, y, 0, -1, -1)
                             Log.d(TAG, "touch CLEAR by cancel zone (inner=${innerCancelPx.toInt()}, outer=${outerCancelPx.toInt()})")
                             return true
@@ -572,35 +553,34 @@ class ComposeFanHost(
 
                         if (fanSel != prevFan || quickSel != prevQuick) {
                             Log.d(TAG, "sel change: fan $prevFan->$fanSel quick $prevQuick->$quickSel dist=${dist.toInt()}")
-                        }
-
-                        val anySelected = fanSel != -1 || quickSel != -1
-                        val prevSelected = prevFan != -1 || prevQuick != -1
-                        when {
-                            !anySelected -> {      // 选中变空 ⇒ 整段连续悬停结束
-                                selectedSince = 0L
-                                streakSince = 0L
-                            }
-                            !prevSelected -> {     // 从空白进入图标：新一段连续悬停
-                                val t = SystemClock.uptimeMillis()
-                                selectedSince = t
-                                streakSince = t
-                                StatsRecorder.onFanPreselected()
-                            }
-                            fanSel != prevFan || quickSel != prevQuick -> {
-                                // 换项：只重置"本项停留"，连续悬停总计时继续累计
-                                selectedSince = SystemClock.uptimeMillis()
-                                StatsRecorder.onFanPreselected()
-                            }
+                            if (fanSel != -1 || quickSel != -1) StatsRecorder.onFanPreselected()
                         }
 
                         touchState.value = FanTouchState(x, y, 0, fanSel, quickSel)
+
+                        // 悬停展开组（2026-10-31 用户口径：手指停在组图标上就展开，不必松手）：
+                        // 停够 GROUP_HOVER_OPEN_MS 即开层，后续事件由 handlePopupTouch 接管。
+                        // 换项/离开组图标都清零，避免"扫过组图标"被误展开。
+                        val hoveredGroup = geometry.quickApps.getOrNull(quickSel)
+                            ?.takeIf { it.group != null }?.let { quickSel } ?: -1
+                        if (hoveredGroup != -1) {
+                            val now = SystemClock.uptimeMillis()
+                            if (hoverGroupIndex != hoveredGroup) {
+                                hoverGroupIndex = hoveredGroup
+                                hoverGroupSince = now
+                            } else if (now - hoverGroupSince >= LayoutDefaults.GROUP_HOVER_OPEN_MS) {
+                                HLog.i(TAG, "group hover-open: idx=$hoveredGroup after ${now - hoverGroupSince}ms")
+                                openGroupPopup(geometry.quickApps[hoveredGroup], hoveredGroup, geometry)
+                                hoverGroupIndex = -1
+                                hoverGroupSince = 0L
+                            }
+                        } else {
+                            hoverGroupIndex = -1
+                            hoverGroupSince = 0L
+                        }
                         return true
                     }
                     MotionEvent.ACTION_UP -> {
-                        val (fanSel, quickSel) = resolveSelection(
-                            x, y, dx, dy, dist, deadZonePx, geometry
-                        )
                         // 采集层 v2：UP 现场记取消区与松手时刻（口径要"松手时指尖在哪"，事后推不出）
                         StatsRecorder.onFanUp(
                             when {
@@ -611,53 +591,53 @@ class ComposeFanHost(
                             },
                             deadZonePx
                         )
-                        touchState.value = FanTouchState(x, y, 2, -1, -1)
-                        // 取证 dump：本地/原始坐标 + 极坐标 + 命中项全量，选中错位一轮日志定位
+                        // 提交目标 = 松手前**正在高亮**的那一项（2026-10-31）。
+                        // 旧实现 UP 重新 resolve + 两道 dwell 门：高亮先亮、门上不过就算"没选中"，
+                        // 且 UP 重新解析会落到与高亮不同的项（迟滞只作用于 MOVE）⇒
+                        // 真机症状"看着选中了但没判定为选中/启动了别的"。
+                        // 仅当本次手势从未高亮过任何项（快速扫过即松手，或高亮被子项覆盖）才按
+                        // 松手位置补一次判定——保证"点到即启动"。
+                        var fanSel = lastSelectedFanIndex
+                        var quickSel = lastSelectedQuickIndex
+                        if (fanSel !in geometry.items.indices && quickSel !in geometry.quickApps.indices) {
+                            val r = resolveSelection(x, y, dx, dy, dist, deadZonePx, geometry)
+                            fanSel = r.first
+                            quickSel = r.second
+                        }
                         val deg = Math.toDegrees(Math.atan2(dy.toDouble(), dx.toDouble()))
-                        // selectedSince==0 = 手势期间从未预选过（快速扫过即松手），dwell 按 0 计——
-                        // 顺带修真 bug：此前 uptime−0 为巨大垃圾值，会让 <150ms 快速松手也通过
-                        // 预选时长检查（违反 PRD"预选不足 150ms 松手不启动"）
-                        val nowUp = SystemClock.uptimeMillis()
-                        val dwellMs = if (selectedSince == 0L) 0L else nowUp - selectedSince
-                        val streakMs = if (streakSince == 0L) 0L else nowUp - streakSince
                         val hitItem = geometry.items.getOrNull(fanSel)
                         HLog.i(
                             TAG,
-                            "UP resolve: local=(${x.toInt()},${y.toInt()}) raw=(${rawX.toInt()},${rawY.toInt()}) " +
+                            "UP commit: local=(${x.toInt()},${y.toInt()}) raw=(${rawX.toInt()},${rawY.toInt()}) " +
                                 "dist=${dist.toInt()} deg=${"%.1f".format(deg)} fan=$fanSel" +
                                 (hitItem?.let {
                                     " [${it.app.packageName} ang=${"%.1f".format(it.angle)} rad=${it.radius.toInt()} ctr=(${it.centerX.toInt()},${it.centerY.toInt()})]"
                                 } ?: "") +
-                                " quick=$quickSel dwell=$dwellMs streak=$streakMs"
+                                " quick=$quickSel released=$released"
                         )
 
-                        val dwellTime = dwellMs
                         val anySelected = fanSel in geometry.items.indices
                         val anyQuick = quickSel in geometry.quickApps.indices
-                        // 常驻点选态：跳过预选门——点按的 DOWN→UP 间隔远小于滑选预选时长，
-                        // 门槛会把"明明点中了"判成"dwell too short"拒启动
-                        val commitGate = if (released) 0L else DWELL_MS
-                        val finalGate = if (released) 0L else FINAL_MIN_MS
-                        val passedDwell = dwellTime >= commitGate && streakMs >= commitGate &&
-                            dwellTime >= finalGate
-
                         when {
-                            !anySelected && !anyQuick -> {
-                                handleQuickBarTap(x, y, geometry, config, density)
-                            }
-                            anySelected && !passedDwell -> {
-                                Log.d(TAG, "dwell too short: item=${dwellTime}ms streak=${streakMs}ms (need $commitGate/$finalGate), not launching")
-                            }
-                            anyQuick && !passedDwell -> {
-                                Log.d(TAG, "dwell too short: item=${dwellTime}ms streak=${streakMs}ms (need $commitGate/$finalGate), not launching")
-                            }
                             anySelected -> {
+                                touchState.value = FanTouchState(x, y, 2, fanSel, quickSel)
                                 HLog.i(TAG, "selected fan: ${geometry.items[fanSel].app.packageName}")
                                 onAppSelected?.invoke(geometry.items[fanSel].app)
                             }
                             anyQuick -> {
-                                HLog.i(TAG, "selected quick: ${geometry.quickApps[quickSel].packageName}")
-                                onQuickAppSelected?.invoke(geometry.quickApps[quickSel])
+                                touchState.value = FanTouchState(x, y, 2, fanSel, quickSel)
+                                val item = geometry.quickApps[quickSel]
+                                if (item.group != null) {
+                                    // 组=入口不是动作：松手展开弹层，扇保持（不启动、不收起）
+                                    openGroupPopup(item, quickSel, geometry)
+                                } else {
+                                    HLog.i(TAG, "selected quick: ${item.packageName}")
+                                    onQuickAppSelected?.invoke(item)
+                                }
+                            }
+                            else -> {
+                                touchState.value = FanTouchState(x, y, 2, -1, -1)
+                                handleQuickBarTap(x, y, geometry)
                             }
                         }
                     }
@@ -665,6 +645,8 @@ class ComposeFanHost(
                         touchState.value = FanTouchState(x, y, 3, -1, -1)
                         lastSelectedFanIndex = -1
                         lastSelectedQuickIndex = -1
+                        hoverGroupIndex = -1
+                        hoverGroupSince = 0L
                     }
                 }
                 return super.dispatchTouchEvent(event)
@@ -844,164 +826,108 @@ class ComposeFanHost(
         return Offset(cx, cy)
     }
 
-    // ===== 组展开（C7）：QuickExpandMachine 事件路由 + 几何换帧 =====
+    // ===== 组竖向弹层（2026-10-31）：点组图标展开，子项竖列 + 背板 =====
+
+    /** 打开组弹层（组是入口不是动作：松手展开，扇保持，不启动也不收起）。 */
+    private fun openGroupPopup(groupApp: FanAppInfo, groupIndex: Int, geometry: FanGeometry) {
+        val children = groupApp.group
+        if (children.isNullOrEmpty()) return
+        val density = context.resources.displayMetrics.density
+        val p = GroupPopupLayout.compute(geometry, groupIndex, children.size, density)
+        popupGroupIndex = groupIndex
+        popupState.value = GroupPopupUi(popup = p, children = children, selectedIndex = -1)
+        HLog.i(
+            TAG,
+            "group popup open: ${groupApp.appName} children=${children.size} " +
+                "at=(${p.x.toInt()},${p.y.toInt()}) ${p.width.toInt()}x${p.height.toInt()} anchorRow=${p.anchorRow}"
+        )
+    }
+
+    private fun closeGroupPopup() {
+        if (popupState.value == null) return
+        popupState.value = null
+        popupGroupIndex = -1
+        hoverGroupIndex = -1
+        hoverGroupSince = 0L
+        // 高亮/提交目标一起作废：关层后同一条手势的 UP 会走正常提交路径，
+        // 残留的 lastSelectedQuickIndex 会把"再点组图标收起"变成"又展开"（来回抖）
+        lastSelectedFanIndex = -1
+        lastSelectedQuickIndex = -1
+        HLog.i(TAG, "group popup closed")
+    }
 
     /**
-     * 组触摸路径（含组时接管全部 quick 交互）。返回 true=事件已消费（恒真——
-     * 机器路径完整覆盖 DOWN/MOVE/UP/CANCEL 的显示与提交）。
+     * 弹层独占触摸：子项点选 / 点别处收起。
+     *
+     * 弹层打开期间**不走**扇区提交——否则"点弹层里的空白"会启动弧上高亮的那一项。
+     * 命中用图标外扩方块（手指粗一点也点得中），不要求精确落在圆内。
      */
-    private fun handleGroupTouch(
+    private fun handlePopupTouch(
         event: MotionEvent,
+        ui: GroupPopupUi,
         geometry: FanGeometry,
-        x: Float, y: Float,
-        dx: Float, dy: Float, dist: Float,
-        deadZonePx: Float
+        x: Float,
+        y: Float
     ): Boolean {
-        val uptime = SystemClock.uptimeMillis()
-        val fanSel = resolveFanSelection(dx, dy, dist, deadZonePx, geometry)
-        val quickIdx = calcQuickAppCandidate(x, y, geometry)
-        val hit = when {
-            quickIdx in geometry.quickApps.indices -> QuickExpandMachine.QuickHit.Quick(
-                "q$quickIdx", geometry.quickApps[quickIdx].group != null
-            )
-            fanSel in geometry.items.indices -> QuickExpandMachine.QuickHit.FanItem(fanSel)
-            else -> QuickExpandMachine.QuickHit.None
-        }
-        // 展开包络（仅展开态参与判定）：新栏包围盒外扩 ~0.5 图标（胶囊比例 0.5/0.25 内衬）
-        val insideEnvelope = if (!expandState.expanded) true else run {
-            val q = geometry.quickIconSize * context.resources.displayMetrics.density
-            val n = geometry.quickApps.size
-            val barW = n * q + (n - 1) * q * 0.35f + q
-            val m = q * 0.5f
-            x >= geometry.quickBarX - m && x <= geometry.quickBarX + barW + m &&
-                y >= geometry.quickBarY - m && y <= geometry.quickBarY + 1.5f * q + m
-        }
-        val action = when (event.action) {
-            MotionEvent.ACTION_DOWN -> QuickExpandMachine.ACTION_DOWN
-            MotionEvent.ACTION_MOVE -> QuickExpandMachine.ACTION_MOVE
-            MotionEvent.ACTION_UP -> QuickExpandMachine.ACTION_UP
-            else -> QuickExpandMachine.ACTION_CANCEL
-        }
-        // 统计口径与既有路径持平（采集层不因组在场而缺样本）
-        if (action == QuickExpandMachine.ACTION_DOWN || action == QuickExpandMachine.ACTION_MOVE) {
-            StatsRecorder.onFanMove(x, y)
-        }
-        if (action == QuickExpandMachine.ACTION_UP) {
-            StatsRecorder.onFanUp(
-                when {
-                    dist < deadZonePx -> CancelZone.DEAD
-                    dist < innerCancelRadius(geometry) -> CancelZone.INNER
-                    dist > outerCancelRadius(geometry) -> CancelZone.OUTER
-                    else -> CancelZone.IN_BAND
-                },
-                deadZonePx
-            )
-        }
-        val hadSelection = expandState.hasQuickSelection
-        val (next, cmd) = QuickExpandMachine.onEvent(
-            expandState,
-            QuickExpandMachine.Event(action, hit, uptime, insideEnvelope),
-            released, DWELL_MS, FINAL_MIN_MS
-        )
-        expandState = next
-        if (!hadSelection && next.hasQuickSelection) StatsRecorder.onFanPreselected()
-
-        when (cmd) {
-            QuickExpandMachine.Command.EXPAND_GROUP -> {
-                if (quickIdx in geometry.quickApps.indices) {
-                    performExpand(geometry.quickApps[quickIdx], quickIdx, geometry)
+        val p = ui.popup
+        val hit = GroupPopupLayout.hitIndex(p, x, y)
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                // 再点组图标 = 收起（先收，避免后续 MOVE/UP 被当成新的一次点选）
+                if (hit < 0 && calcQuickAppCandidate(x, y, geometry) == popupGroupIndex) {
+                    swallowUpAfterPopupClose = true
+                    closeGroupPopup()
+                    return true
+                }
+                if (hit >= 0 && hit != ui.selectedIndex) popupState.value = ui.copy(selectedIndex = hit)
+                Log.d(TAG, "popup DOWN hit=$hit local=(${x.toInt()},${y.toInt()})")
+                if (hit < 0) {
+                    // 落在别的快捷项上（弹层跨栏后会盖住栏右侧）⇒ 关层交回主路径，别把它吞掉
+                    // 弹层外起手同样关层交回（同一次按下就能去选别的组/图标）
+                    closeGroupPopup()
+                    return false
                 }
             }
-            QuickExpandMachine.Command.COLLAPSE_GROUP -> performCollapse()
-            QuickExpandMachine.Command.TAP_OUTSIDE -> {
-                touchState.value = FanTouchState(x, y, 2, -1, -1)
-                onOutsideTap?.invoke()
-                return true
-            }
-            QuickExpandMachine.Command.LAUNCH_QUICK -> {
-                val item = geometry.quickApps.getOrNull(quickIdx)
-                touchState.value = FanTouchState(x, y, 2, -1, -1)
-                if (item != null) {
-                    HLog.i(TAG, "quick(group-path) launch: ${item.appName}")
-                    onQuickAppSelected?.invoke(item)
+            MotionEvent.ACTION_MOVE -> {
+                if (hit >= 0) {
+                    if (hit != ui.selectedIndex) popupState.value = ui.copy(selectedIndex = hit)
+                    return true
                 }
-                return true
-            }
-            QuickExpandMachine.Command.LAUNCH_APP -> {
-                val item = geometry.items.getOrNull(fanSel)?.app
-                touchState.value = FanTouchState(x, y, 2, -1, -1)
-                if (item != null) {
-                    HLog.i(TAG, "fan(group-path) launch: ${item.packageName}")
-                    onAppSelected?.invoke(item)
+                // 手指仍在**组图标**上、或还在背板范围内 ⇒ 保持展开（悬停展开后手指本来就
+                // 停在栏上，不在弹层里；若这里就收层，弹层会在打开后的下一帧自己消失
+                // ——2026-11-01 真机"展开了立刻没"的成因）。
+                val candidate = calcQuickAppCandidate(x, y, geometry)
+                val onSourceGroup = candidate == popupGroupIndex
+                // 滑到**别的快捷项**上（含别的组）：同样要收层交回，否则弹层挂着会挡住那次选择
+                if (candidate != -1 && !onSourceGroup) {
+                    closeGroupPopup()
+                    return false
                 }
-                return true
+                if (onSourceGroup || GroupPopupLayout.inside(p, x, y)) {
+                    if (ui.selectedIndex != -1) popupState.value = ui.copy(selectedIndex = -1)
+                    return true
+                }
+                // 真的滑走了 ⇒ 收层并**交回手势**：同一条拖动可以继续滑到别的组（再次悬停
+                // 展开）或别的图标（2026-11-01 用户："收不起、选不了别的组"）。
+                closeGroupPopup()
+                return false
             }
-            QuickExpandMachine.Command.NONE -> Unit
+            MotionEvent.ACTION_UP -> {
+                val child = ui.children.getOrNull(hit)
+                val onSourceGroup = calcQuickAppCandidate(x, y, geometry) == popupGroupIndex
+                val insideBoard = GroupPopupLayout.inside(p, x, y)
+                closeGroupPopup()
+                if (child != null) {
+                    HLog.i(TAG, "popup child launch: ${child.packageName}")
+                    onQuickAppSelected?.invoke(child)
+                    return true
+                }
+                // 松手在组图标/背板内 ⇒ 只收层；松手在别处 ⇒ 交回主路径（可能是点了别的组）
+                return onSourceGroup || insideBoard
+            }
+            MotionEvent.ACTION_CANCEL -> closeGroupPopup()
         }
-        // 显示更新：quick 索引取自机器选中 id（q<idx>）；fan 索引取滞回选中
-        val displayQuick = next.selectedId?.removePrefix("q")?.toIntOrNull() ?: -1
-        val phase = when (action) {
-            QuickExpandMachine.ACTION_UP -> 2
-            QuickExpandMachine.ACTION_CANCEL -> 3
-            else -> 0
-        }
-        touchState.value = FanTouchState(x, y, phase, fanSel.takeIf { it in geometry.items.indices } ?: -1, displayQuick)
         return true
-    }
-
-    /** 展开：换 pendingInput 为子项列表 + 锚定几何重算 + quick 选中态重置（fan 侧保留）。
-     *  守卫只看 children/input——expandState.expanded 在调用前已被机器/控制器置位
-     *  （真机 18:53 实锤：旧守卫自毙致展开静默无操作），重复展开由调用方各自防。 */
-    private fun performExpand(groupApp: FanAppInfo, groupIdx: Int, oldGeometry: FanGeometry) {
-        val children = groupApp.group
-        val input = pendingInput ?: return
-        if (children.isNullOrEmpty()) return
-        rootQuickStash = input
-        expandedAnchorCenterX = computeQuickAppCenter(groupIdx, oldGeometry).x
-        pendingInput = GeometryInput(
-            input.anchorX, input.anchorY, input.apps, children,
-            input.isLandscape, input.cornerAnchor
-        )
-        lastSelectedQuickIndex = -1
-        selectedSince = 0L
-        streakSince = 0L
-        computeAndPublishGeometry()
-        HLog.i(TAG, "group expanded: ${groupApp.appName} children=${children.size} anchorX=${expandedAnchorCenterX?.toInt()}")
-    }
-
-    /** 收回根栏：还原 stash + 默认几何 + quick 选中态重置。不关扇形（规格） */
-    private fun performCollapse() {
-        val stash = rootQuickStash ?: return
-        pendingInput = stash
-        rootQuickStash = null
-        expandedAnchorCenterX = null
-        lastSelectedQuickIndex = -1
-        selectedSince = 0L
-        streakSince = 0L
-        computeAndPublishGeometry()
-        HLog.i(TAG, "group collapsed → root bar")
-    }
-
-    /** 控制器组分支入口（C7 三分支）：已展开（含机器路径先行处理）则空操作——
-     *  防重复换帧由这里独担（performExpand 不再看 expanded） */
-    fun expandQuickGroup(app: FanAppInfo) {
-        val geometry = geometryState.value ?: return
-        if (expandState.expanded) return
-        val idx = geometry.quickApps.indexOfFirst { it.group != null && it.appName == app.appName }
-        if (idx < 0) return
-        expandState = QuickExpandMachine.State(expanded = true, expandedGroupId = "q$idx")
-        performExpand(geometry.quickApps[idx], idx, geometry)
-    }
-
-    /** 组路径的取消半径（与既有 innerCancel/outerCancel 同公式，供统计口径复用） */
-    private fun innerCancelRadius(geometry: FanGeometry): Float {
-        val density = context.resources.displayMetrics.density
-        return (geometry.innerRadius * 0.85f - geometry.iconSize * density * 0.5f) * 0.75f
-    }
-
-    private fun outerCancelRadius(geometry: FanGeometry): Float {
-        val density = context.resources.displayMetrics.density
-        return (geometry.outerRadius + geometry.iconSize * density * 0.5f) * 1.25f
     }
 
     /**
@@ -1091,34 +1017,27 @@ class ComposeFanHost(
         return abs(d)
     }
 
-    private fun handleQuickBarTap(
-        x: Float, y: Float,
-        geometry: FanGeometry, config: FanConfig, density: Float
-    ) {
-        val quickAppsList = geometry.quickApps.take(6)
-        if (quickAppsList.isEmpty()) {
-            Log.d(TAG, "quickBarTap: no quick apps")
+    /**
+     * 兜底点按：本次手势从未高亮任何项、松手也没落在图标上时的最后一跳。
+     *
+     * 命中半径直接复用 [calcQuickAppCandidate]（0.8 图标距）——旧实现这里另写 0.7，
+     * 两值之间"高亮了却点不动"（`ComposeFanHost` 历史 `:1050` vs `:1091`）。
+     * 组条目在此同样只展开弹层，不启动。
+     */
+    private fun handleQuickBarTap(x: Float, y: Float, geometry: FanGeometry) {
+        val idx = calcQuickAppCandidate(x, y, geometry)
+        if (idx !in geometry.quickApps.indices) {
+            // 滑回/点空白：静默（避免与真点击混淆）
+            Log.d(TAG, "quickBarTap: no quick hit at (${x.toInt()},${y.toInt()})")
             return
         }
-        // 命中半径用几何层生效的快捷图标尺寸（跟随扇形图标收缩），与 computeQuickAppCenter
-        // 及渲染保持同一尺寸源；此前用 config 原始值，图标收缩后命中圈偏大错位。
-        // 注意：本方法在"无预选松手"时作为兜底调用——触点不在任何图标 0.7 图标距内时
-        // 静默返回（滑回取消的正常路径），不打日志避免与真点击混淆（实测轮 8 次滑回
-        // 全部被此阈值正确拒绝）
-        val quickIconPx = geometry.quickIconSize * density
-        val pxSpacing = quickIconPx * 0.35f
-        val barPadding = quickIconPx * 0.5f
-
-        for (i in quickAppsList.indices) {
-            val cx = geometry.quickBarX + barPadding + i * (quickIconPx + pxSpacing) + quickIconPx / 2f
-            val cy = geometry.quickBarY + barPadding + quickIconPx / 2f
-            val d = sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy))
-            if (d <= quickIconPx * 0.7f) {
-                HLog.i(TAG, "quickSelected: ${quickAppsList[i].packageName} (dist=${d.toInt()}px)")
-                onQuickAppSelected?.invoke(quickAppsList[i])
-                return
-            }
+        val item = geometry.quickApps[idx]
+        if (item.group != null) {
+            openGroupPopup(item, idx, geometry)
+            return
         }
+        HLog.i(TAG, "quickSelected: ${item.packageName}")
+        onQuickAppSelected?.invoke(item)
     }
 
     @Composable

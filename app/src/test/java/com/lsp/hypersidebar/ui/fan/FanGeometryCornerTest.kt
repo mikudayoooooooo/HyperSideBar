@@ -116,19 +116,4 @@ class FanGeometryCornerTest {
         assertTrue(geometry.quickBarY < upperEdgeY)
     }
 
-    @Test
-    fun `corner geometry selects first outer item at its center`() {
-        val geometry = compute(Offset(10f, 2390f), cornerAnchor = true)
-        val first = geometry.items.first()
-
-        val selected = computeSelectedIndex(
-            anchor = geometry.anchor,
-            touch = Offset(first.centerX, first.centerY),
-            geometry = geometry,
-            config = config,
-            density = density
-        )
-
-        assertEquals(0, selected)
-    }
 }

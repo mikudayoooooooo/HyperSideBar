@@ -74,18 +74,18 @@ private const val QUICK_ENTER_SLIDE_DP = 20
 /** 收拢终态缩放（缩向锚点，不到 0——配合淡出足够，也避免极端小尺度渲染开销） */
 private const val EXIT_SCALE_FLOOR = 0.55f
 
-/** scrim 淡入/淡出时长由设置项驱动（`PrefKeys.FAN_SCRIM_FADE_MS`，2026-10-17 起可调；
- *  默认值见 `LayoutDefaults.FAN_SCRIM_FADE_MS`）。缓动=SinOut（雾化渐显/渐隐）。 */
+/** scrim（压暗）淡入/淡出时长：常量 300ms，进出对称（用户 2026-10-17 拍板"用同一个值"；
+ *  2026-10-25 撤掉可调滑条——这块板的时长没有需要按人调的理由）。缓动=SinOut（雾化渐显/渐隐）。 */
+private const val SCRIM_FADE_MS = 300
 
 @Composable
 internal fun FanMenuCompose(
     geometry: FanGeometry,
     touchState: MutableState<FanTouchState>,
+    popup: MutableState<GroupPopupUi?>,
     colors: FanThemeColors,
     fogIntensity: Float,
     dimEnabled: Boolean,
-    /** 压暗（scrim）淡入/淡出时长（ms）：进出对称（用户 2026-10-17 拍板"用同一个值"） */
-    scrimFadeMs: Int,
     source: FanBackdropSource,
     wallpaper: android.graphics.Bitmap?,
     wallpaperOffset: IntOffset,
@@ -103,20 +103,28 @@ internal fun FanMenuCompose(
     // 池化 composition 逐呼出重建，无跨呼出残留）
     val wallpaperImage = remember(wallpaper) { wallpaper?.asImageBitmap() }
 
-    var selectedIndex by remember { mutableIntStateOf(-1) }
-    var selectedQuickIndex by remember { mutableIntStateOf(-1) }
+    // 高亮 = 宿主用来提交的同一个值（组合期直接读，不经 LaunchedEffect 晚一帧）。
+    // 旧实现晚一帧写 state，UP 那一帧会出现"屏上高亮 A、宿主提交 B"或反之——
+    // 真机症状"看着选中了却没判定为选中"。收/取消相（2/3）统一不亮。
+    val touchStateNow = touchState.value
+    val selectedIndex =
+        if (touchStateNow.touchAction == 2 || touchStateNow.touchAction == 3) -1
+        else touchStateNow.selectedIndex
+    val selectedQuickIndex =
+        if (touchStateNow.touchAction == 2 || touchStateNow.touchAction == 3) -1
+        else touchStateNow.selectedQuickIndex
 
     // 入场四通道：内容层快淡入（弧线可见性）+ 弧线扫开 + 快捷栏延迟上滑 + scrim 淡入
     val contentAlpha = remember { Animatable(0f) }
     val arcSweep = remember { Animatable(0f) }
     val quickP = remember { Animatable(0f) }
     val scrimAlpha = remember { Animatable(0f) }
-    // 压暗时长来自设置项（进出对称）：remember(scrimFadeMs) ⇒ 设置改动在下次呼出重组合时生效
-    val enterDimSpec = remember(scrimFadeMs) {
-        tween<Float>(durationMillis = scrimFadeMs, easing = SinOutEasing)
+    // 压暗时长固定常量（进出对称）
+    val enterDimSpec = remember {
+        tween<Float>(durationMillis = SCRIM_FADE_MS, easing = SinOutEasing)
     }
-    val exitDimSpec = remember(scrimFadeMs) {
-        tween<Float>(durationMillis = scrimFadeMs, easing = SinOutEasing)
+    val exitDimSpec = remember {
+        tween<Float>(durationMillis = SCRIM_FADE_MS, easing = SinOutEasing)
     }
     // 收拢两通道：exitTick 被 host 递增即触发（enterTick 基线=组合进入时刻的 tick，
     // 池化逐呼出重组合 → remember 重置，天然不会误触发）
@@ -142,22 +150,6 @@ internal fun FanMenuCompose(
             launch { scrimAlpha.animateTo(0f, exitDimSpec) }
         )
         onExitFinished()
-    }
-
-    LaunchedEffect(touchState.value) {
-        val state = touchState.value
-        // 预选反馈直接跟随命中结果（PRD §7.3.2 框选放大+应用名）。原 activeZone 距离门控
-        // 会被设备上残留的旧参数（60dp=180px < 图标距圆心 280-390px）整体关闭——高亮
-        // 永不出现，实测"完全没有选中反馈"。该参数已于 1B 废弃删除（PRD"30~120dp 可调"
-        // 与"至少覆盖扇形"自相矛盾且任何距离门控都会复活此 bug），选中语义由
-        // 死区+内外取消区派生
-        if (state.touchAction != 2 && state.touchAction != 3) {
-            selectedIndex = state.selectedIndex
-            selectedQuickIndex = state.selectedQuickIndex
-        } else {
-            selectedIndex = -1
-            selectedQuickIndex = -1
-        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -234,6 +226,19 @@ internal fun FanMenuCompose(
                     onQuickAppSelected = onQuickAppSelected
                 )
             }
+
+            // 组弹层：画在快捷栏之上、图标层之下（层级表达 = 背板把子项包起来）
+            GroupPopupLayer(
+                ui = popup.value,
+                colors = colors,
+                density = LocalDensity.current.density,
+                // 弹层背板用自己的材质层，但参数与扇形板**同源**（boardVeilAlpha/boardBlurColors）
+                source = source,
+                fogIntensity = fogIntensity,
+                wallpaper = wallpaperImage,
+                wallpaperOffset = wallpaperOffset,
+                wallpaperDisplay = wallpaperDisplay
+            )
         }
     }
 }

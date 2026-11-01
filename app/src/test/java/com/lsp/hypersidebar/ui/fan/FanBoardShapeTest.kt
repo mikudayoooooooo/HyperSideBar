@@ -1,7 +1,6 @@
 package com.lsp.hypersidebar.ui.fan
 
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.unit.Density
@@ -19,7 +18,7 @@ import org.junit.Test
  *     来源），形状必须是**节点本地坐标**（0,0 → w,h）；
  *  ② 该尺寸必须与 `QuickAppsBar` Row 的真实尺寸、`computeQuickAppCenter` 的步进同源。
  *
- * 历史教训（0921 真机）：节点 fillMaxSize + 绝对坐标 RoundRect，胶囊外圈会多出一块直角灰矩形；
+ * 历史教训（0921 真机）：节点 fillMaxSize + 绝对坐标形状会在胶囊外圈多出一块直角灰矩形；
  * 与 Outline 是 Generic 还是 Rounded 无关，故本测试只钉"尺寸/坐标口径"，不钉 Outline 子类型。
  */
 class FanBoardShapeTest {
@@ -37,28 +36,10 @@ class FanBoardShapeTest {
         cornerAnchor = true
     )
 
-    private fun outlineFor(quickCount: Int): Outline {
-        val g = geometry(quickCount)
-        val m = requireNotNull(quickCapsuleMetrics(g, density))
-        // 节点尺寸就是胶囊尺寸（FanBoard ②-b 用同一个 metrics 布局该节点）
-        return capsuleShape(g, density)
-            .createOutline(Size(m.width, m.height), LayoutDirection.Ltr, Density(density))
-    }
-
-    private fun roundRectOf(quickCount: Int): RoundRect =
-        requireNotNull((outlineFor(quickCount) as? Outline.Rounded)?.roundRect) {
-            "胶囊裁剪形状必须能被 placeWithLayer 当作轮廓取用（Outline.Rounded）"
-        }
-
-    @Test
-    fun `capsule outline is node local, not window absolute`() {
-        val rr = roundRectOf(5)
-        // 本地坐标：从原点起，尺寸 = 节点尺寸
-        assertEquals(0f, rr.left, 0.01f)
-        assertEquals(0f, rr.top, 0.01f)
-        assertTrue("胶囊轮廓不得落在窗口绝对坐标上（那是直角灰矩形的来源）", rr.right < 1080f)
-        assertTrue(rr.bottom < 2400f)
-    }
+    // 板形（弧带 ∪ 胶囊的 union path）本身依赖 android.graphics.Path，纯 JVM 单测建不出来
+    // （"Method moveTo in android.graphics.Path not mocked"）⇒ 只在真机/模拟器上肉眼验收：
+    // 2026-10-31 在 AVD 上实测同一块板内"弧带内缘"与"胶囊内腔"取到了**完全相同**的像素
+    // （231,231,241），此前胶囊那一层是空的（只剩描边），这就是"上下两端颜色断层/分层"。
 
     @Test
     fun `capsule metrics match the quick bar row`() {
@@ -71,10 +52,6 @@ class FanBoardShapeTest {
         assertEquals(q + 2f * q * QUICK_BAR_VERTICAL_PAD_RATIO, m.height, 1f)
         assertEquals((g.quickIconSize / 2f + 4f) * density, m.corner, 1f)
 
-        val rr = roundRectOf(5)
-        assertEquals(m.width, rr.width, 0.01f)
-        assertEquals(m.height, rr.height, 0.01f)
-        assertEquals(m.corner, rr.topLeftCornerRadius.x, 0.01f)
     }
 
     @Test
@@ -85,31 +62,6 @@ class FanBoardShapeTest {
         assertEquals(six.width, ten.width, 0.01f)
         assertTrue(five.width < six.width)
         assertEquals(null, quickCapsuleMetrics(geometry(0), density))
-    }
-
-    @Test
-    fun `progressive blur axis and falloff follow the band outward direction`() {
-        // 三种呼出档都不该把渐隐轴搞反。miuix 角度约定（0.9.4 字节码实证：Left=0°/Top=90°/
-        // Right=180°/Bottom=270°）＝轴向量 (-cos θ, -sin θ)，故反解出的轴必须与"从锚点指向
-        // 弧带弧中点"同向；且弧缘（沿轴更远的一侧）要落在 startFraction = 模糊最强端。
-        val cases = listOf(
-            geom(Offset(0f, 1200f), corner = false),      // 边沿档：左边缘锚点
-            geom(Offset(10f, 2390f), corner = true),      // 底角档：左下角锚点
-            geom(Offset(1070f, 2390f), corner = true)     // 底角档：右下角锚点
-        )
-        cases.forEach { g ->
-            val p = fanBandProgressiveBlur(g, density)
-            val midRad = Math.toRadians((g.startAngle + g.spanAngle / 2f).toDouble())
-            val axisX = -Math.cos(Math.toRadians(p.angle.toDouble()))
-            val axisY = -Math.sin(Math.toRadians(p.angle.toDouble()))
-            val dot = axisX * Math.cos(midRad) + axisY * Math.sin(midRad)
-            assertEquals("渐隐轴必须指向弧带外侧（dot=$dot, angle=${p.angle}）", 1.0, dot, 0.01)
-            assertTrue(
-                "弧缘应比内缘靠外（start=${p.startFraction}, end=${p.endFraction}）",
-                p.startFraction > p.endFraction
-            )
-            assertTrue(p.startFraction in 0f..1f && p.endFraction in 0f..1f)
-        }
     }
 
     private fun geom(anchor: Offset, corner: Boolean) = computeFanGeometry(

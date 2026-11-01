@@ -78,14 +78,6 @@ internal object FanVisuals {
     /** 入场扫开小于此值不画描边（省掉首帧空画）。 */
     const val SWEEP_VISIBLE_EPSILON = 0.01f
 
-    /**
-     * 弧带渐进模糊的衰减曲线（miuix `ProgressiveBlur.curve`）。
-     * shader 实证：`radius = maxRadius × (1 − smoothstep(raw)^curve)`
-     * —— `raw=0` 端（startFraction 侧）最糊、`raw=1` 端（endFraction 侧）降为 0；
-     * 1.0 = 平滑过渡；>1 让"清晰区"更靠外、过渡更集中在弧缘。
-     */
-    const val PROGRESSIVE_BLUR_CURVE = 1.0f
-
     // ===== 入场动画：图标从锚点沿半径飞出 =====
 
     /** 起飞起点缩放与飞行区间（终态 1.0）。 */
@@ -97,16 +89,22 @@ internal object FanVisuals {
     /** 预览虚拟系密度：预览框是 3:4/4:3 缩略图，用半密度让几何接近真机观感。 */
     const val PREVIEW_DENSITY = 0.5f
 
-    /** 占位图标填充（primaryContainer × 此值）。 */
-    const val PREVIEW_PLACEHOLDER_ALPHA = 0.55f
+    /** 预览色片：细描边透明度 + 顶部玻璃高光透明度（装饰，纯示意义）。 */
+    const val PREVIEW_TILE_BORDER_ALPHA = 0.12f
+    const val PREVIEW_TILE_SHEEN_ALPHA = 0.18f
     /** 预览视口在内容外再留的边距（× 图标边长）。 */
     const val PREVIEW_VIEWPORT_PAD_RATIO = 0.55f
-    /** 弧带剪影（抽象平涂，替代旧填充饼 + 双轨道）。 */
+    /** 弧带剪影填充（径向渐变外缘色）。 */
     const val PREVIEW_BAND_FILL_ALPHA = 0.92f
+    /** 弧带径向渐变的锚点侧微光（primary × 此值）。 */
+    const val PREVIEW_BAND_TOP_ALPHA = 0.10f
+    /** 弧带内外缘细线透明度：深色下填充与画布同色，靠这两条线分边界。 */
+    const val PREVIEW_BAND_OUTLINE_ALPHA = 0.35f
+    const val PREVIEW_BAND_INNER_ALPHA = 0.26f
     /** 预览框：圆角、描边宽度、描边透明度。 */
-    val PREVIEW_FRAME_CORNER = 12.dp
+    val PREVIEW_FRAME_CORNER = 16.dp
     val PREVIEW_FRAME_BORDER_WIDTH = 1.dp
-    const val PREVIEW_FRAME_BORDER_ALPHA = 0.35f
+    const val PREVIEW_FRAME_BORDER_ALPHA = 0.18f
     /** 预览里快捷栏示意盒子（真机材质不参与预览，故给一层示意底）。 */
     const val PREVIEW_CAPSULE_FILL_ALPHA = 0.94f
     const val PREVIEW_CAPSULE_BORDER_ALPHA = 0.30f

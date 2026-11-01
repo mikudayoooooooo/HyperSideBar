@@ -35,9 +35,7 @@ import com.lsp.hypersidebar.prefs.LayoutDefaults
 import top.yukonga.miuix.kmp.blur.BlendColorEntry
 import top.yukonga.miuix.kmp.blur.BlurBlendMode
 import top.yukonga.miuix.kmp.blur.BlurColors
-import top.yukonga.miuix.kmp.blur.ProgressiveBlur
 import top.yukonga.miuix.kmp.blur.layerBackdrop
-import top.yukonga.miuix.kmp.blur.progressiveTextureBlur
 import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
 import kotlin.math.atan2
@@ -67,12 +65,6 @@ internal enum class FanBackdropSource {
      */
     TRANSPARENT,
 
-    /**
-     * 后方屏幕全屏景深：FLAG_BLUR_BEHIND。像素拿不到；MIUI 把它实现为全屏模糊（非局部），
-     * 板只叠极淡色让系统模糊透出。
-     */
-    BEHIND_SCREEN,
-
     /** 无来源：板自身承担全部材质（亚克力板）。 */
     NONE
 }
@@ -88,7 +80,6 @@ internal enum class FanBackdropSource {
  * | 来源 | backdrop 内容 | 板底混色 | 观感 |
  * |---|---|---|---|
  * | WALLPAPER | 壁纸位图 + 主题混色罩（都只进图层，不上屏） | 浓（×0.80） | 磨砂壁纸被拉回主题色域 + 颗粒 |
- * | BEHIND_SCREEN | 主题混色罩（必须极淡） | 极淡（×0.12） | 几乎纯系统模糊，板只留极淡着色 |
  * | NONE | 主题混色罩（浓度高 = 板底色本身） | 即板底色（×1.30） | 主题色板 + 提亮 + 颗粒（亚克力） |
  * | TRANSPARENT | —— 整块板不画 —— | —— | 只剩弧线与图标，完全透视 |
  *
@@ -120,23 +111,10 @@ internal fun FanBoard(
     // 板底混色：三档 —— 有背后真像素时「混色=玻璃罩」（把背后像素拉回主题色域），
     // 无来源时「混色=板底色本身」。采样壁纸这档必须够浓：亮壁纸配暗主题时，
     // 不压一层主题色就是一块亮晃晃的板（真机 0915 反馈）
-    val veilScale = when (source) {
-        FanBackdropSource.WALLPAPER -> LayoutDefaults.FAN_BOARD_VEIL_SCALE_WALLPAPER
-        FanBackdropSource.BEHIND_SCREEN -> LayoutDefaults.FAN_BOARD_VEIL_SCALE_SYSTEM
-        FanBackdropSource.NONE -> LayoutDefaults.FAN_BOARD_VEIL_SCALE_PLAIN
-        // 透明档：材质整块不画（返回值用不到，给 0 以免误用）
-        FanBackdropSource.TRANSPARENT -> 0f
-    }
-    val veilAlpha = (fogIntensity * veilScale)
-        .coerceIn(LayoutDefaults.FAN_BOARD_VEIL_MIN, LayoutDefaults.FAN_BOARD_VEIL_MAX)
-    // 提亮同理：有背后内容时宁淡勿浓，否则把真模糊/真像素洗白
-    val sheenScale = if (source == FanBackdropSource.NONE) {
-        LayoutDefaults.FAN_BOARD_SHEEN_SCALE_PLAIN
-    } else {
-        LayoutDefaults.FAN_BOARD_SHEEN_SCALE_BLURRED
-    }
-    val sheen = fogIntensity * sheenScale
-    val noise = LayoutDefaults.FAN_BOARD_NOISE_BASE + fogIntensity * LayoutDefaults.FAN_BOARD_NOISE_SCALE
+    // 混色/提亮/噪点/颜色参数全部取自 boardVeilAlpha / boardBlurColors / boardNoiseCoefficient
+    // （单源：组弹层背板用的是同一套，见 GroupPopupLayer）
+    val veilAlpha = boardVeilAlpha(source, fogIntensity)
+    val noise = boardNoiseCoefficient(fogIntensity)
 
     Box(modifier = modifier.fillMaxSize()) {
         // 透明档：整块板不画（既不取背后内容也不加材质）——连采集层与 textureBlur 都不建，
@@ -149,8 +127,8 @@ internal fun FanBoard(
             //
             // 注：这里**不做径向雾化渐变**。0921 曾按 0906 口径落地过"弧缘 100% → 锚点 35%"
             // 的径向混色（中心=锚点、半径=弧带外缘），真机复验**肉眼不可辨**（弧带已被等半径
-            // 高斯压过，混色浓度差被抹平）⇒ 已撤回，勿再重复尝试；要纵深就走模糊那条路
-            // （弧带 progressiveTextureBlur，见 ②-a），那是**可见**的。
+            // 高斯压过，混色浓度差被抹平）⇒ 已撤回，勿再重复尝试；层内任何"浓度随位置变化"
+            // 的做法都会在板面上留下可见色阶（2026-10-31 血案：模糊强度渐变把板洗成两段色）。
             // 壁纸对位（0921）：采样位图 = 屏幕的**等比居中等比裁剪**（WallpaperSampler 按
             // displayMetrics 裁剪后降到半分辨率），所以把它按「屏幕尺寸」还原、再用窗口原点
             // 平移到窗口本地系，磨砂里的"背后"就与桌面真实壁纸像素对得上。
@@ -180,30 +158,30 @@ internal fun FanBoard(
             // 入场随 sweep 渐显：只在 draw-time 改 alpha（GPU 合成），不把 sweep 喂进 shape——
             // 否则每帧重建模糊几何/重跑高斯，首呼出必卡
             //
-            // 弧带与快捷栏胶囊是**两个独立形状、同一套材质参数**（共享 backdrop/混色/提亮/
-            // 噪点/半径）：用户 0920 指出"一体"指的是两者显示效果基本一致，而非几何并集。
-            // 早期把两者 Path 并成一个模糊区，胶囊轮廓会被弧带吞掉；各自一层则既独立又同质。
+            // 2026-10-31 起弧带与快捷栏胶囊**共用同一个模糊节点**（boardShape = 两条轮廓的
+            // union path）：两次独立取景/混色会在交界处留下可见台阶（真机"上下两端颜色断层/
+            // 分层"），而单层材质由构造保证一致。见 [boardShape]。
             val blurRadiusDp = LayoutDefaults.FAN_BOARD_BLUR_RADIUS_PX / density
-            val blurColors = BlurColors(
-                blendColors = listOf(
-                    // Screen 提亮（滤色不压灰，比 SrcOver 更接近玻璃质感）
-                    BlendColorEntry(Color.White.copy(alpha = sheen), BlurBlendMode.Screen)
-                ),
-                // 亮度补偿只给无来源的板：自绘底色需要按主题微调。有背后真像素时
-                // 不额外提亮/压暗 —— 亮壁纸会被 +0.04 推得更亮，正是真机反馈的问题
-                brightness = if (source == FanBackdropSource.NONE) {
-                    if (colors.isDark) LayoutDefaults.FAN_BOARD_BRIGHTNESS_DARK
-                    else LayoutDefaults.FAN_BOARD_BRIGHTNESS_LIGHT
-                } else 0f,
-                contrast = 1f,
-                saturation = LayoutDefaults.FAN_BOARD_SATURATION
-            )
-            // ②-a 弧带：环扇形只能用 Generic path 表达、且坐标铺满整窗，故节点仍 fillMaxSize。
-            // 模糊半径沿"从锚点指向弧带弧中点"的方向**渐进衰减**（miuix 0.9.4 ProgressiveBlur）：
-            // 弧缘最糊、往锚点方向渐清 —— 与上面混色罩的径向渐变同向，纵深一致；
-            // 胶囊仍是等半径（小面积上做渐进没有意义），两者共享同一 backdrop/混色/噪点/最大半径。
-            val bandOutline = remember(geometry, density) { bandShape(geometry, density) }
-            val progressiveGradient = remember(geometry, density) { fanBandProgressiveBlur(geometry, density) }
+            val blurColors = boardBlurColors(source, fogIntensity, colors)
+            // ② 板材质：弧带 ∪ 快捷栏胶囊 = **一个**形状、一层 miuix textureBlur。
+            //
+            // 为什么必须一层（2026-10-31 真机复现"浓度拉到最高仍分层/上下两端颜色断层"）：
+            // 两个节点 = 两次独立取景 + 两次混色，任何一丁点差异（模糊核相对形状大小、
+            // 各节点自己的离屏缓冲尺寸、混合叠加顺序）都会在交界处变成一条可见的"台阶"；
+            // 实测在软件渲染下胶囊那一层干脆画不出材质（只剩 ③ 的描边），与弧带并排即两层。
+            // 并成一条 union path 后材质由**构造**保证一致——这才是"弧带与胶囊一体"的
+            // 正确实现（0920 那句"一体"要的是同一层材质；早期并集失败是把两个形状错误叠加，
+            // 这里用 Path.op(UNION)，两个轮廓各自保留）。
+            //
+            // **等半径**模糊（2026-10-31 定案，取代 0.9.4 的渐进档）：
+            // 渐进档 = 模糊强度沿轴渐变。模糊强度对**半透明**内容会改变 alpha（miuix 的
+            // 下采样/上采样链在强糊端把 alpha 摊薄），于是同一块板沿渐变方向出现一段
+            // "由浓到无"的色阶——用户两次报的"上下两端断层 / 最高浓度也分层"就是它；
+            // 而弧带与胶囊分属两个节点时，两边的糊度不同，交界处再叠一条台阶。
+            // 现在：弧带 ∪ 胶囊 = 一条 union path + **一个**等半径材质 ⇒ 整块板同色，
+            // 任何浓度下都不会出现色阶。代价是失去"越靠边越糊"的径向纵深（该效果在 0921
+            // 也只有 wallpaper 档才可能看出，亚克力档根本没有像素可糊）。
+            val boardOutline = remember(geometry, density) { boardShape(geometry, density) }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -211,48 +189,15 @@ internal fun FanBoard(
                     // 外层再显式裁一次：miuix 自己那次 clip 走 placeWithLayer 的内部 layerBlock，
                     // 真机上未必作用到「节点自己 draw 出来的模糊」上。没有这层兜底，模糊缓冲会按
                     // 节点包围盒出图 —— 一圈直角边（0921 用户真机：矩形与胶囊框线完全重合）
-                    .clip(bandOutline)
-                    .progressiveTextureBlur(
+                    .clip(boardOutline)
+                    .textureBlur(
                         backdrop = backdrop,
-                        shape = bandOutline,
+                        shape = boardOutline,
                         blurRadius = blurRadiusDp,
-                        gradient = progressiveGradient,
                         noiseCoefficient = noise,
                         colors = blurColors
                     )
             )
-            // ②-b 快捷栏胶囊：节点尺寸**恰好等于胶囊**并整体偏移到位，形状用节点本地坐标
-            //（0,0→w,h）。miuix 的 shape 是按节点尺寸求值的（ShapeProvider → placeWithLayer 的
-            // clip），"整窗大节点 + 远离原点的绝对坐标形状"会让这层离屏缓冲仍是整窗、裁剪靠
-            // 绝对坐标掩膜——真机表现为胶囊外圈多出一块直角灰矩形（0921 复现）。改成尺寸自洽的
-            // 节点后缓冲就是胶囊本身，且与弧带共用同一 backdrop / 混色 / 提亮 / 噪点参数，
-            // 两者观感必然一致（用户 0920 定案"一体=材质一致，非几何并集"）。
-            //
-            // 另外**两端都加显式 clip**：miuix 的裁剪链在真机上不可靠（同一份代码弧带正常、
-            // 胶囊出直角矩形），所以不把"材质只出现在形状内"这件事交给它——外层 clip 由 Compose
-            // 直接作用于本节点draw 的全部输出，与 miuix 内部是否生效无关。
-            quickCapsuleMetrics(geometry, density)?.let { capsule ->
-                val capsuleOutline = remember(geometry, density) { capsuleShape(geometry, density) }
-                Box(
-                    modifier = Modifier
-                        .offset {
-                            IntOffset(geometry.quickBarX.toInt(), geometry.quickBarY.toInt())
-                        }
-                        .size(
-                            with(localDensity) { capsule.width.toDp() },
-                            with(localDensity) { capsule.height.toDp() }
-                        )
-                        .graphicsLayer { alpha = sweep() }
-                        .clip(capsuleOutline)
-                        .textureBlur(
-                            backdrop = backdrop,
-                            shape = capsuleOutline,
-                            blurRadius = blurRadiusDp,
-                            noiseCoefficient = noise,
-                            colors = blurColors
-                        )
-                )
-            }
         }
         // ③ 玻璃描边：不参与模糊、始终清晰。用户 2026-09-20 定稿——扇形只描**最外层一条圆弧**
         //（柔光 + 细线，round 收尾），不再描内缘/径向线、也不用半圆端帽包起来；快捷栏单独描胶囊框。
@@ -311,6 +256,71 @@ internal fun FanBoard(
     }
 }
 
+/**
+ * 板形（弧带 ∪ 快捷栏胶囊）——**整块板只有这一层材质**（2026-10-31）。
+ *
+ * 两个轮廓各自由 [bandPath] / [quickCapsuleRoundRect] 生成，用 `Path.op(UNION)` 合成
+ * 一条 path：两个互不相连的子轮廓都会保留（不是把 rect 硬加进扇形里——那是早期"胶囊轮廓
+ * 被弧带吞掉"的成因）。坐标均为窗口本地系，配 fillMaxSize 节点。
+ */
+/** 板底混色浓度（单源）：采样壁纸宁淡、无来源直通、透明档不画。 */
+internal fun boardVeilAlpha(source: FanBackdropSource, fogIntensity: Float): Float {
+    val scale = when (source) {
+        FanBackdropSource.WALLPAPER -> LayoutDefaults.FAN_BOARD_VEIL_SCALE_WALLPAPER
+        FanBackdropSource.NONE -> LayoutDefaults.FAN_BOARD_VEIL_SCALE_PLAIN
+        FanBackdropSource.TRANSPARENT -> 0f
+    }
+    return (fogIntensity * scale)
+        .coerceIn(LayoutDefaults.FAN_BOARD_VEIL_MIN, LayoutDefaults.FAN_BOARD_VEIL_MAX)
+}
+
+/** 噪点抗条带系数（单源）。 */
+internal fun boardNoiseCoefficient(fogIntensity: Float): Float =
+    LayoutDefaults.FAN_BOARD_NOISE_BASE + fogIntensity * LayoutDefaults.FAN_BOARD_NOISE_SCALE
+
+/**
+ * 板材质颜色参数（单源）：扇形板、快捷栏胶囊、组弹层背板必须用**同一份**，否则同一屏幕上
+ * 会出现几种深浅（2026-11-01 用户："组展开的材质和层级对不上"）。
+ */
+internal fun boardBlurColors(
+    source: FanBackdropSource,
+    fogIntensity: Float,
+    colors: FanThemeColors
+): BlurColors {
+    val sheenScale = if (source == FanBackdropSource.NONE) {
+        LayoutDefaults.FAN_BOARD_SHEEN_SCALE_PLAIN
+    } else {
+        LayoutDefaults.FAN_BOARD_SHEEN_SCALE_BLURRED
+    }
+    return BlurColors(
+        blendColors = listOf(
+            BlendColorEntry(Color.White.copy(alpha = fogIntensity * sheenScale), BlurBlendMode.Screen)
+        ),
+        brightness = if (source == FanBackdropSource.NONE) {
+            if (colors.isDark) LayoutDefaults.FAN_BOARD_BRIGHTNESS_DARK
+            else LayoutDefaults.FAN_BOARD_BRIGHTNESS_LIGHT
+        } else 0f,
+        contrast = 1f,
+        saturation = LayoutDefaults.FAN_BOARD_SATURATION
+    )
+}
+
+internal fun boardShape(geometry: FanGeometry, density: Float) = object : Shape {
+    override fun createOutline(
+        size: androidx.compose.ui.geometry.Size,
+        layoutDirection: LayoutDirection,
+        density: Density
+    ): Outline = Outline.Generic(boardPath(geometry, density.density, 1f))
+}
+
+private fun boardPath(geometry: FanGeometry, density: Float, sweepP: Float): Path {
+    var merged = bandPath(geometry, density, sweepP)
+    quickCapsuleRoundRect(geometry, density)?.let { capsule ->
+        merged = Path().apply { op(merged, Path().apply { addRoundRect(capsule) }, PathOperation.Union) }
+    }
+    return merged
+}
+
 /** 弧带 Shape（sweep=1 终态）——miuix textureBlur 的模糊区域之一。环扇形铺满整窗坐标，故配 fillMaxSize 节点。 */
 private fun bandShape(geometry: FanGeometry, density: Float) = object : Shape {
     override fun createOutline(
@@ -318,56 +328,6 @@ private fun bandShape(geometry: FanGeometry, density: Float) = object : Shape {
         layoutDirection: LayoutDirection,
         density: Density
     ): Outline = Outline.Generic(bandPath(geometry, density.density, 1f))
-}
-
-/**
- * 弧带的渐进模糊配置（miuix 0.9.4 `ProgressiveBlur`）。语义由 0.9.4 的 shader 字节码实证：
- *
- * ```
- * p    = dot(xy, in_gradAxis)                       // 像素沿轴的投影
- * raw  = clamp((p - start) / (end - start), 0, 1)
- * intensity = 1 - smoothstep(raw)^curve             // ⇒ raw=0 端最糊、raw=1 端降为 0
- * radius    = maxRadius * intensity
- * ```
- *
- * 角度约定（同源实证：`Left=0° / Top=90° / Right=180° / Bottom=270°`）＝轴向量 `(-cos θ, -sin θ)`，
- * 即 0° 指屏幕左、90° 指上。于是：
- *  - **轴** = 从锚点指向弧带弧中点（`(-cos, -sin)` 反解 ⇒ θ = atan2(-dy, -dx)）；
- *  - **两端** = 弧带外缘投影放 `startFraction`（最糊）、内缘投影放 `endFraction`（降到清晰），
- *    与"弧缘 100% → 锚点 35%"的雾化口径同向；
- *  - `start/end` 是**投影范围的归一化位置**（0..1，相对本节点即整窗在该轴上的跨度），
- *    允许 start > end（shader 只用 (p-start)/(end-start)，单调性不受影响）。
- *
- * 只要 start 落在沿轴更远的一侧，方向就是"越往外越糊"——即便库内部的 fraction→px 换算与
- * 本函数的估法有偏差，也只是渐变被平移/压缩，不会把效果反过来。
- */
-internal fun fanBandProgressiveBlur(geometry: FanGeometry, density: Float): ProgressiveBlur {
-    val midRad = Math.toRadians((geometry.startAngle + geometry.spanAngle / 2f).toDouble())
-    val dirX = cos(midRad).toFloat()
-    val dirY = sin(midRad).toFloat()
-    val angleDeg = Math.toDegrees(atan2(-dirY.toDouble(), -dirX.toDouble())).toFloat()
-
-    // 投影跨度：节点 = fillMaxSize（整窗），dot 线性 ⇒ 极值必在四角
-    val w = geometry.windowSize.width.toFloat()
-    val h = geometry.windowSize.height.toFloat()
-    val c0 = 0f
-    val c1 = w * dirX
-    val c2 = h * dirY
-    val c3 = w * dirX + h * dirY
-    val pMin = minOf(c0, c1, c2, c3)
-    val pMax = maxOf(c0, c1, c2, c3)
-    val span = (pMax - pMin).takeIf { it > 1f } ?: 1f
-
-    val anchorProj = geometry.anchor.x * dirX + geometry.anchor.y * dirY
-    val (innerR, outerR) = fanBandRadii(geometry, density)
-    val startFraction = ((anchorProj + outerR - pMin) / span).coerceIn(0f, 1f)
-    val endFraction = ((anchorProj + innerR - pMin) / span).coerceIn(0f, 1f)
-    return ProgressiveBlur(
-        angle = angleDeg,
-        startFraction = startFraction,
-        endFraction = endFraction,
-        curve = FanVisuals.PROGRESSIVE_BLUR_CURVE
-    )
 }
 
 /** 快捷栏最多并排展示的图标数（与 [QuickAppsBar] 的 `take(6)` 同源）。 */
@@ -402,26 +362,6 @@ internal fun quickCapsuleMetrics(geometry: FanGeometry, density: Float): Capsule
         height = q + 2f * q * QUICK_BAR_VERTICAL_PAD_RATIO,
         corner = quickCapsuleCornerDp(geometry.quickIconSize) * density
     )
-}
-
-/**
- * 快捷栏胶囊 Shape —— 与弧带**独立成块但同材质**的另一层 textureBlur 区域。
- *
- * 坐标是**节点本地系**（0,0 → w,h）：miuix 的 shape 经 `ShapeProvider` 按节点尺寸求值后交给
- * `placeWithLayer(clip=true, shape=…)`，因此本 Shape 必须配「节点尺寸 == 胶囊尺寸」的节点使用
- * （见 FanBoard ②-b）。历史教训：节点 fillMaxSize + 绝对坐标 RoundRect 会让这层离屏缓冲仍是整窗、
- * 裁剪退化成绝对坐标掩膜，真机在胶囊外圈多出一块直角灰矩形（0921 复现，与 Outline 是
- * Generic 还是 Rounded **无关**——弧带一直是 Generic 却裁剪正常）。
- */
-internal fun capsuleShape(geometry: FanGeometry, density: Float) = object : Shape {
-    override fun createOutline(
-        size: androidx.compose.ui.geometry.Size,
-        layoutDirection: LayoutDirection,
-        density: Density
-    ): Outline {
-        val corner = (geometry.quickIconSize / 2f + 4f) * density.density
-        return Outline.Rounded(RoundRect(0f, 0f, size.width, size.height, CornerRadius(corner, corner)))
-    }
 }
 
 /** ③ 描边层用的胶囊轮廓（**窗口绝对坐标**，与 [quickCapsuleMetrics] 同源）；无快捷项时 null。 */

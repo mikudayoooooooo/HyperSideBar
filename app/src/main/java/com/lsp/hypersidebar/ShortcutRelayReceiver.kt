@@ -3,7 +3,6 @@ package com.lsp.hypersidebar
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.util.DefaultLaunchStrategy
@@ -25,9 +24,14 @@ private const val TAG = "ShortcutRelay"
  *
  * 防伪：运行期随机令牌校验（[RelayToken]，remotePrefs 分发）——否则任意 App 可伪造
  * 广播借 root am start 启动任意组件。原硬编码令牌反编译即可读出，等同零校验（批次 0 修复）。
- * 令牌在本进程由 MainActivity/AllAppsActivity 同步 remotePrefs 时生成并缓存；缓存为空
- * （模块 App 从未启动过）时一律拒绝——root 代发是最坏场景，宁可拒绝不可放行。
- * 该拒收影响面极小：用户没打开过 App 就不存在已配置的快捷方式可代发。
+ * 令牌在 remotePrefs 分发；模块进程被广播冷启、内存缓存为空时，先等 LSPosed 服务绑定
+ * 补挂（≤3s，[RelayToken.awaitAndVerify]），补挂失败则按拒绝处理（root 代发是最坏场景，
+ * 宁可拒绝不可放行）。鉴权一律排在一切副作用（Trace 写入、JSON 解析）之前。
+ *
+ * 分档（2026-11-02 审查 P2 定案）：launch 与 manifest 清单应答**同一把令牌闸**
+ * （[RelayToken.awaitAndVerify]）。清单应答原设想按发送方包名收窄，但该 API 在本机
+ * 跨应用广播上实测为 null（伪造回包被放行并落盘）⇒ 不可用；改为验令牌后，两个合法
+ * 发送方（launcher/:ui 的 hook 侧）本就随回包 `RelayToken.attach`，零成本。
  */
 class ShortcutRelayReceiver : BroadcastReceiver() {
 
@@ -35,8 +39,7 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
         when (intent.action) {
             // manifest 快捷方式桥应答（launcher 进程查询结果，数据仅驱动选择器展示）
             PrefKeys.MANIFEST_SHORTCUTS_REPLY -> {
-                val json = intent.getStringExtra(PrefKeys.MANIFEST_SHORTCUTS_EXTRA) ?: return
-                com.lsp.hypersidebar.ui.settings.ManifestShortcutsBridge.onReply(context, json)
+                handleReply(context, intent)
                 return
             }
             // QS 磁贴解冻 relay 现走 bind 通道（2026-09-07 方案 2）：UnfreezeRelayService
@@ -45,29 +48,26 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
             PrefKeys.RELAY_LAUNCH_ACTION -> Unit
             else -> return
         }
-        if (!RelayToken.verifyRelay(intent)) return
-        // 链路追踪（util/Trace）：relay 意图自带呼出链 id，写入本进程供日志前缀
-        val trace = intent.getStringExtra(com.lsp.hypersidebar.util.Trace.EXTRA)
-        com.lsp.hypersidebar.util.Trace.current = trace
+        // 只做免费的类型检查；解析与鉴权都推到后台线程（鉴权必须排在副作用之前）
         val json = intent.getStringExtra(PrefKeys.RELAY_LAUNCH_EXTRA_SHORTCUT) ?: return
-        val shortcut = runCatching {
-            ShortcutAction.fromJson(JSONObject(json))
-        }.getOrNull() ?: run {
-            HLog.w(TAG, "[${trace ?: "-"}] relay launch rejected: malformed shortcut json")
-            return
-        }
 
         // 启动含 binder/IO/su 子进程，goAsync + 后台线程避免 ANR
         val pending = goAsync()
         Thread {
             try {
-                // 冷启动缺口修复（2026-09-05）：令牌缓存只在 Activity 绑定时填充——
-                // 模块进程被杀后由本广播冷启时缓存为空，verifyRelay 一律拒绝（日志
-                // 实证：磁贴/INTENT_URI 代发全静默失败）。后台线程内等桥绑定拉取
-                // remotePrefs 并同步令牌（≤3s；LSPosed 死则超时按拒绝处理，安全档不变）
-                if (com.lsp.hypersidebar.util.RelayToken.current() == null) {
-                    val provisioned = awaitTokenProvision()
-                    HLog.i(TAG, "[${trace ?: "-"}] relay token cold-provision: ok=$provisioned")
+                // 冷启动补挂（2026-11-02 审查 P1 重排）：原实现的补挂排在 verifyRelay 的
+                // `return` 之后 ⇒ 流程图里那段代码是死的。现在先补挂再严格比对；
+                // 补挂失败（LSPosed 桥不可用）仍按无令牌拒绝，安全档不变。
+                if (!RelayToken.awaitAndVerify(intent)) return@Thread
+                // 链路追踪（util/Trace）：relay 意图自带呼出链 id，写入本进程供日志前缀。
+                // 鉴权之后才写——伪造广播不得污染本进程的诊断上下文。
+                val trace = intent.getStringExtra(com.lsp.hypersidebar.util.Trace.EXTRA)
+                com.lsp.hypersidebar.util.Trace.current = trace
+                val shortcut = runCatching {
+                    ShortcutAction.fromJson(JSONObject(json))
+                }.getOrNull() ?: run {
+                    HLog.w(TAG, "[${trace ?: "-"}] relay launch rejected: malformed shortcut json")
+                    return@Thread
                 }
                 HLog.i(TAG, "[${trace ?: "-"}] relay launch: id=${shortcut.id} kind=${shortcut.kind}")
                 val result = ShortcutLauncher.launch(context, shortcut, DefaultLaunchStrategy())
@@ -102,10 +102,38 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
     }
 
     /**
-     * 冷启动等令牌：直接复用 RemotePrefsBridge 的通用等待（addListener 幂等——已绑定
-     * 立即同步回调；超时=绑定不可用，返回 false 交由 verifyRelay 按无令牌拒绝）。
-     * 原为本文件手写的同逻辑闩锁副本（0912 收口去重）。
+     * manifest 清单应答（2026-11-02 审查 P2）：原先零校验即落盘，任意 App 一条广播就能
+     * 污染选择器的快捷方式目录（真机实测：`com.android.shell` 发的伪造回包被接受并写入
+     * `manifest_shortcuts_cache`）。
+     *
+     * 定案=**令牌档**，与 launch/restore 同一把闸：
+     * - 两个合法发送方（launcher 的 `EdgeGestureHook`、:ui 的 `FreeformRelayHook`）本来就
+     *   在回包里 `RelayToken.attach`，所以令牌闸对它们零成本；
+     * - 原打算用的"发送方包名/uid"在本机 OS4/API 36 上对跨应用广播实测为 null（见上一条
+     *   实测），恒 fail-open ⇒ 不可用，已放弃。
+     * 载荷上限先于鉴权检查（免费），鉴权在后台线程（冷启动要等桥绑定 ≤3s），落盘回主线程。
      */
-    private fun awaitTokenProvision(): Boolean =
-        com.lsp.hypersidebar.util.RemotePrefsBridge.awaitTokenProvision()
+    private fun handleReply(context: Context, intent: Intent) {
+        val json = intent.getStringExtra(PrefKeys.MANIFEST_SHORTCUTS_EXTRA) ?: return
+        if (json.length > MAX_SHORTCUT_PAYLOAD_CHARS) {
+            HLog.w(TAG, "manifest reply rejected: payload ${json.length}B")
+            return
+        }
+        val pending = goAsync()
+        Thread {
+            try {
+                if (!RelayToken.awaitAndVerify(intent)) return@Thread
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    com.lsp.hypersidebar.ui.settings.ManifestShortcutsBridge.onReply(context, json)
+                }
+            } finally {
+                pending.finish()
+            }
+        }.start()
+    }
+
+    private companion object {
+        /** 清单应答载荷上限（懒加载清单实测 ~KB 级；上限只为拦住病态/投毒载荷） */
+        const val MAX_SHORTCUT_PAYLOAD_CHARS = 256 * 1024
+    }
 }

@@ -1,9 +1,7 @@
 package com.lsp.hypersidebar.ui.settings
 
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.LauncherApps
 import android.content.pm.PackageManager
 import android.os.Process
@@ -153,6 +151,11 @@ private fun buildTileApps(context: Context, shortcuts: List<QsTileInfo>): List<Q
  * getShortcuts 抛 SecurityException（系统只授权默认桌面）→ 向 launcher 进程的
  * hook 接收器发 REQUEST，应答 JSON 经 ShortcutRelayReceiver 回填本桥。
  * 本地 prefs 缓存：冷启动先展示上次清单，应答到达后刷新。
+ *
+ * 防伪（2026-11-02 审查 P2 定案）：回包一律经 [ShortcutRelayReceiver] 的**令牌闸**
+ * 后再调本 object 的 [onReply]——本文件**不再**自带接收器（原动态接收器是同一落盘
+ * 路径的第二入口，且当时按"发送方包名"判真伪；该 API 在本机 OS4/API 36 上对跨应用
+ * 广播实测返回 null ⇒ 恒 fail-open，已废弃，见 ShortcutRelayReceiver.handleReply）。
  */
 object ManifestShortcutsBridge {
 
@@ -164,6 +167,10 @@ object ManifestShortcutsBridge {
     private const val LOCAL_PREFS = PrefsFiles.APP_LOCAL
     private const val CACHE_KEY = "manifest_shortcuts_cache"
 
+    /** 解析上限（条）：正常清单百级，截断只为拦住病态载荷。 */
+    private const val MAX_MANIFEST_ENTRIES = 2000
+
+    /** 只做「载入上次缓存」；应答由 manifest 接收器统一入口送入（幂等）。 */
     fun ensureRegistered(context: Context) {
         if (registered) return
         registered = true
@@ -174,18 +181,7 @@ object ManifestShortcutsBridge {
                     shortcuts = parse(json)
                     Log.i(TAG, "manifest shortcuts cache loaded: ${shortcuts.size}")
                 }
-        }
-        runCatching {
-            appCtx.registerReceiver(
-                object : BroadcastReceiver() {
-                    override fun onReceive(c: Context, intent: Intent) {
-                        onReply(c, intent.getStringExtra(PrefKeys.MANIFEST_SHORTCUTS_EXTRA) ?: return)
-                    }
-                },
-                IntentFilter(PrefKeys.MANIFEST_SHORTCUTS_REPLY),
-                Context.RECEIVER_EXPORTED
-            )
-        }.onFailure { Log.w(TAG, "manifest bridge register failed: ${it.message}") }
+        }.onFailure { Log.w(TAG, "manifest shortcuts cache load failed: ${it.message}") }
     }
 
     /** 向 launcher 进程请求最新清单（后台查询+应答，到达后 shortcuts 状态驱动重组）。 */
@@ -249,7 +245,9 @@ object ManifestShortcutsBridge {
 
     private fun parse(json: String): List<QsTileInfo> {
         val arr = org.json.JSONArray(json)
-        return (0 until arr.length()).mapNotNull { i ->
+        // 上限 2000 条（2026-11-02 审查 P2）：回包来自 hook 侧，正常清单是百级；
+        // 截断只为挡住病态/投毒载荷把选择器撑爆
+        return (0 until minOf(arr.length(), MAX_MANIFEST_ENTRIES)).mapNotNull { i ->
             val ob = arr.optJSONObject(i) ?: return@mapNotNull null
             val pkg = ob.optString("p")
             if (pkg.isEmpty()) return@mapNotNull null

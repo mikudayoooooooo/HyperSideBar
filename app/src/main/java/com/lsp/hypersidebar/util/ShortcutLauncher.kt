@@ -12,9 +12,6 @@ import android.os.Looper
 import android.os.UserHandle
 import android.util.Log
 import com.lsp.hypersidebar.prefs.PrefKeys
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.util.concurrent.TimeUnit
 import com.lsp.hypersidebar.util.HLog
 
 private const val TAG = "ShortcutLauncher"
@@ -162,26 +159,21 @@ object ShortcutLauncher {
     private class SuResult(val exitCode: Int, val stdout: String, val stderr: String)
 
     /**
-     * su 子进程统一执行（2026-10-26 审查 B4，全部 root 代发路径共用）：
-     * - **先读双流再 waitFor**——输出撑满 64KB 管道缓冲后子进程写流阻塞、父进程
-     *   waitFor 互等的死锁经典模式（lookup 路径早已修对，其余调用点经本 helper 收敛）；
-     * - waitFor 带 [timeoutMs] 上限（0910 性能审计挂账遗留：su 卡顿无限阻塞）；
-     * - finally destroy 防僵尸进程。
+     * su 子进程统一执行（2026-10-26 审查 B4 首版 → 2026-11-02 审查 P1 重做）：
+     * - **双流并行 drain + 全程 deadline**（[ProcCapture]）——旧版"先 readText 双流再 waitFor"
+     *   在子进程不退出/不关流时超时永不生效，顺序读两条流还会 64KB 管道互等；
+     * - 超时按 exitCode = -1 返回（调用方只判 `== 0` / 读 stdout，语义不变）；
+     * - 强杀防僵尸进程。
      */
-    private fun runSuCapture(cmd: List<String>, timeoutMs: Long = 10_000L): SuResult {
-        val process = ProcessBuilder(cmd).start()
-        try {
-            val stdout = BufferedReader(InputStreamReader(process.inputStream)).use { it.readText() }
-            val stderr = BufferedReader(InputStreamReader(process.errorStream)).use { it.readText() }
-            val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
-            if (!finished) {
-                HLog.w(TAG, "su timeout after ${timeoutMs}ms: ${cmd.lastOrNull()?.take(120) ?: "cmd"}")
-                return SuResult(-1, stdout, stderr)
-            }
-            return SuResult(process.exitValue(), stdout, stderr)
-        } finally {
-            process.destroy()
+    private fun runSuCapture(cmd: List<String>, timeoutMs: Long = ProcCapture.DEFAULT_TIMEOUT_MS): SuResult {
+        val process = runCatching { ProcessBuilder(cmd).start() }.getOrElse {
+            return SuResult(-1, "", "start failed: ${it.message}")
         }
+        val result = ProcCapture.capture(process, timeoutMs)
+        if (result.exitCode == -1) {
+            HLog.w(TAG, "su timeout after ${timeoutMs}ms: ${cmd.lastOrNull()?.take(120) ?: "cmd"}")
+        }
+        return SuResult(result.exitCode, result.stdout, result.stderr)
     }
 
     /**

@@ -5,12 +5,41 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
-import android.os.Build
 import android.util.Log
 import com.lsp.hypersidebar.BuildConfig
 import java.util.Collections
 import com.lsp.hypersidebar.prefs.HostPackages
+import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.util.HLog
+
+private const val MAX_SYNC_STRING_LEN = 64 * 1024
+private const val MAX_SYNC_SET_SIZE = 512
+
+/**
+ * 同步载荷白名单化（2026-11-02 审查 P1）：安全键一律丢弃，只保留 Bundle 基础类型。
+ *
+ * `relayToken` 的唯一权威来源是 LSPosed remotePrefs（hook 侧自行读），广播通道纯属冗余；
+ * 而 [ConfigSync.applySync] 的缓存经 [SyncedPrefs] **优先于** base 快照——不在这里截断，
+ * 任意 App 一条 ACTION_SYNC 广播即可把 `:ui` 的 root 代发令牌改成自己的值。
+ * 单点截断同时覆盖广播与 [ConfigPullBridge] 两条入口。
+ */
+internal fun sanitizeSyncMap(raw: Map<*, *>): Map<String, Any> {
+    val out = HashMap<String, Any>(raw.size)
+    for ((k, v) in raw) {
+        val key = k as? String ?: continue
+        if (key == PrefKeys.RELAY_TOKEN) continue
+        when (v) {
+            is String -> if (v.length <= MAX_SYNC_STRING_LEN) out[key] = v
+            is Int, is Long, is Float, is Boolean -> out[key] = v
+            is Set<*> -> if (v.size <= MAX_SYNC_SET_SIZE && v.all { it is String }) {
+                @Suppress("UNCHECKED_CAST")
+                out[key] = (v as Set<String>).toHashSet()
+            }
+            else -> Unit
+        }
+    }
+    return out
+}
 
 /**
  * 配置同步广播通道（批次 2 / D3 根治方案）。
@@ -31,8 +60,15 @@ import com.lsp.hypersidebar.util.HLog
  *
  * 安全口径（0912 审查修订）：SYNC 广播**显式定向两个 hook 宿主**且**剔除 relayToken**——
  * 此前隐式全量广播把 root 代发防伪令牌送给了任意监听 App（拿到即可伪造 ShortcutRelay
- * 广播借 root 启动任意非导出组件=提权），且伪造配置可注入扇形启动项。接收端仍无来源
- * 校验（广播信道的固有限制），攻击面从"全网可收"收窄为"仅宿主进程内代码"。
+ * 广播借 root 启动任意非导出组件=提权），且伪造配置可注入扇形启动项。
+ *
+ * 2026-11-02 审查补的闸（原「接收端无来源校验」的缺口）：
+ * - 内容闸 [sanitizeSyncMap]（在 [applySync] 内，广播与 ConfigPullBridge 共用）：安全键
+ *   `relayToken` 与非常规类型/超长值一律丢弃——伪造广播不再能改写缓存的令牌；
+ * - 来源闸**放弃**（真机实测 `sentFromUid`/`sentFromPackage` 在本机 OS4/API 36 上对跨应用
+ *   广播恒 null ⇒ 恒 fail-open，没有拦截能力）；因此也**不允许**再让令牌搭 SYNC 便车：
+ *   令牌的正规分发路径是 remotePrefs 快照与 [ConfigPullService] 的 uid-ACL 拉取
+ *   （[ConfigPullBridge] 拉到后 [RelayToken.adopt]）。
  * 涉及启动行为的广播（FAN_LAUNCH）仍走 RelayToken 严格校验。
  */
 object ConfigSync {
@@ -78,11 +114,19 @@ object ConfigSync {
     @Volatile private var hookCtx: Context? = null
 
     /** 收到 SYNC 全量覆盖（键值均为 Bundle 可序列化基础类型/StringSet）。 */
-    fun applySync(map: Map<String, Any>) {
-        cache = java.util.Collections.unmodifiableMap(HashMap(map))
+    fun applySync(raw: Map<*, *>) {
+        // 白名单化：安全键（relayToken）与非常规类型在此丢弃——伪造广播无法污染缓存
+        val sanitized = sanitizeSyncMap(raw)
+        cache = java.util.Collections.unmodifiableMap(sanitized)
         lastSyncAt = android.os.SystemClock.elapsedRealtime()
+        if (sanitized.size != raw.size) {
+            val dropped = raw.keys.mapNotNull { it as? String }
+                .filter { it !in sanitized }
+                .take(8)
+            HLog.w(TAG, "sync dropped ${raw.size - sanitized.size} key(s): $dropped")
+        }
         // 高频明细日志开关随全量配置刷新（设置页切换 → 三进程生效；§11.2）
-        (map[com.lsp.hypersidebar.prefs.PrefKeys.DEBUG_VERBOSE_LOGS] as? Boolean)?.let {
+        (sanitized[PrefKeys.DEBUG_VERBOSE_LOGS] as? Boolean)?.let {
             HLog.verboseEnabled = it
         }
         HLog.i(TAG, "config synced: ${cache.size} keys")
@@ -145,6 +189,30 @@ object ConfigSync {
     @Volatile private var modulePrefs: SharedPreferences? = null
 
     /**
+     * 合并窗口（2026-11-02 审查 P2）：原先每个键写入都立刻推一次全量——
+     * `restoreAllDefaults()` 一次点击（~30 个 put + 一次 notify）会打出 ~31 轮
+     * 「3 个宿主的定向广播 + CornerGeomBridge×2 + NativeGateBridge」。
+     * 全量快照覆盖、无顺序依赖，故用 [SYNC_COALESCE_MS] 窗口把连发合并成一次。
+     */
+    private const val SYNC_COALESCE_MS = 150L
+
+    /** 合并用的 Handler（主线程 Looper：模块进程的写入可能来自任意线程）。 */
+    @Volatile private var moduleSyncHandler: android.os.Handler? = null
+
+    /** 窗口内最后一次写入的键（仅日志定位用）。 */
+    @Volatile private var pendingChangedKey: String? = null
+
+    /** 窗口到点：一次性推全量。引用 [moduleCtx]/[modulePrefs]——所有 sendSync 调用点
+     *  都发生在 [ensureModuleSide] 之后，两者必已就绪；缺失则静默丢弃（进程正在退休）。 */
+    private val syncFlush = Runnable {
+        val c = moduleCtx ?: return@Runnable
+        val p = modulePrefs ?: return@Runnable
+        val changed = pendingChangedKey
+        pendingChangedKey = null
+        doSendSync(c, p, changed)
+    }
+
+    /**
      * 模块进程侧注册（幂等）：
      * - prefs 任何键写入即全量广播
      * - 绑定完成后立即推一次（设置页打开=配置刷新）
@@ -204,7 +272,8 @@ object ConfigSync {
      * - 监听是主通道（覆盖所有走 `Editor` 的写入），但它的存活依赖上面的强引用；
      * - 显式推送不依赖任何监听存活，且让「哪个写入点触发了一次同步」在代码上一眼可见
      *   （排查时不必再回头确认监听活着没）。
-     * 代价是常规写入会推两次（每次两次定向广播，异步 oneway，成本可忽略）。
+     * 代价是常规写入会触发两次排程——但两者落在同一个 `SYNC_COALESCE_MS` 窗口里会被
+     * 合并成一次发送（[sendSync]），不成倍放大。
      * 未注册（如 hook 进程误调）时静默 no-op。
      */
     fun notifyConfigChanged(changedKey: String? = null) {
@@ -217,8 +286,20 @@ object ConfigSync {
      * 全量广播当前配置（getAll 值均 Serializable：String/Int/Float/Boolean/StringSet）。
      * relayToken 必须剔除：hook 宿主经 LSPosed remotePrefs 自行读令牌，广播通道纯属冗余；
      * 带令牌的广播一旦离开定向范围即等于把 root 代发防伪令牌送人。
+     *
+     * 本函数只做**排程**：`SYNC_COALESCE_MS` 窗口内重复调用合并为一次 [doSendSync]
+     * （全量快照覆盖，无顺序依赖）。真正发送见 [doSendSync]。
      */
     fun sendSync(context: Context, prefs: SharedPreferences, changedKey: String? = null) {
+        val handler = moduleSyncHandler
+            ?: android.os.Handler(android.os.Looper.getMainLooper()).also { moduleSyncHandler = it }
+        if (changedKey != null) pendingChangedKey = changedKey
+        handler.removeCallbacks(syncFlush)
+        handler.postDelayed(syncFlush, SYNC_COALESCE_MS)
+    }
+
+    /** 真正发送（[sendSync] 的合并窗口到点后调用；参数仅供日志与显式路径使用）。 */
+    private fun doSendSync(context: Context, prefs: SharedPreferences, changedKey: String?) {
         // 顺带把底角几何推给 native（CornerGeomBridge）：native 门控跑在 com.miui.home，
         // 而 OS4 上该进程没有模块 Java 半侧 ⇒ 配置同步广播到不了它，只能走系统属性。
         // 幂等（值没变则跳过），异步不阻塞；无 root 时静默失败（native 用兜底值）。
@@ -308,8 +389,11 @@ object ConfigSync {
             val syncRecv = object : BroadcastReceiver() {
                 override fun onReceive(c: Context, intent: Intent) {
                     val map = intent.getSerializableExtra("map") as? Map<*, *> ?: return
-                    @Suppress("UNCHECKED_CAST")
-                    applySync(map as Map<String, Any>)
+                    // 来源闸已放弃（2026-11-02 真机实测）：`sentFromUid`/`sentFromPackage`
+                    // 在本机 OS4/API 36 上对跨应用广播恒为 null/INVALID ⇒ 恒 fail-open，
+                    // 只带来虚假安全感（伪造回包实测被放行）。硬边界在 applySync 的
+                    // 内容过滤：安全键与类型在这里被丢弃，广播通道已无令牌可窃取。
+                    applySync(map)
                 }
             }
             context.registerReceiver(
@@ -375,6 +459,12 @@ object ConfigSync {
         }.onFailure { HLog.w(TAG, "write listener unregister failed: ${it.message}") }
         moduleWriteListener = null
         moduleRegistered = false
+        // 合并窗口（2026-11-02）：排队中的 flush 是**旧代闭包**，必须清掉，
+        // 否则热重载后旧代仍会跑一次推送
+        runCatching { moduleSyncHandler?.removeCallbacksAndMessages(null) }
+            .onFailure { HLog.w(TAG, "sync handler cleanup failed: ${it.message}") }
+        moduleSyncHandler = null
+        pendingChangedKey = null
         // ===== 模块进程侧的另外两条 util 通道 =====
         // 它俩的唯一调用点就是本对象的 [sendSync]（`CornerGeomBridge.push`/`pushBand`/
         // `ensureRotationWatch`、`NativeGateBridge.push`），所以由这里统一停：

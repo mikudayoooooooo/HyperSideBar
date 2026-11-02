@@ -35,6 +35,13 @@ object RelayToken {
     @Volatile
     private var cached: String? = null
 
+    /** 冷启动补挂的单飞锁：并发进来的 relay/restore 广播只等一次绑定（≤3s）。 */
+    private val provisionLock = Any()
+
+    /** hook 进程侧经可信拉取通道拿到的令牌（见 [adopt]）。 */
+    @Volatile
+    private var adopted: String? = null
+
     /**
      * 模块进程调用：确保令牌已生成并缓存，返回当前令牌。
      * hook 进程**禁止调用**（remotePrefs 只读，写抛 "Read only implementation"）。
@@ -56,9 +63,43 @@ object RelayToken {
     /** 当前令牌（收发两端共用）；从未同步过时返回 null。 */
     fun current(): String? = cached
 
-    /** hook 进程调用：读取模块下发的令牌（remotePrefs 只读路径）。 */
+    /**
+     * 模块进程专用（**会在调用线程阻塞 ≤[timeoutSec] 秒，禁止主线程调用**）：
+     * 先确保冷启动令牌就绪，再按 [verifyRelay] 严格比对。
+     *
+     * 修 2026-11-02 审查 P1：两个接收器原先在 `verifyRelay` 就 return，缓存的补挂代码
+     * 排在 return 之后 ⇒ 模块进程被广播冷启时补挂**永远不可达**（死代码），root 代发 100% 失败。
+     * 补挂 = 等 LSPosed 服务绑定后 [sync]（≤[timeoutSec]）；绑定不可用时超时并按无令牌拒绝，
+     * 安全档不变。
+     */
+    fun awaitAndVerify(intent: Intent, timeoutSec: Long = 3): Boolean {
+        if (cached == null) {
+            synchronized(provisionLock) {
+                if (cached == null) {
+                    val ok = RemotePrefsBridge.awaitTokenProvision(timeoutSec)
+                    HLog.i(TAG, "cold provision: ok=$ok")
+                }
+            }
+        }
+        return verifyRelay(intent)
+    }
+
+    /**
+     * hook 进程侧：把**可信通道**（[ConfigPullService] 的 uid-ACL 拉取）拿到的令牌记入缓存。
+     *
+     * 存在理由（2026-11-02 审查连带发现）：hook 的 remotePrefs 是进程启动时的**不可变
+     * 快照**，模块 App 之后才生成的令牌它永远读不到；而 SYNC 广播通道（唯一能实时下发
+     * 令牌的通道）已因来源不可校验而剔除该键（伪造 SYNC 曾可改写 host 侧令牌）。不补这条，
+     * 首次安装后未重启的宿主会一直发不出带令牌的 relay。
+     */
+    fun adopt(token: String?) {
+        if (token.isNullOrEmpty()) return
+        adopted = token
+    }
+
+    /** hook 进程调用：读取模块下发的令牌（可信拉取通道优先，回落 remotePrefs 快照）。 */
     fun read(prefs: SharedPreferences): String? =
-        runCatching { prefs.getString(PrefKeys.RELAY_TOKEN, null) }.getOrNull()
+        adopted ?: runCatching { prefs.getString(PrefKeys.RELAY_TOKEN, null) }.getOrNull()
 
     /** 发送端：为广播附上令牌。令牌未就绪时不附，由接收端按分档规则处理。 */
     fun attach(intent: Intent, token: String?) {

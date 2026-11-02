@@ -132,6 +132,9 @@ object ConfigPullBridge {
         val map = gotMap
         if (done && map != null) {
             ConfigSync.applySync(map)
+            // 令牌不进 SYNC 广播（来源不可校验），但这条通道是 uid-ACL 的可信 binder：
+            // 在这里接纳令牌，宿主就能用上「本进程启动之后才生成」的令牌（见 RelayToken.adopt）
+            RelayToken.adopt(map[PrefKeys.RELAY_TOKEN] as? String)
             HLog.i(TAG, "config pulled: ${map.size} keys, cost=${SystemClock.elapsedRealtime() - t0}ms")
         } else {
             HLog.w(TAG, "pull timeout/unavailable: done=$done cost=${SystemClock.elapsedRealtime() - t0}ms")

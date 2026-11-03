@@ -39,10 +39,11 @@ object PrefKeys {
     /**
      * 底角斜滑兜底（2026-10-31 用户拍板）：**默认关**。
      *
-     * 小白条（手势导航）不在用时，launcher 的 `NavStubView` 链路不存在，底角斜滑无人接收；
+     * **导航栏被收起**的场景（游戏/全屏）里 launcher 的 `NavStubView` 不在，底角斜滑无人接收；
      * 开启后改由 SystemUI 输入面（`SystemUiInputSpy`）识别底角并把事件转发给 `:ui` 的
-     * `TurboLayout`。只在「开关开 && 非 OS4 侧栏宿主 && navigation_mode != 2」三条同时成立时生效
-     * （见 `SystemUiInputSpy.cornerFallbackActive()`）——避免与 launcher/系统角区手势互相抢流。
+     * `TurboLayout`。生效条件 =「开关开 && 底栏当前已收起」（`cornerFallbackActive()`），
+     * 底栏在屏时不接管——那时 launcher/系统手势链路本来就在。
+     * OS4 侧栏宿主另有 b2 转发路径（`b2Enabled()`），本开关只对非 OS4 宿主起作用。
      */
     const val CORNER_SPY_FALLBACK = "cornerSpyFallback"
 

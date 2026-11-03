@@ -1,20 +1,17 @@
 package com.lsp.hypersidebar.ui.settings
 
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import kotlin.math.roundToInt
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -31,14 +28,16 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.basic.Check
 import top.yukonga.miuix.kmp.icon.extended.Close
+import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
 import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 internal enum class LayoutOrientation { PORTRAIT, LANDSCAPE, CORNER }
 
@@ -280,11 +279,11 @@ private fun LayoutSheetContent(
 
     val config = remember(repo.revision) { buildPreviewConfig(repo) }
 
-    // 数值嵌入标题（省副标题行高）；仅图标超限需提示时给副标题
+    // 副标题只在"目标值被几何上限压下来"时出现；未超限不显示（2026-11-03 文案瘦身）
     val iconSummary = if (effectiveIcon < iconSize) {
         stringResource(R.string.icon_size_limited, iconSize.toInt(), effectiveIcon.toInt())
     } else {
-        stringResource(R.string.icon_size_effective, iconSize.toInt(), effectiveIcon.toInt())
+        null
     }
 
     // 内容区上限 = 屏高 3/4 − 标题栏（用户定值 2026-08-31：sheet 整体约 3/4 屏）
@@ -298,45 +297,66 @@ private fun LayoutSheetContent(
     ) {
         // 实时预览置顶（用户拍板 2026-10-02：预览是 sheet 的主视觉，参数都在它后面）：
         // 含快捷栏（扇形+胶囊完整构图，拖滑条时整体反馈更直观）
+        // 恢复本方向默认：图标放预览卡右上角。sheet 头只有 startAction/endAction 两个槽，
+        // 塞第三个动作不符合 miuix 的 sheet 规范（2026-11-03）。仍走草稿：✕ 可撤销，✓ 才落盘。
+        fun restoreDirectionDefaults() {
+            putIcon(spec.defIcon)
+            putInner(spec.defInner)
+            putOuter(spec.defOuter)
+            putOuterCount(spec.defOuterCount)
+            putInnerCount(spec.defInnerCount)
+            if (isCorner) {
+                repo.putDraft(PrefKeys.CORNER_SWIPE_ENABLED, LayoutDefaults.CORNER_SWIPE_ENABLED)
+                repo.putDraft(PrefKeys.CORNER_SPY_FALLBACK, LayoutDefaults.CORNER_SPY_FALLBACK)
+            }
+            clampedHint = false
+        }
         Card(modifier = Modifier.fillMaxWidth()) {
-            FanStaticPreview(
-                config = config,
-                isLandscape = isLandscape,
-                prefs = repo.prefs,
-                corner = isCorner,
-                includeQuickBar = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(FanVisuals.PREVIEW_SHEET_HEIGHT)
-            )
+            Box {
+                FanStaticPreview(
+                    config = config,
+                    isLandscape = isLandscape,
+                    prefs = repo.prefs,
+                    corner = isCorner,
+                    includeQuickBar = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(FanVisuals.PREVIEW_SHEET_HEIGHT)
+                )
+                IconButton(
+                    onClick = { restoreDirectionDefaults() },
+                    modifier = Modifier.align(Alignment.TopEnd)
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.Refresh,
+                        contentDescription = stringResource(R.string.layout_sheet_restore_default),
+                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                    )
+                }
+            }
         }
 
         // 底角：触发开关与样式同 sheet、同草稿（✕ 全撤 / ✓ 全存，语义与滑条一致）
         if (isCorner) {
             Card(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                val cornerOn = repo.cornerSwipeEnabled()
                 SwitchPreference(
                     title = stringResource(R.string.corner_swipe_title),
-                    summary = stringResource(R.string.corner_swipe_summary),
-                    checked = repo.cornerSwipeEnabled(),
+                    checked = cornerOn,
                     onCheckedChange = { repo.putDraft(PrefKeys.CORNER_SWIPE_ENABLED, it) }
                 )
-                // 独占开关（2026-10-17）：底角斜滑时不再让系统同时判（防"三连"：系统 Home + 扇形 + 应用启动）。
-                // 默认开；推 persist.hsb.corner.supp，native 1 秒缓存读 ⇒ 改动 ≤1s 生效，无需重启宿主。
-                SwitchPreference(
-                    title = stringResource(R.string.corner_suppress_title),
-                    summary = stringResource(R.string.corner_suppress_summary),
-                    checked = repo.cornerSuppressEnabled(),
-                    onCheckedChange = { repo.putDraft(PrefKeys.CORNER_SUPPRESS_ENABLED, it) }
-                )
-                // 兜底（2026-10-31）：三键导航（无小白条）时 launcher 的 NavStubView 不存在，
-                // 底角斜滑无人接收 ⇒ 打开后改由 SystemUI 输入面识别并转发 :ui。
-                // 默认关：这是"系统没有的行为"，装完模块不该悄悄接管角区手势。
-                SwitchPreference(
-                    title = stringResource(R.string.corner_spy_fallback_title),
-                    summary = stringResource(R.string.corner_spy_fallback_summary),
-                    checked = repo.cornerSpyFallbackEnabled(),
-                    onCheckedChange = { repo.putDraft(PrefKeys.CORNER_SPY_FALLBACK, it) }
-                )
+                // 「独占」2026-11-03 起固定开启、不再暴露开关：底角斜滑时不能让系统同时判
+                //（否则"三连"：系统 Home + 扇形 + 应用启动）。CORNER_SUPPRESS_ENABLED 恒 true，
+                // 推 persist.hsb.corner.supp，native 1 秒缓存读。
+                if (cornerOn) {
+                    // 导航栏隐藏（全屏/游戏）时 launcher 的 NavStubView 不在，改由 SystemUI
+                    // 输入面识别底角斜滑再转发 :ui——这条只在底角斜滑本身开启时才有意义。
+                    SwitchPreference(
+                        title = stringResource(R.string.corner_spy_fallback_title),
+                        checked = repo.cornerSpyFallbackEnabled(),
+                        onCheckedChange = { repo.putDraft(PrefKeys.CORNER_SPY_FALLBACK, it) }
+                    )
+                }
             }
         }
 
@@ -405,30 +425,6 @@ private fun LayoutSheetContent(
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 style = MiuixTheme.textStyles.footnote1,
                 modifier = Modifier.padding(top = 6.dp)
-            )
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 8.dp),
-            horizontalArrangement = Arrangement.End
-        ) {
-            TextButton(
-                text = stringResource(R.string.layout_sheet_restore_default),
-                onClick = {
-                    // 本方向键组写入草稿（恢复默认也走草稿，可取消）；
-                    // 底角含触发开关（默认关），与"本 sheet 全部设置"的语义一致
-                    putIcon(spec.defIcon)
-                    putInner(spec.defInner)
-                    putOuter(spec.defOuter)
-                    putOuterCount(spec.defOuterCount)
-                    putInnerCount(spec.defInnerCount)
-                    if (isCorner) {
-                        repo.putDraft(PrefKeys.CORNER_SWIPE_ENABLED, LayoutDefaults.CORNER_SWIPE_ENABLED)
-                    }
-                    clampedHint = false
-                }
             )
         }
     }

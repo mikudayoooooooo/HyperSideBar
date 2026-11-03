@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
@@ -28,10 +27,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -63,8 +60,9 @@ import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Sort
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.window.WindowDialog
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 private const val TAG = "GroupEditPage"
 
@@ -275,7 +273,6 @@ internal fun GroupEditPage(
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            item { SmallTitle(text = stringResource(R.string.group_edit_name)) }
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -292,7 +289,6 @@ internal fun GroupEditPage(
                         }
                         BasicComponent(
                             title = stringResource(R.string.group_edit_group_switch),
-                            summary = "",
                             endActions = {
                                 Switch(checked = groupEnabled, onCheckedChange = { groupEnabled = it })
                             }

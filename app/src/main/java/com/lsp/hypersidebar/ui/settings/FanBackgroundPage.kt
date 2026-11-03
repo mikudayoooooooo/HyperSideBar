@@ -9,14 +9,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -24,10 +21,10 @@ import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.utils.overScrollVertical
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 /**
  * 扇形背景二级页（0913 用户拍板，首页交互区入口进入）。
@@ -58,7 +55,6 @@ internal fun FanBackgroundPage(prefs: SharedPreferences, modifier: Modifier = Mo
         ),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        item { SectionTitle(text = stringResource(R.string.fan_background_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
@@ -67,7 +63,6 @@ internal fun FanBackgroundPage(prefs: SharedPreferences, modifier: Modifier = Mo
                     }
                     SwitchPreference(
                         title = stringResource(R.string.fan_dim_title),
-                        summary = stringResource(R.string.fan_dim_summary),
                         checked = dimOn,
                         onCheckedChange = {
                             dimOn = it
@@ -82,11 +77,6 @@ internal fun FanBackgroundPage(prefs: SharedPreferences, modifier: Modifier = Mo
                         stringResource(R.string.fan_blur_source_wallpaper),
                         stringResource(R.string.fan_blur_source_transparent)
                     )
-                    val sourceSummaries = listOf(
-                        stringResource(R.string.fan_blur_source_summary_acrylic),
-                        stringResource(R.string.fan_blur_source_summary_wallpaper),
-                        stringResource(R.string.fan_blur_source_summary_transparent)
-                    )
                     var blurSource by remember(effectivePrefs, repo.revision) {
                         mutableStateOf(repo.fanBlurSource())
                     }
@@ -95,7 +85,6 @@ internal fun FanBackgroundPage(prefs: SharedPreferences, modifier: Modifier = Mo
                         title = stringResource(R.string.fan_blur_source_title),
                         options = sourceOptions,
                         selectedIndex = sourceIndex,
-                        summary = sourceSummaries[sourceIndex],
                         onSelectedIndexChange = { index ->
                             val value = sourceValues[index]
                             blurSource = value
@@ -114,7 +103,6 @@ internal fun FanBackgroundPage(prefs: SharedPreferences, modifier: Modifier = Mo
                         }
                         SliderPreference(
                             title = stringResource(R.string.fan_fog_title),
-                            summary = stringResource(R.string.fan_fog_summary),
                             valueText = "${(fog * 100).roundToInt()}%",
                             value = fog,
                             valueRange = fogMin..fogMax,

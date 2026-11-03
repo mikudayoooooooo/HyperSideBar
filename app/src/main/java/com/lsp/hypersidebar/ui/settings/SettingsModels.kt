@@ -2,7 +2,6 @@ package com.lsp.hypersidebar.ui.settings
 
 import android.content.Context
 import android.content.Intent
-import android.content.SharedPreferences
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -38,7 +37,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
-import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.theme.LocalSemanticColors
 import com.lsp.hypersidebar.ui.fan.FanThemeColors
@@ -55,6 +53,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.SinkFeedback
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.pressable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 internal enum class ModuleStatus { ACTIVE, INACTIVE }
 
@@ -145,7 +145,9 @@ internal fun ModuleStatusComponent(
     val bg: Color
     val dot: Color
     val title: String
-    val summary: String
+    // 正常态不再给一行"一切正常"的说明（2026-11-03 文案瘦身）：色块 + 标题已经表达完整，
+    // 异常时才需要告诉用户是哪一端出了问题。
+    val summary: String?
     when {
         status == ModuleStatus.INACTIVE -> {
             bg = errorColor.copy(alpha = 0.12f)
@@ -170,7 +172,7 @@ internal fun ModuleStatusComponent(
             bg = semantic.successContainer
             dot = semantic.success
             title = stringResource(R.string.status_running)
-            summary = stringResource(R.string.status_normal_summary)
+            summary = null
         }
     }
 
@@ -185,7 +187,8 @@ internal fun ModuleStatusComponent(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 28.dp, horizontal = 24.dp),
+                // 2026-11-03：去掉说明后卡片变薄，上下留白 20 → 36，保住"状态横幅"的份量
+                .padding(vertical = 36.dp, horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -202,13 +205,15 @@ internal fun ModuleStatusComponent(
                     fontWeight = FontWeight.Bold
                 )
             }
-            Text(
-                text = summary,
-                style = MiuixTheme.textStyles.body2,
-                color = MiuixTheme.colorScheme.onSurface,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 10.dp)
-            )
+            summary?.let {
+                Text(
+                    text = it,
+                    style = MiuixTheme.textStyles.body2,
+                    color = MiuixTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 10.dp)
+                )
+            }
         }
     }
 }

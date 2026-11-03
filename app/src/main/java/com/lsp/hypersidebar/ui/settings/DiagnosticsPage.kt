@@ -9,11 +9,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -25,6 +23,8 @@ import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 /**
  * 诊断与统计汇聚页（0909 用户拍板）：诊断类功能的中间层——本页列项目，
@@ -58,25 +58,23 @@ internal fun DiagnosticsPage(
         ),
         verticalArrangement = Arrangement.spacedBy(SettingsDimens.SectionGap)
     ) {
-        item { SectionTitle(text = stringResource(R.string.diagnostics_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 ArrowPreference(
                     title = stringResource(R.string.logs_entry),
-                    summary = stringResource(R.string.logs_entry_summary),
                     onClick = onNavigateToLogs
                 )
                 ArrowPreference(
                     title = stringResource(R.string.stats_entry),
-                    summary = stringResource(R.string.stats_entry_summary),
                     onClick = onNavigateToStats
                 )
                 ArrowPreference(
                     title = stringResource(R.string.selfcheck_export),
+                    // 只在执行中给一句状态，静止态不占一行（2026-11-03 文案瘦身）
                     summary = if (selfCheckBusy) {
                         stringResource(R.string.selfcheck_exporting)
                     } else {
-                        stringResource(R.string.selfcheck_export_summary)
+                        null
                     },
                     onClick = {
                         if (selfCheckBusy) return@ArrowPreference

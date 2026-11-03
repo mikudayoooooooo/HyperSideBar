@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,10 +28,8 @@ import androidx.compose.foundation.border
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -64,7 +61,6 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.basic.Check
 import top.yukonga.miuix.kmp.icon.extended.AddFolder
@@ -78,6 +74,8 @@ import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.window.WindowDialog
 import java.util.UUID
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 /**
  * 批量选择 ↔ 顶栏桥（页面写 / MainScreen 顶栏读）：HyperOS 批量模式=顶栏变形
@@ -637,19 +635,16 @@ private fun AddShortcutSheet(
                     ) {
                         ArrowPreference(
                             title = stringResource(R.string.shortcut_add_tab_component),
-                            summary = stringResource(R.string.shortcut_add_component_summary),
                             onClick = { onPickEntry(0) },
                             enabled = !atStoreCap
                         )
                         ArrowPreference(
                             title = stringResource(R.string.shortcut_add_tab_intent),
-                            summary = stringResource(R.string.shortcut_add_intent_summary),
                             onClick = { onPickEntry(1) },
                             enabled = !atStoreCap
                         )
                         ArrowPreference(
                             title = stringResource(R.string.shortcut_add_tab_shortcut),
-                            summary = stringResource(R.string.shortcut_add_shortcut_summary),
                             onClick = { onPickEntry(2) },
                             enabled = !atStoreCap
                         )
@@ -871,22 +866,21 @@ internal fun SelectionCircle(checked: Boolean) {
 /** 列表摘要：超长截断（组件名/intent URI 动辄上百字符，统一观感）。 */
 private fun buildShortcutSummary(shortcut: ShortcutAction, unsetUri: String, toolboxLabel: String): String {
     val raw = when (shortcut.kind) {
+        // 2026-11-03：列表只显示类短名。整串 pkg/class 在 1.25 倍字体下折三行，
+        // 整页被撑散；完整组件名在编辑页可见。
         ShortcutKind.COMPONENT, ShortcutKind.ACTIVITY -> {
-            val pkg = shortcut.packageName ?: "?"
             val act = shortcut.activityName ?: "?"
-            "$pkg/$act"
+            act.substringAfterLast('.').ifEmpty { act }
         }
         ShortcutKind.INTENT_URI -> shortcut.intentUri ?: unsetUri
         ShortcutKind.TOOLBOX -> toolboxLabel
         ShortcutKind.SERVICE -> {
-            val pkg = shortcut.packageName ?: "?"
             val svc = shortcut.serviceName ?: "?"
-            "$pkg/$svc"
+            svc.substringAfterLast('.').ifEmpty { svc }
         }
         ShortcutKind.QS_TILE -> {
-            val pkg = shortcut.packageName ?: "?"
             val svc = shortcut.serviceName ?: "?"
-            "$pkg/$svc"
+            svc.substringAfterLast('.').ifEmpty { svc }
         }
         ShortcutKind.SHORTCUT_ID -> {
             val pkg = shortcut.packageName ?: "?"
@@ -899,5 +893,6 @@ private fun buildShortcutSummary(shortcut: ShortcutAction, unsetUri: String, too
             "${n}项：$labels"
         }
     }
-    return if (raw.length > 40) raw.take(38) + "…" else raw
+    // 2026-11-03：上限 40 → 26。40 字在 1.25 倍字体下会折三行，整页被撑散
+    return if (raw.length > 26) raw.take(24) + "…" else raw
 }

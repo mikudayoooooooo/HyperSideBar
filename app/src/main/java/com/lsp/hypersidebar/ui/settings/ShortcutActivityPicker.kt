@@ -23,13 +23,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
@@ -45,7 +42,6 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.DropdownEntry
 import top.yukonga.miuix.kmp.basic.DropdownItem
 import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.PullToRefresh
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -59,6 +55,8 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 import java.util.Locale
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 private const val TAG = "ShortcutSettings"
 
@@ -311,12 +309,20 @@ private fun ActivityList(
     // 导出三态过滤（用户定案）：互斥恒有一项选中，替换原「只看发现目标」开关；
     // 发现目标仍靠行内 [快捷]/[QS]/🔒 标签表达
     var filter by remember(app.packageName) { mutableStateOf(ExportFilter.ALL) }
+    // 组件级搜索（2026-11-03）：314 个组件的应用只能滚，补一个与列表同款的输入框
+    var query by remember(app.packageName) { mutableStateOf("") }
     val shown = app.components.filter {
-        when (filter) {
+        val exportOk = when (filter) {
             ExportFilter.ALL -> true
             ExportFilter.EXPORTED -> it.exported
             ExportFilter.UNEXPORTED -> !it.exported
         }
+        val q = query.trim()
+        exportOk && (
+            q.isEmpty() ||
+                it.label.contains(q, ignoreCase = true) ||
+                it.className.contains(q, ignoreCase = true)
+            )
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -347,6 +353,17 @@ private fun ActivityList(
                     },
                     onClick = onBack
                 )
+            }
+
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    TextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = stringResource(R.string.activity_picker_search_component),
+                        modifier = Modifier.padding(8.dp)
+                    )
+                }
             }
 
             item {

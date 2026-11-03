@@ -13,10 +13,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -24,12 +22,10 @@ import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.SmallTitle
-import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.overScrollVertical
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 /**
  * **操作设置**二级页（2026-10-17 由"呼出设置"改名并并入小窗段；0913 用户拍板建页，首页交互区入口进入）。
@@ -62,7 +58,6 @@ internal fun InvokeSettingsPage(prefs: SharedPreferences, modifier: Modifier = M
         ),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        item { SectionTitle(text = stringResource(R.string.invoke_section)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
@@ -78,7 +73,6 @@ internal fun InvokeSettingsPage(prefs: SharedPreferences, modifier: Modifier = M
                     }
                     SliderPreference(
                         title = stringResource(R.string.trigger_dwell_title),
-                        summary = stringResource(R.string.trigger_dwell_summary),
                         valueText = "$dwellMs ms",
                         value = dwellMs.toFloat(),
                         valueRange = dwellMin..dwellMax,
@@ -95,7 +89,6 @@ internal fun InvokeSettingsPage(prefs: SharedPreferences, modifier: Modifier = M
                     }
                     SwitchPreference(
                         title = stringResource(R.string.fan_persistent_title),
-                        summary = stringResource(R.string.fan_persistent_summary),
                         checked = persistent,
                         onCheckedChange = {
                             persistent = it
@@ -125,66 +118,49 @@ internal fun InvokeSettingsPage(prefs: SharedPreferences, modifier: Modifier = M
                             repo.save(PrefKeys.FREEFORM_BLANK_TAP_ENABLED, it)
                         }
                     )
-                    // "吞掉触摸（不穿透）"（2026-10-17，**默认关**）：真机反馈抢流会干扰正常拖动/缩小，
-                    // 所以只在用户明确需要"点空白不漏给背后 app"时才开（回退=关掉即可，改完重启 SystemUI 生效）。
-                    // 2026-10-18：与总开关联动——总开关关 ⇒ 后面的子项没有意义，不显示（用户口径）。
+                    // 与总开关联动（2026-10-18 用户口径）：总开关关 ⇒ 子项没有意义，不显示。
                     if (enabled) {
                         var takeover by remember(effectivePrefs, repo.revision) {
                             mutableStateOf(repo.freeformTakeoverEnabled())
                         }
+                        // 子项左缩进：与父项拉开一级（2026-11-03 层级修正）
                         SwitchPreference(
                             title = stringResource(R.string.freeform_takeover_title),
-                            summary = stringResource(R.string.freeform_takeover_summary),
+                            modifier = Modifier.padding(start = 12.dp),
                             checked = takeover,
                             onCheckedChange = {
                                 takeover = it
                                 repo.save(PrefKeys.FREEFORM_BLANK_TAP_TAKEOVER, it)
                             }
                         )
-                    // 动作档：取值顺序 = 契约 LayoutDefaults.FREEFORM_BLANK_TAP_MODE_VALUES，
-                    // 下标映射不得内联（与「背景模糊来源」同款约束）
-                    if (enabled) {
-                    val modeValues = LayoutDefaults.FREEFORM_BLANK_TAP_MODE_VALUES
-                    // ⚠ options/summaries 与 FREEFORM_BLANK_TAP_MODE_VALUES **按下标一一对应**
-                    //（2026-10-18 曾漏第三项 ⇒ 图标档在下拉里看不见）
-                    val modeOptions = listOf(
-                        stringResource(R.string.freeform_mode_mini),
-                        stringResource(R.string.freeform_mode_pin),
-                        stringResource(R.string.freeform_mode_close)
-                    )
-                    val modeSummaries = listOf(
-                        stringResource(R.string.freeform_mode_mini_summary),
-                        stringResource(R.string.freeform_mode_pin_summary),
-                        stringResource(R.string.freeform_mode_close_summary)
-                    )
-                    var mode by remember(effectivePrefs, repo.revision) {
-                        mutableStateOf(repo.freeformBlankTapMode())
-                    }
-                    val modeIndex = modeValues.indexOf(mode).coerceAtLeast(0)
-                    OverlayDropdownMenu(
-                        title = stringResource(R.string.freeform_mode_title),
-                        options = modeOptions,
-                        selectedIndex = modeIndex,
-                        summary = modeSummaries[modeIndex],
-                        onSelectedIndexChange = { index ->
-                            val value = modeValues[index]
-                            mode = value
-                            repo.save(PrefKeys.FREEFORM_BLANK_TAP_MODE, value)
+                        // 动作档：取值顺序 = 契约 LayoutDefaults.FREEFORM_BLANK_TAP_MODE_VALUES，
+                        // 下标映射不得内联（与「背景模糊来源」同款约束）
+                        val modeValues = LayoutDefaults.FREEFORM_BLANK_TAP_MODE_VALUES
+                        // ⚠ options 与 FREEFORM_BLANK_TAP_MODE_VALUES **按下标一一对应**
+                        //（2026-10-18 曾漏第三项 ⇒ 图标档在下拉里看不见）
+                        val modeOptions = listOf(
+                            stringResource(R.string.freeform_mode_mini),
+                            stringResource(R.string.freeform_mode_pin),
+                            stringResource(R.string.freeform_mode_close)
+                        )
+                        var mode by remember(effectivePrefs, repo.revision) {
+                            mutableStateOf(repo.freeformBlankTapMode())
                         }
-                    )
+                        val modeIndex = modeValues.indexOf(mode).coerceAtLeast(0)
+                        OverlayDropdownMenu(
+                            title = stringResource(R.string.freeform_mode_title),
+                            modifier = Modifier.padding(start = 12.dp),
+                            options = modeOptions,
+                            selectedIndex = modeIndex,
+                            onSelectedIndexChange = { index ->
+                                val value = modeValues[index]
+                                mode = value
+                                repo.save(PrefKeys.FREEFORM_BLANK_TAP_MODE, value)
+                            }
+                        )
                     }
                 }
             }
         }
-        }
-        item {
-            Text(
-                text = stringResource(R.string.freeform_blank_tap_footnote),
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                style = MiuixTheme.textStyles.footnote1,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
-            )
-        }
-
     }
 }

@@ -17,13 +17,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.lsp.hypersidebar.R
@@ -62,6 +60,8 @@ import top.yukonga.miuix.kmp.nav.core.navBackStackOf
 import top.yukonga.miuix.kmp.nav.core.rememberNavSystemCornerRadius
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.UUID
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 /**
  * 弹出导航栈顶（空栈为 no-op）。
@@ -132,13 +132,15 @@ internal fun MainScreen(
         SettingsKey.TabSettings -> stringResource(R.string.tab_settings)
         SettingsKey.TabAbout -> stringResource(R.string.tab_about)
         is SettingsKey.AppSelection -> top.title
-        SettingsKey.ShortcutList -> stringResource(R.string.shortcuts_add_section)
+        SettingsKey.ShortcutList -> stringResource(R.string.shortcuts_title)
         SettingsKey.ShortcutPicker -> stringResource(R.string.activity_picker_title)
         SettingsKey.QsTilePicker -> stringResource(R.string.qs_tile_picker_title)
         SettingsKey.Logs -> stringResource(R.string.logs_title)
         SettingsKey.Stats -> stringResource(R.string.stats_title)
         SettingsKey.Diagnostics -> stringResource(R.string.diagnostics_entry)
-        is SettingsKey.ShortcutEdit -> stringResource(R.string.shortcuts_add_section)
+        is SettingsKey.ShortcutEdit -> stringResource(
+            if (top.isNew) R.string.shortcut_new else R.string.shortcut_edit
+        )
         is SettingsKey.GroupEdit -> stringResource(R.string.group_edit_title)
         SettingsKey.TechInfo -> stringResource(R.string.about_tech_info)
         SettingsKey.InvokeSettings -> stringResource(R.string.invoke_section)

@@ -440,11 +440,13 @@ object SystemUiInputSpy {
     /**
      * 底角兜底门（2026-11-01 用户口径定稿）：**用户显式开启 + 底栏当前已被收起**。
      *
-     * 语义改了：不再是"小白条不在用（navigation_mode != 2）"，而是"底栏被收起"——
-     * 部分竖屏场景（游戏/全屏）ROM 会主动收起底栏，底角斜滑因此无人接收，兜底就是为
+     * 语义：不是"小白条不在用（navigation_mode != 2）"，而是"**底栏被收起**"——
+     * 竖屏全屏（游戏/视频）时 ROM 会主动收起底栏，底角斜滑因此无人接收，兜底就是为
      * 这种时刻准备的；底栏在屏时**不接管**（那时 launcher/系统手势链路本来就在）。
      * 可见性来自 `InsetProbe` 的 SystemUI 视图 insets（显示级）；未知 ⇒ 不接管。
-     * OS4（cornerPilferHost）保持既有 b2 路径，不受本开关影响。
+     * OS4（cornerPilferHost）另走既有 b2 转发路径（`TurboLayout.b2Enabled()`），
+     * 角区流的消费门已经开着，所以本开关在 OS4 上是空操作——不要在这里放开，
+     * 否则两条路径同时判"可消费"，会落入 2026-10-17 那类双触发。
      */
     private fun cornerFallbackActive(): Boolean {
         if (cornerPilferHost) return false

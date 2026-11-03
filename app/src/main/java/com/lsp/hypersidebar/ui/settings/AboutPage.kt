@@ -26,12 +26,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Alignment
@@ -57,7 +55,6 @@ import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.prefs.savePref
 import com.lsp.hypersidebar.util.RemotePrefsBridge
-import com.lsp.hypersidebar.util.SelfCheck
 import com.lsp.hypersidebar.util.UpdateChecker
 import io.github.libxposed.service.XposedService
 import kotlinx.coroutines.Dispatchers
@@ -69,7 +66,6 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.sin
 import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.Text
@@ -87,6 +83,8 @@ import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.Colors
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.window.WindowDialog
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 @Composable
 internal fun AboutPage(
@@ -137,8 +135,9 @@ internal fun AboutPage(
             }
         }
     }
-    val updateSummary = when (val state = updateState) {
-        UpdateCheckState.Idle -> stringResource(R.string.update_check_idle)
+    // Idle 不给 summary（2026-11-03 文案瘦身）：没有状态就不占一行
+    val updateSummary: String? = when (val state = updateState) {
+        UpdateCheckState.Idle -> null
         UpdateCheckState.Checking -> stringResource(R.string.update_checking)
         UpdateCheckState.UpToDate -> stringResource(R.string.update_up_to_date)
         is UpdateCheckState.Available -> stringResource(R.string.update_available, state.version)
@@ -191,7 +190,13 @@ internal fun AboutPage(
                     // 版本号与内部版本合并成一行（点击复制内部版本），不再另占一行
                     BasicComponent(
                         title = stringResource(R.string.about_version),
-                        summary = "$versionName · ${BuildConfig.VERSION_CODE}",
+                        endActions = {
+                            Text(
+                                text = "$versionName · ${BuildConfig.VERSION_CODE}",
+                                style = MiuixTheme.textStyles.body2,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            )
+                        },
                         onClick = {
                             context.getSystemService(ClipboardManager::class.java)
                                 .setPrimaryClip(
@@ -220,12 +225,17 @@ internal fun AboutPage(
                     )
                     ArrowPreference(
                         title = stringResource(R.string.about_project_url),
-                        summary = PROJECT_URL.removePrefix("https://"),
+                        endActions = {
+                            Text(
+                                text = "GitHub",
+                                style = MiuixTheme.textStyles.body2,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            )
+                        },
                         onClick = { openExternalUrl(context, PROJECT_URL) }
                     )
                     ArrowPreference(
                         title = stringResource(R.string.about_tech_info),
-                        summary = stringResource(R.string.about_tech_info_summary),
                         onClick = onNavigateToTechInfo
                     )
                 }
@@ -239,26 +249,22 @@ internal fun AboutPage(
                 // 只回写布局/手势/背景参数，应用选择与快捷方式不受影响（确认 dialog 里说清）
                 BasicComponent(
                     title = stringResource(R.string.restore_defaults),
-                    summary = stringResource(R.string.restore_defaults_summary),
                     onClick = { showResetConfirm = true }
                 )
                 // 诊断与统计（0909 拍板）：只留一个父入口，点进去再选
                 // 运行日志/使用统计/导出自检报告——本页不再平铺诊断功能行
                 ArrowPreference(
                     title = stringResource(R.string.diagnostics_entry),
-                    summary = stringResource(R.string.diagnostics_entry_summary),
                     onClick = onNavigateToDiagnostics
                 )
                 // 重启 hook 宿主不限 debug（0912 拍板：仅失联开关 debug 专属）——
                 // 远程排障/模块更新后重启三宿主是运维规程，release 用户同样需要
                 ArrowPreference(
                     title = stringResource(R.string.debug_host_restart),
-                    summary = stringResource(R.string.debug_host_restart_summary),
                     onClick = { showHostRestart = true }
                 )
                 if (com.lsp.hypersidebar.BuildConfig.DEBUG) SwitchPreference(
                     title = stringResource(R.string.debug_relay_blackhole),
-                    summary = stringResource(R.string.debug_relay_blackhole_summary),
                     checked = relayBlackhole,
                     onCheckedChange = {
                         if (it) {

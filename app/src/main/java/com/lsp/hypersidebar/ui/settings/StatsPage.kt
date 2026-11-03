@@ -14,11 +14,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -33,12 +31,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.utils.overScrollVertical
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 /**
  * 使用统计页（迭代六 §11.3，PRD §9.2/§9.3）。
@@ -143,12 +141,6 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
                 )
             }
         }
-        Text(
-            stringResource(R.string.stats_misclick_note),
-            style = MiuixTheme.textStyles.footnote2,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)
-        )
 
         SectionTitle(text = stringResource(R.string.stats_total))
         Card(Modifier.fillMaxWidth()) {
@@ -164,12 +156,6 @@ internal fun StatsPage(modifier: Modifier = Modifier) {
                 successRate(total[StatsRecorder.MetricKeys.LAUNCH_OK], total[StatsRecorder.MetricKeys.LAUNCH_FAIL]), isRate = true
             )
         }
-        Text(
-            stringResource(R.string.stats_note),
-            style = MiuixTheme.textStyles.footnote2,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-            modifier = Modifier.padding(top = 8.dp, bottom = 16.dp)
-        )
     }
 }
 
@@ -236,21 +222,10 @@ private fun MisclickRow(rate: ChannelRate) {
             )
         }
         Text(
-            stringResource(
-                R.string.stats_misclick_detail,
-                rate.expands, rate.validExpands, rate.l1, rate.l2, rate.l3,
-                rate.fixL1 + rate.fixL2, rate.chains, rate.sweeps
-            ),
+            stringResource(R.string.stats_misclick_detail, rate.expands, rate.validExpands),
             style = MiuixTheme.textStyles.footnote2,
             color = MiuixTheme.colorScheme.onSurfaceVariantSummary
         )
-        if (rate.hasSample) {
-            Text(
-                stringResource(R.string.stats_misclick_alt, pct(rate.rExclFix), pct(rate.browseExitRate)),
-                style = MiuixTheme.textStyles.footnote2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
-            )
-        }
     }
 }
 

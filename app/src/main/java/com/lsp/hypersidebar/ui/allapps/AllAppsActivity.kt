@@ -252,7 +252,8 @@ private data class LetterGroup(val letter: String, val items: List<Pair<String, 
 
 private sealed class GridEntry {
     abstract val key: String
-    data class Header(val text: String) : GridEntry() {
+    /** isFixed：固定区标题不是字母分组，不进字母索引（2026-11-03 起不再靠文案判断）。 */
+    data class Header(val text: String, val isFixed: Boolean = false) : GridEntry() {
         override val key: String = "h:$text"
     }
     /** section：同 pkg 可能在"已添加"与字母组重复出现，key 带分区前缀防撞（LazyGrid key 必须唯一） */
@@ -344,6 +345,9 @@ private fun AllAppsScreen(
     // 2026-10-30：key 从 `prefs` 实例改成 `prefsIsFallback` 布尔 —— remotePrefs 绑定完成会换
     // prefs 对象（并连带 allPkgs 重设），旧 key 让本 effect 连环重启（代码原注释实测 3 次、
     // 冷组装 769ms 被顶到 1376ms）。现在绑定只触发**一次**重跑（布尔翻转），数据到达也不再重启。
+    // 固定区分组标题走资源（2026-11-03）：此前是硬编码字面量，且 letterOffsets 靠
+    // 这个字面量做字符串比较——改文案会静默破坏字母索引，现改为结构标记 isFixed。
+    val addedHeader = stringResource(R.string.all_apps_added_header)
     LaunchedEffect(allPkgs, prefsIsFallback) {
         val pkgs = allPkgs
         val t0 = System.currentTimeMillis()
@@ -369,7 +373,7 @@ private fun AllAppsScreen(
             // ===== 第一段：只用缓存/盘灌 label（零 binder）先出一版 =====
             // 旧实现等全量 PM label 回来才发布 entries，骨架屏因此要挡到整表组装完。
             val peeked = (pkgs + fixed).distinct().associateWith { AppMetaCache.peek(it) ?: it }
-            val stage1 = buildEntries(pkgs, sortFixed(fixed, fixedOrder, peeked), peeked)
+            val stage1 = buildEntries(pkgs, sortFixed(fixed, fixedOrder, peeked), peeked, addedHeader)
             Triple(fixed, fixedOrder, stage1)
         }
         if (meta == null) {
@@ -392,7 +396,7 @@ private fun AllAppsScreen(
                 fetched[pkg] = AppMetaCache.label(context, pkg)
             }
             labels = fetched
-            buildEntries(pkgs, sortFixed(fixed, fixedOrder, fetched), fetched)
+            buildEntries(pkgs, sortFixed(fixed, fixedOrder, fetched), fetched, addedHeader)
         }
         entries = result
         Log.i(TAG, "assemble done: entries=${result.size} cost=${System.currentTimeMillis() - t0}ms")
@@ -431,7 +435,7 @@ private fun AllAppsScreen(
     // 字母 → 该组 header 在网格条目中的下标
     val letterOffsets = remember(entries) {
         entries.mapIndexedNotNull { idx, e ->
-            (e as? GridEntry.Header)?.let { if (it.text != "已添加") it.text to idx else null }
+            (e as? GridEntry.Header)?.let { if (!it.isFixed) it.text to idx else null }
         }.toMap()
     }
 
@@ -758,10 +762,11 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
 private fun buildEntries(
     allPkgs: List<String>,
     fixed: List<Pair<String, String>>,
-    labels: Map<String, String>
+    labels: Map<String, String>,
+    fixedHeader: String
 ): List<GridEntry> = buildList {
     if (fixed.isNotEmpty()) {
-        add(GridEntry.Header("已添加"))
+        add(GridEntry.Header(fixedHeader, isFixed = true))
         fixed.forEach { add(GridEntry.App(it.first, it.second, "fixed")) }
     }
     buildGroups(allPkgs.map { it to (labels[it] ?: it) }).forEach { g ->

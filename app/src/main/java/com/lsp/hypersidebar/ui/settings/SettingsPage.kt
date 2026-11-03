@@ -2,7 +2,6 @@ package com.lsp.hypersidebar.ui.settings
 
 import com.lsp.hypersidebar.prefs.savePref
 import com.lsp.hypersidebar.prefs.SettingsRepository
-import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
 import android.content.SharedPreferences
 import androidx.compose.foundation.layout.Arrangement
@@ -10,21 +9,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.theme.ThemeMode
@@ -34,11 +28,11 @@ import com.lsp.hypersidebar.util.ShortcutStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
-import top.yukonga.miuix.kmp.utils.overScrollVertical
 import kotlin.math.roundToInt
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 @Composable
 internal fun SettingsPage(
@@ -153,7 +147,7 @@ internal fun SettingsPage(
             Card(modifier = Modifier.fillMaxWidth()) {
                 SwitchPreference(
                     title = stringResource(R.string.module_enabled),
-                    summary = stringResource(R.string.module_enabled_summary),
+                    summary = null,
                     checked = enabled,
                     onCheckedChange = {
                         enabled = it
@@ -176,26 +170,12 @@ internal fun SettingsPage(
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column {
-                    val dwellMs = remember(effectivePrefs, effectiveRepo.revision) {
-                        effectiveRepo.triggerDwellMs()
-                    }
                     ArrowPreference(
                         title = stringResource(R.string.invoke_section),
-                        summary = stringResource(R.string.invoke_settings_summary, dwellMs),
                         onClick = onNavigateToInvokeSettings
                     )
-                    val fogPct = remember(effectivePrefs, effectiveRepo.revision) {
-                        (effectiveRepo.fanFogIntensity() * 100).roundToInt()
-                    }
-                    val dimOn = remember(effectivePrefs, effectiveRepo.revision) {
-                        effectiveRepo.fanDimEnabled()
-                    }
                     ArrowPreference(
                         title = stringResource(R.string.fan_background_section),
-                        summary = stringResource(
-                            R.string.fan_background_summary, fogPct,
-                            stringResource(if (dimOn) R.string.state_on else R.string.state_off)
-                        ),
                         onClick = onNavigateToFanBackground
                     )
                 }
@@ -214,7 +194,7 @@ internal fun SettingsPage(
                     ArrowPreference(
                         title = stringResource(R.string.select_shortcut_apps),
                         summary = stringResource(
-                            R.string.shortcut_entry_summary, shortcutStats.first, shortcutStats.second
+                            R.string.shortcut_entry_summary, shortcutStats.second
                         ),
                         onClick = onNavigateToShortcutSelection
                     )
@@ -237,7 +217,7 @@ internal fun SettingsPage(
                     )
                     SwitchPreference(
                         title = stringResource(R.string.system_colors),
-                        summary = stringResource(R.string.system_colors_summary),
+                        summary = null,
                         checked = useSystemColors,
                         onCheckedChange = { enabled ->
                             onThemeModeChange(ThemeModes.compose(baseMode, enabled))

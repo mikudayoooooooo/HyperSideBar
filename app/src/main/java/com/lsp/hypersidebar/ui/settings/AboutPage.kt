@@ -11,7 +11,6 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,13 +69,6 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Checkbox
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.blur.BlendColorEntry
-import top.yukonga.miuix.kmp.blur.BlurBlendMode
-import top.yukonga.miuix.kmp.blur.BlurColors
-import top.yukonga.miuix.kmp.blur.BlurDefaults
-import top.yukonga.miuix.kmp.blur.layerBackdrop
-import top.yukonga.miuix.kmp.blur.rememberLayerBackdrop
-import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.squircle.squircleSurface
@@ -465,15 +457,12 @@ private fun openExternalUrl(context: android.content.Context, url: String) {
     }
 }
 
-// ===== About hero：动态渐变背景 + 前景模糊玻璃牌（2026-10-27）=====
+// ===== About hero：动态渐变 + 星河背景（2026-11-04 去掉玻璃牌：星空下那块"不大不小"的磨砂面很突兀）=====
 
 private val HERO_HEIGHT = 200.dp
-private val HERO_PLATE_CORNER = 22.dp
 
 /** 一次完整旋转周期；6s 转一圈偏快，9s 更像"呼吸"。 */
 private const val HERO_STAGE_PERIOD_MS = 9000
-private const val HERO_PLATE_BLUR_DP = 30f
-private const val HERO_PLATE_SHEEN_ALPHA = 0.16f
 
 /**
  * hero 专用取色：**只借 base 的色相**，饱和度与明度由 hero 自己给。
@@ -554,12 +543,41 @@ private fun DrawScope.drawHeroGradient(cs: Colors, stage: Float, isDark: Boolean
         w * 0.34f * breathe,
         cs.onPrimary.copy(alpha = if (isDark) 0.26f else 0.30f)
     )
+
+    // 星河：固定种子的星点 + 随 stage 各自呼吸，hero 与图标形成同一套星空语系
+    val starPx = 1.dp.toPx()
+    for (star in HERO_STARS) {
+        val twinkle = 0.45f + 0.30f * sin(a + star.phase)
+        drawCircle(
+            color = Color.White.copy(alpha = twinkle * if (isDark) 0.95f else 0.75f),
+            radius = star.radiusDp * starPx,
+            center = Offset(star.x * w, star.y * h)
+        )
+    }
+}
+
+/** hero 卡里的固定星点（种子固定 ⇒ 每次重组/录 backdrop 位置一致，不会闪跳） */
+private data class HeroStar(
+    val x: Float,
+    val y: Float,
+    val radiusDp: Float,
+    val phase: Float
+)
+
+private val HERO_STARS: List<HeroStar> = kotlin.random.Random(20261104).let { r ->
+    List(90) {
+        HeroStar(
+            x = r.nextFloat(),
+            y = r.nextFloat(),
+            radiusDp = 0.35f + r.nextFloat() * 1.0f,
+            phase = r.nextFloat() * 2f * PI.toFloat()
+        )
+    }
 }
 
 /**
- * hero 卡：渐变层既上屏又被录进 backdrop，玻璃牌（textureBlur）采样同一 backdrop
- * ⇒ 牌后恒有内容可糊（旧版采样普通 surface 时看不出效果正是这个原因）。
- * 渐变相位只在 draw 相位读取，12s 周期内不会触发整页重组。
+ * hero 卡：动态渐变 + 固定种子星点，logo 与标题直接落在星野上。
+ * 渐变/星点只在 draw 相位读取，9s 周期内不会触发整页重组。
  */
 @Composable
 private fun AboutHero(cs: Colors, modifier: Modifier = Modifier) {
@@ -573,66 +591,42 @@ private fun AboutHero(cs: Colors, modifier: Modifier = Modifier) {
             )
         }
     }
-    val backdrop = rememberLayerBackdrop { drawHeroGradient(cs, stage.value, isDark) }
 
     Card(modifier = modifier.fillMaxWidth()) {
         Box(
             Modifier
                 .fillMaxWidth()
                 .height(HERO_HEIGHT)
+                .drawBehind { drawHeroGradient(cs, stage.value, isDark) }
         ) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .layerBackdrop(backdrop)
-                    .drawBehind { drawHeroGradient(cs, stage.value, isDark) }
-            )
-            Box(
+            Column(
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .textureBlur(
-                        backdrop = backdrop,
-                        shape = RoundedCornerShape(HERO_PLATE_CORNER),
-                        blurRadius = HERO_PLATE_BLUR_DP,
-                        noiseCoefficient = BlurDefaults.NoiseCoefficient,
-                        colors = BlurColors(
-                            blendColors = listOf(
-                                BlendColorEntry(
-                                    cs.onPrimary.copy(alpha = HERO_PLATE_SHEEN_ALPHA),
-                                    BlurBlendMode.Screen
-                                )
-                            ),
-                            brightness = 0f,
-                            contrast = 1f,
-                            saturation = 1f
-                        )
-                    )
-                    .padding(horizontal = 28.dp, vertical = 18.dp)
+                    .padding(horizontal = 28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                        contentDescription = stringResource(R.string.app_icon_content_desc),
-                        modifier = Modifier
-                            .size(64.dp)
-                            .squircleSurface(
-                                color = cs.onPrimary.copy(alpha = 0.18f),
-                                cornerRadius = 17.dp
-                            )
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = stringResource(R.string.app_name),
-                        style = MiuixTheme.textStyles.title3.copy(
-                            // 标题用渐变字（白 → 淡紫），与系统「关于本机」那种发光字一致；
-                            // 底色是蓝紫渐变，文字不能用 onBackground
-                            brush = Brush.linearGradient(
-                                listOf(cs.onPrimary, heroColor(cs.primary, 70f, 0.55f, 1f))
-                            )
-                        ),
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                Image(
+                    painter = painterResource(id = R.drawable.ic_module_logo),
+                    contentDescription = stringResource(R.string.app_icon_content_desc),
+                    modifier = Modifier
+                        .size(64.dp)
+                        .squircleSurface(
+                            color = cs.onPrimary.copy(alpha = 0.18f),
+                            cornerRadius = 17.dp
+                        )
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MiuixTheme.textStyles.title3.copy(
+                        // 标题用渐变字（白 → 淡紫），与系统「关于本机」那种发光字一致；
+                        // 底色是蓝紫渐变，文字不能用 onBackground
+                        brush = Brush.linearGradient(
+                            listOf(cs.onPrimary, heroColor(cs.primary, 70f, 0.55f, 1f))
+                        )
+                    ),
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }

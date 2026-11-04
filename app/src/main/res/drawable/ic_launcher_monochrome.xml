@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 单色层：双弧 + 选中方块剪影（系统整体染色） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M-3.20,70.08 A40,40 0 0 1 55.09,118.98"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="8"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M-15.91,49.72 A64,64 0 0 1 77.34,127.97"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="8"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M64.43,55.60 h8.00 a5.00,5.00 0 0 1 5.00,5.00 v8.00 a5.00,5.00 0 0 1 -5.00,5.00 h-8.00 a5.00,5.00 0 0 1 -5.00,-5.00 v-8.00 a5.00,5.00 0 0 1 5.00,-5.00 z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

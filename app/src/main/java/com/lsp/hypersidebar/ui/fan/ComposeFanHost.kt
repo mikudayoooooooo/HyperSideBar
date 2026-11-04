@@ -91,6 +91,8 @@ class ComposeFanHost(
     private var attachGen = 0
     private var pendingExitGen = -1
     private var currentParams: WindowManager.LayoutParams? = null
+    /** 摘窗失败的重试预算（仅在复核仍挂载时消耗；见 [detachWindow]）。 */
+    private var detachRetries = 0
 
     /** 本次呼出的背景模糊来源（show() 求值；preDraw/命中测试/渲染按此分派） */
     private var blurSource: FanBackdropSource = FanBackdropSource.NONE
@@ -118,6 +120,13 @@ class ComposeFanHost(
 
         /** 预热装配窗口保持时长：覆盖首帧绘制+JIT 稳定，之后摘窗（池内 composition 保留） */
         const val WARMUP_HOLD_MS = 600L
+
+        /** 摘窗失败后的重试间隔与次数（只在 isAttachedToWindow 复核仍为真时使用） */
+        const val DETACH_RETRY_MS = 100L
+        const val DETACH_RETRY_MAX = 5
+
+        /** 收拢动画结束点之后仍未摘窗（回调丢失）⇒ 先置全透明再等兜底摘窗 */
+        const val EXIT_FORCE_TRANSPARENT_MS = 250L
     }
 
     /**
@@ -285,6 +294,7 @@ class ComposeFanHost(
             // 防御：池化后理论上 dismiss 必摘窗口，但 compose 内部 onDismiss 等路径
             // 若留下挂载态，重复 addView/setContentView 会直接抛——先收敛到摘除态
             if (wrapper.isAttachedToWindow) detachWindow()
+            detachRetries = 0
             val tAddMs = SystemClock.elapsedRealtime()
             // 世代自增：在场的收拢回调/兜底定时器全部失效（收拢中再呼出=打断收拢直接重开）
             attachGen++
@@ -682,11 +692,43 @@ class ComposeFanHost(
         try {
             windowManager?.removeViewImmediate(wv)
         } catch (e: Throwable) {
-            // "not attached"= 窗口已不在（等价摘除成功）；其余异常窗口同样已脱离
-            // 本进程管理——都按"摘除已确认"处理
-            HLog.w(TAG, "removeView failed (treated as detached): ${e.message}")
+            // "not attached"= 窗口已不在（等价摘除成功）；**其余异常不能假定已脱离**——
+            // 残留的全屏窗会把下层每个触摸都标成 FLAG_WINDOW_IS_OBSCURED
+            //（LSPosed 的"屏蔽被遮盖触摸"会整条丢弃），所以下面必须复核
+            HLog.w(TAG, "removeView failed (verifying): ${e.message}")
+        }
+        if (wv.isAttachedToWindow) {
+            // 移除未生效：先把窗口退化成"不可见"（alpha 0 + NOT_TOUCHABLE），
+            // AOSP InputDispatcher::canBeObscuredBy 明确把这种窗视为不存在；再投帧重试
+            HLog.e(TAG, "detachWindow: still attached after remove, forcing alpha=0")
+            forceWindowTransparent()
+            if (detachRetries < DETACH_RETRY_MAX) {
+                detachRetries++
+                val gen = attachGen
+                mainHandler.postDelayed({
+                    // 世代守卫：期间 re-show 已复用该窗时不得再摘
+                    if (gen == attachGen) detachWindow()
+                }, DETACH_RETRY_MS)
+            }
+        } else {
+            detachRetries = 0
         }
         resetInteractionState()
+    }
+
+    /**
+     * 遮挡安全终态：窗口保留但 alpha 0 + NOT_TOUCHABLE。
+     * AOSP 判据：上层窗口只有「alpha==0 且 NOT_TOUCHABLE」才等同不可见，不再参与
+     * FLAG_WINDOW_IS_OBSCURED / 部分遮挡；触摸事件照常落到下层应用。
+     */
+    private fun forceWindowTransparent() {
+        val wv = wrapperView ?: return
+        val params = currentParams ?: return
+        runCatching {
+            params.alpha = 0f
+            params.flags = params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+            windowManager?.updateViewLayout(wv, params)
+        }.onFailure { HLog.w(TAG, "forceWindowTransparent failed: ${it.message}") }
     }
 
     fun dismiss() {
@@ -702,6 +744,14 @@ class ComposeFanHost(
         val gen = attachGen
         pendingExitGen = gen
         exitTickState.value = exitTickState.value + 1
+        // 收拢动画（~150ms）结束点仍未摘窗 ⇒ 组合回调丢失：先把窗置全透明退出遮挡判定，
+        // 不让"透明的全屏窗"在系统侧继续算遮挡（LSPosed 防劫持会因此整页不可点）
+        mainHandler.postDelayed({
+            if (gen == attachGen && wrapperView?.isAttachedToWindow == true) {
+                HLog.w(TAG, "dismiss: exit animation lost, forcing transparent before fallback")
+                forceWindowTransparent()
+            }
+        }, EXIT_FORCE_TRANSPARENT_MS)
         // 收拢三防线之三：兜底摘窗（组合死亡/协程丢失；世代守卫幂等，正常路径先到先摘）
         mainHandler.postDelayed({ teardownIfCurrent(gen) }, EXIT_FALLBACK_MS)
         HLog.i(TAG, "dismiss: exit animation requested (gen=$gen)")
@@ -717,6 +767,8 @@ class ComposeFanHost(
         if (gen == -1 || gen != attachGen) return
         attachGen++
         pendingExitGen = -1
+        // 先退化再摘：即便 remove 失败，窗口也已经是 alpha 0 + NOT_TOUCHABLE（不遮挡）
+        forceWindowTransparent()
         detachWindow()
         onDismiss?.invoke()
     }
@@ -747,6 +799,7 @@ class ComposeFanHost(
         currentParams = null
         built = false
         pendingInput = null
+        detachRetries = 0
     }
 
     /**

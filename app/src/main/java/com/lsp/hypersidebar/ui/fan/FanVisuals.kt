@@ -108,6 +108,6 @@ internal object FanVisuals {
     /** 预览里快捷栏示意盒子（真机材质不参与预览，故给一层示意底）。 */
     const val PREVIEW_CAPSULE_FILL_ALPHA = 0.94f
     const val PREVIEW_CAPSULE_BORDER_ALPHA = 0.30f
-    /** 布局 sheet 内实时预览的高度。 */
-    val PREVIEW_SHEET_HEIGHT = 150.dp
+    /** 布局 sheet 内实时预览的高度（150dp 时竖屏只有 ~112dp 宽，预览太小看不清）。 */
+    val PREVIEW_SHEET_HEIGHT = 240.dp
 }

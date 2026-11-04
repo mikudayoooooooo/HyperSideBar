@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -274,19 +273,9 @@ internal fun FanStaticPreview(
             quickApps = if (includeQuickBar) previewPlaceholderApps(quickCount) else emptyList()
         )
     }
-    // 固定宽高比预览框（竖屏 3:4 / 横屏 4:3 / 底角近方形）：框形稳定不抖，扇形按内容适配缩放居中
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
-        StaticFanPreview(
-            geometry = geometry,
-            modifier = Modifier.aspectRatio(
-                when {
-                    corner -> 1f
-                    isLandscape -> 4f / 3f
-                    else -> 3f / 4f
-                }
-            )
-        )
-    }
+    // 预览框恒定填满调用方给的区域（首页卡=固定高 230dp；sheet=卡片宽×PREVIEW_SHEET_HEIGHT）：
+    // 三个方向共用同一框尺寸，切 Tab 不再跳宽（旧实现按方向 3:4 / 4:3 / 1:1 取 aspectRatio）
+    StaticFanPreview(geometry = geometry, modifier = modifier)
 }
 
 private fun previewGeometry(
@@ -460,7 +449,9 @@ private fun previewViewport(geometry: FanGeometry): PreviewViewport {
     val contentTop = minOf(
         centers.minOfOrNull { it.y - iconSize / 2f } ?: geometry.anchor.y,
         geometry.quickBarY,
-        bandTop
+        bandTop,
+        // 底角：扇环顶点就是锚点 (0,720)，此前没计入 ⇒ 整个下沿被视口裁掉
+        geometry.anchor.y
     )
     val contentRight = maxOf(
         centers.maxOfOrNull { it.x + iconSize / 2f } ?: geometry.anchor.x,
@@ -470,7 +461,9 @@ private fun previewViewport(geometry: FanGeometry): PreviewViewport {
     val contentBottom = maxOf(
         centers.maxOfOrNull { it.y + iconSize / 2f } ?: geometry.anchor.y,
         geometry.quickBarY + quickHeight,
-        bandBottom
+        bandBottom,
+        // 同上：底角锚点（扇环两条径向边的交点）在视口之外 ⇒ 下缘被裁
+        geometry.anchor.y
     )
     val padding = iconSize * FanVisuals.PREVIEW_VIEWPORT_PAD_RATIO
     return PreviewViewport(

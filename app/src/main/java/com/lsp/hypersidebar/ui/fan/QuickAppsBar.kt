@@ -168,7 +168,7 @@ internal fun QuickAppIcon(
                 modifier = Modifier
                     .fillMaxSize()
                     .squircleSurface(
-                        color = colors.primaryContainer.copy(alpha = FanVisuals.SELECTION_PLATE_ALPHA),
+                        color = colors.selectionPlateColor,
                         cornerRadius = (iconSize * FanVisuals.ICON_CORNER_RATIO).dp
                     )
             )

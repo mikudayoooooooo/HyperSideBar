@@ -3,6 +3,9 @@ package com.lsp.hypersidebar.ui.fan
 import android.graphics.drawable.Drawable
 import androidx.compose.ui.graphics.Color
 
+/** 深色下选中板透明度：改用 primary 系低透明度，避免亮板在暗底过曝。 */
+private const val SELECTION_PLATE_ALPHA_DARK = 0.30f
+
 data class FanAppInfo(
     val packageName: String,
     val appName: String = "",
@@ -57,6 +60,17 @@ data class FanThemeColors(
     val background: Color,
     val isDark: Boolean
 ) {
+    /**
+     * 选中高亮板填充：浅色 = primaryContainer@0.9；深色下 primaryContainer 仍偏浅，
+     * 90% 铺在暗底上就是一块刺眼亮板（2026-11-03 走查"深色不适配"）⇒ 深色改用低透明度 primary。
+     */
+    val selectionPlateColor: Color
+        get() = if (isDark) {
+            primary.copy(alpha = SELECTION_PLATE_ALPHA_DARK)
+        } else {
+            primaryContainer.copy(alpha = FanVisuals.SELECTION_PLATE_ALPHA)
+        }
+
     companion object {
         fun default(isDark: Boolean = false): FanThemeColors = FanThemeColors(
             primary = Color(0xFF3482FF),

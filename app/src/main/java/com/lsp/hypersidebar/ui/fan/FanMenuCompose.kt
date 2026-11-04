@@ -5,6 +5,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -23,7 +24,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
@@ -32,6 +35,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -302,18 +306,23 @@ private fun FanAppIcon(
                 modifier = Modifier
                     .fillMaxSize()
                     .squircleSurface(
-                        color = colors.primaryContainer.copy(alpha = FanVisuals.SELECTION_PLATE_ALPHA),
+                        color = colors.selectionPlateColor,
                         cornerRadius = (iconSize * FanVisuals.ICON_CORNER_RATIO).dp
                     )
             )
         }
-        AppIconImage(
-            bitmap = bitmap,
-            fallbackColor = fallbackColor,
-            appName = item.app.appName,
-            size = iconSize * FanVisuals.ICON_FILL_RATIO,
-            colors = colors
-        )
+        // 「全部应用」哨兵没有真实包名/图标：画专用九宫格入口（此前落到字母兜底块"全"）
+        if (item.app.packageName == ALL_APPS_PKG) {
+            AllAppsEntryIcon(iconSize = iconSize * FanVisuals.ICON_FILL_RATIO, colors = colors)
+        } else {
+            AppIconImage(
+                bitmap = bitmap,
+                fallbackColor = fallbackColor,
+                appName = item.app.appName,
+                size = iconSize * FanVisuals.ICON_FILL_RATIO,
+                colors = colors
+            )
+        }
 
         if (isSelected) {
             // B1：描边随 mask 同形状（squircle 圆角方），绘于图标之上
@@ -326,6 +335,39 @@ private fun FanAppIcon(
                         cornerRadius = (iconSize * FanVisuals.ICON_CORNER_RATIO).dp
                     )
             )
+        }
+    }
+}
+
+@Composable
+private fun AllAppsEntryIcon(iconSize: Float, colors: FanThemeColors) {
+    Box(
+        modifier = Modifier
+            .size(iconSize.dp)
+            .squircleSurface(
+                color = colors.surfaceContainerHigh,
+                cornerRadius = (iconSize * FanVisuals.ICON_CORNER_RATIO).dp
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        // 不能引用模块 drawable：扇形跑在 launcher / :ui 宿主进程，取不到模块 R
+        //（实测 Resources$NotFoundException → 整个扇形装配失败、呼不出）
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val side = size.minDimension
+            val cell = side * 0.16f
+            val gap = side * 0.085f
+            val block = cell * 3 + gap * 2
+            val start = (side - block) / 2f
+            for (row in 0 until 3) {
+                for (col in 0 until 3) {
+                    drawRoundRect(
+                        color = colors.onSurface,
+                        topLeft = Offset(start + col * (cell + gap), start + row * (cell + gap)),
+                        size = Size(cell, cell),
+                        cornerRadius = CornerRadius(cell * 0.3f)
+                    )
+                }
+            }
         }
     }
 }

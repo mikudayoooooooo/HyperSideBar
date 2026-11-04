@@ -458,15 +458,16 @@ private fun AppSelectionRow(
                 state = if (isChecked) ToggleableState.On else ToggleableState.Off,
                 onClick = onToggle
             )
-            // 拖动排序手柄：48dp 触摸热区（Android 最小触摸目标的建议值；图标视觉仍 24dp），仅已选项可挂
-            if (isChecked) {
-                Box(
-                    modifier = Modifier
-                        .padding(start = 8.dp)
-                        .size(48.dp)
-                        .then(handleModifier),
-                    contentAlignment = Alignment.Center
-                ) {
+            // 拖动排序手柄：48dp 触摸热区（Android 最小触摸目标的建议值；图标视觉仍 24dp）。
+            // 尾槽**恒存在**、只在已选态挂手柄——否则勾选瞬间尾槽变宽，Checkbox 会左跳
+            Box(
+                modifier = Modifier
+                    .padding(start = 8.dp)
+                    .size(48.dp)
+                    .then(if (isChecked) handleModifier else Modifier),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isChecked) {
                     Icon(
                         imageVector = MiuixIcons.Sort,
                         contentDescription = stringResource(R.string.shortcut_drag_handle),

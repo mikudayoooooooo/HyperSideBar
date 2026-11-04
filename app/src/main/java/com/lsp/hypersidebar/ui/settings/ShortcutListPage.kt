@@ -55,6 +55,7 @@ import com.lsp.hypersidebar.util.ShortcutGroups
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutStore
 import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.BasicComponentDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.FloatingToolbar
 import top.yukonga.miuix.kmp.basic.Icon
@@ -76,6 +77,9 @@ import top.yukonga.miuix.kmp.window.WindowDialog
 import java.util.UUID
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+
+/** 禁用行只淡化图标与文字（开关保持全强度，避免"整行失效"的误读）。 */
+private const val DISABLED_ROW_ALPHA = 0.55f
 
 /**
  * 批量选择 ↔ 顶栏桥（页面写 / MainScreen 顶栏读）：HyperOS 批量模式=顶栏变形
@@ -736,26 +740,50 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.ShortcutRow(
         val scale by animateFloatAsState(
             if (isDragging) 1.03f else 1f, label = "shortcutDragScale"
         )
+        // 禁用态只淡"图标 + 文字"：整行 alpha 会连开关一起变灰，看起来像整行失效
+        val dim = if (shortcut.enabled) 1f else DISABLED_ROW_ALPHA
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .animateItem()
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                },
+            insideMargin = PaddingValues(0.dp)
+        ) {
         BasicComponent(
             title = shortcut.label.ifEmpty { stringResource(R.string.shortcut_unnamed) },
+            titleColor = BasicComponentDefaults.titleColor(
+                color = MiuixTheme.colorScheme.onBackground.copy(alpha = dim)
+            ),
             summary = buildShortcutSummary(
                 shortcut,
                 stringResource(R.string.shortcut_uri_unset),
                 stringResource(R.string.shortcut_toolbox_desc)
             ),
+            summaryColor = BasicComponentDefaults.summaryColor(
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = dim)
+            ),
             startAction = when {
                 shortcut.kind == ShortcutKind.GROUP -> {
                     {
-                        GroupIconPreview(
-                            group = shortcut,
-                            members = shortcut.children.orEmpty(),
-                            name = shortcut.label,
-                            size = 32f
-                        )
+                        Box(Modifier.alpha(dim)) {
+                            GroupIconPreview(
+                                group = shortcut,
+                                members = shortcut.children.orEmpty(),
+                                name = shortcut.label,
+                                size = 32f
+                            )
+                        }
                     }
                 }
                 iconPkg != null -> {
-                    { SettingsAppIcon(packageName = iconPkg, appName = shortcut.label, size = 32f) }
+                    {
+                        Box(Modifier.alpha(dim)) {
+                            SettingsAppIcon(packageName = iconPkg, appName = shortcut.label, size = 32f)
+                        }
+                    }
                 }
                 else -> null
             },
@@ -808,12 +836,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.ShortcutRow(
                     }
                 }
             },
-            modifier = Modifier.animateItem()
-                .graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
-                }
-                .alpha(if (shortcut.enabled) 1f else 0.55f)
+            modifier = Modifier
                 .semantics { this.selected = selected }
                 // 单击与长按必须同一节点裁决（combinedClickable）：
                 // foundation 1.10 的 node clickable 先消费 DOWN，外挂
@@ -825,6 +848,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.ShortcutRow(
                     onLongClick = if (selecting) null else ({ onEnterSelection(shortcut) })
                 )
         )
+        }
     }
     // 统一包 ReorderableItem：content 需要其 scope 接收者（draggableHandle）；
     // 未启用行无手柄、注册进 reorder 状态无副作用

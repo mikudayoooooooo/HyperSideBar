@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -99,6 +100,16 @@ private const val PREFS_NAME = PrefsFiles.APP_LOCAL
 
 /** 磁贴圆角（A3：14→18dp，MIUI 抽屉近亲）。squircle 直接吃 Dp，无 Shape 分配。 */
 private val TILE_CORNER = 18.dp
+
+/** 磁贴与骨架屏共用的格内尺寸：两处必须同源，否则加载完成时整格回流。 */
+private val TILE_CELL_HPAD = 6.dp
+private val TILE_CELL_VPAD = 8.dp
+private val TILE_BOX = 56.dp
+private val TILE_ICON = 48.dp
+private val TILE_LABEL_GAP = 4.dp
+
+/** 字母索引条宽度：网格末列给它让位（否则最后一列压在索引条下面，点击也抢事件）。 */
+private val INDEX_BAR_WIDTH = 28.dp
 
 /** 索引气泡圆角（A2）：MIUI 抽屉同款圆角方，非整圆。 */
 private val BUBBLE_CORNER = 24.dp
@@ -538,6 +549,7 @@ private fun AllAppsScreen(
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
                 state = gridState,
+                contentPadding = PaddingValues(end = INDEX_BAR_WIDTH),
                 modifier = Modifier
                     .fillMaxSize()
                     .scrollEndHaptic()
@@ -574,7 +586,7 @@ private fun AllAppsScreen(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .fillMaxHeight()
-                    .width(28.dp)
+                    .width(INDEX_BAR_WIDTH)
                     .padding(vertical = 8.dp)
                     .onSizeChanged { barHeightPx = it.height.toFloat() }
                     .pointerInput(letterOffsets) {
@@ -664,30 +676,40 @@ private fun SkeletonGrid(modifier: Modifier = Modifier) {
     LazyVerticalGrid(
         columns = GridCells.Fixed(4),
         userScrollEnabled = false,
+        contentPadding = PaddingValues(end = INDEX_BAR_WIDTH),
         modifier = modifier
     ) {
         items(12) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp)
+                modifier = Modifier.padding(horizontal = TILE_CELL_HPAD, vertical = TILE_CELL_VPAD)
             ) {
+                // 与 AppTile 同构：56dp 盒 + 48dp 图形（行高只由盒与标签行决定）
+                Box(modifier = Modifier.size(TILE_BOX), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier
+                            .size(TILE_ICON)
+                            .alpha(alpha.value)
+                            .clip(RoundedCornerShape(TILE_CORNER))
+                            .background(MiuixTheme.colorScheme.secondaryContainer)
+                    )
+                }
+                // 透明文字占住真实标签的行高（footnote2），上面叠示意条：
+                // 数据落地时行高不变，网格不回流
                 Box(
-                    Modifier
-                        .size(52.dp)
-                        .alpha(alpha.value)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(MiuixTheme.colorScheme.secondaryContainer)
-                )
-                Spacer(Modifier.padding(top = 8.dp))
-                Box(
-                    Modifier
-                        .width(40.dp)
-                        .padding(bottom = 4.dp)
-                        .height(10.dp)
-                        .alpha(alpha.value)
-                        .clip(RoundedCornerShape(5.dp))
-                        .background(MiuixTheme.colorScheme.secondaryContainer)
-                )
+                    modifier = Modifier.padding(top = TILE_LABEL_GAP),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(" ", style = MiuixTheme.textStyles.footnote2, maxLines = 1)
+                    Box(
+                        Modifier
+                            .width(40.dp)
+                            .height(10.dp)
+                            .alpha(alpha.value)
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(MiuixTheme.colorScheme.secondaryContainer)
+                    )
+                }
             }
         }
     }
@@ -724,16 +746,16 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
                 indication = null,
                 onClick = onClick
             )
-            .padding(horizontal = 6.dp, vertical = 8.dp)
+            .padding(horizontal = TILE_CELL_HPAD, vertical = TILE_CELL_VPAD)
     ) {
         // A3 去托底：正常态图标 48dp 直接展示（MIUI 抽屉样式，图标自带形状边界）；
         // miss 占位态保留托底 + 首字母。外层恒定 56dp 盒，防图标加载完成后行高跳变
-        Box(modifier = Modifier.size(56.dp), contentAlignment = Alignment.Center) {
+        Box(modifier = Modifier.size(TILE_BOX), contentAlignment = Alignment.Center) {
             if (painter != null) {
                 Image(
                     painter = painter,
                     contentDescription = label,
-                    modifier = Modifier.size(48.dp)
+                    modifier = Modifier.size(TILE_ICON)
                 )
             } else {
                 Box(
@@ -753,7 +775,7 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             color = MiuixTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(top = 4.dp)
+            modifier = Modifier.padding(top = TILE_LABEL_GAP)
         )
     }
 }

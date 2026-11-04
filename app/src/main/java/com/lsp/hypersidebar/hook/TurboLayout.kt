@@ -1410,13 +1410,31 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         val wantFlag = !isLandscape(view) && !passthroughDegraded && moduleEnabled()
         val hasFlag = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0
         when {
-            wantFlag && !hasFlag -> {
-                lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                HLog.i(TAG, "cover $via: FLAG_NOT_TOUCHABLE injected (host lp was clean)")
+            wantFlag -> {
+                var changed = hasFlag
+                if (!hasFlag) lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                // alpha 0 + NOT_TOUCHABLE = AOSP 判据里的"等同不可见"：常驻 strip 不再让
+                // 下层应用被标成"被遮挡"（LSPosed 防劫持会直接丢弃触摸）。
+                // 白条像素本就被 hookHideWhiteBar 置空，视觉无变化
+                if (lp.alpha != 0f) {
+                    lp.alpha = 0f
+                    changed = true
+                }
+                if (changed) HLog.i(TAG, "cover $via: NOT_TOUCHABLE injected (host lp was clean)")
             }
-            !wantFlag && hasFlag -> {
-                lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-                HLog.i(TAG, "cover $via: FLAG_NOT_TOUCHABLE cleared (B-route landscape needs touchable strip)")
+            else -> {
+                var changed = false
+                if (hasFlag) {
+                    lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                    changed = true
+                }
+                if (lp.alpha != 1f) {
+                    lp.alpha = 1f
+                    changed = true
+                }
+                if (changed) {
+                    HLog.i(TAG, "cover $via: FLAG_NOT_TOUCHABLE cleared (B-route landscape needs touchable strip)")
+                }
             }
         }
     }
@@ -1483,12 +1501,16 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             // （看门狗 2s 周期）负责收敛残留。已降级（1C）/总开关关闭：竖屏反向清 flag 恢复可摸
             val want = !isLandscape(view) && !passthroughDegraded && moduleEnabled()
             val has = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE != 0
-            if (want != has) {
+            val wantAlpha = if (want) 0f else 1f
+            if (want != has || lp.alpha != wantAlpha) {
                 lp.flags = if (want) {
                     lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                 } else {
                     lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
                 }
+                // 与 flag 同源：隐藏态下 alpha 0 让窗口退出遮挡判定（AOSP: alpha==0 且
+                // NOT_TOUCHABLE ⇒ 等同不可见）；恢复态回到 ROM 原值 1
+                lp.alpha = wantAlpha
                 (view.context.getSystemService(Context.WINDOW_SERVICE) as WindowManager)
                     .updateViewLayout(view, lp)
                 HLog.i(TAG, "cover window NOT_TOUCHABLE ${if (want) "applied" else "cleared"}")

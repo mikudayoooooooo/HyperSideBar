@@ -203,7 +203,9 @@ object InsetProbe {
      * 让 [refresh] 彻底不再读 metrics（那条路在这台 ROM 上恒报旧高度 ✗）。
      */
     fun setImeFromWmShell(px: Int, visible: Boolean) {
+        val firstLive = !wmShellLive
         wmShellLive = true
+        if (firstLive) removeOverlayAsync()
         imeStampAt = android.os.SystemClock.uptimeMillis()
         if (px == imeBottomRaw && source == SRC_WMSHELL) {
             imeBottomAt = imeStampAt  // 同值也要续 TTL
@@ -231,7 +233,9 @@ object InsetProbe {
      * ROM 自己在这种模式下还把 `mImeFrame.bottom` 往下扩 80dp 的抓手区（`:435`），照抄即可。
      */
     fun setImeRectFromWmShell(frame: android.graphics.Rect, visible: Boolean) {
+        val firstLive = !wmShellLive
         wmShellLive = true
+        if (firstLive) removeOverlayAsync()
         val navBar = navBarHeightPx()
         val box = ImeRectMath.Box(frame.left, frame.top, frame.right, frame.bottom)
         val resolved = ImeRectMath.resolve(box, navBar, density())
@@ -376,6 +380,8 @@ object InsetProbe {
                 return
             }
             wmShellHooked = true
+            // 晚到装配：attach 期 loader 未就绪时可能已经垫了 1px 探针窗，这里一次性退役
+            removeOverlayAsync()
             val insetsStateCls = Class.forName("android.view.InsetsState", false, loader)
             val insetsSourceCls = Class.forName("android.view.InsetsSource", false, loader)
             // `InsetsSource.ID_IME`：读字段，不写死数值（ROM 改了也对得上）
@@ -585,6 +591,45 @@ object InsetProbe {
     @Volatile private var overlayWm: WindowManager? = null
     private var lastLogged = -1
 
+    /** 窗口增删统一投主线程（refresh 可能从输入线程调进来）。 */
+    private val mainHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
+
+    private fun onMain(block: () -> Unit) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            block()
+        } else {
+            mainHandler.post(block)
+        }
+    }
+
+    /**
+     * WMShell 事件源可用（类存在、钩子已装）⇒ 1px 探针窗没有任何存在理由。
+     * 它既读不到 IME insets（[setImeBottom] 对 overlay 来源直接忽略），又是常驻窗口——
+     * 常驻悬浮窗会被下层应用算作"被遮盖"（LSPosed 防劫持会直接丢弃触摸）。
+     */
+    private fun wmShellSourceUsable(): Boolean = wmShellHooked && !wmShellClassMissing
+
+    /** 按需创建 1px 探针窗（幂等；只在 WMShell 事件源不可用时才建）。 */
+    private fun maybeAddOverlay() {
+        if (added || overlayView != null || wmShellSourceUsable()) return
+        val ctx = ctxRef ?: return
+        onMain { addOverlay(ctx) }
+    }
+
+    /** 退役探针窗（幂等）。 */
+    private fun removeOverlayAsync() {
+        onMain {
+            val v = overlayView ?: return@onMain
+            overlayWm?.let { wm ->
+                runCatching { wm.removeView(v) }
+                    .onFailure { HLog.w(TAG, "overlay remove failed: ${it.message}") }
+            }
+            overlayView = null
+            overlayWm = null
+            added = false
+        }
+    }
+
     /** 冷启动时调用一次（可失败/可不调用，见 [ensure]）。 */
     fun start(ctx: Context) {
         HLog.i(TAG, "start() called (attach path)")
@@ -604,7 +649,7 @@ object InsetProbe {
             ctxRef = ctx.applicationContext ?: ctx
             HLog.i(TAG, "ensure(): ctx=${ctxRef?.javaClass?.simpleName}")
             installWmShellImeHooks()
-            addOverlay(ctx)
+            maybeAddOverlay()
         }
     }
 
@@ -618,6 +663,8 @@ object InsetProbe {
      * → unhook），这里只管**我们自己加的窗**与本代状态。
      */
     fun releaseForReload() {
+        runCatching { mainHandler.removeCallbacksAndMessages(null) }
+            .onFailure { HLog.w(TAG, "handler cleanup failed: ${it.message}") }
         val v = overlayView
         val wm = overlayWm
         if (v != null && wm != null) {
@@ -640,6 +687,8 @@ object InsetProbe {
     }
 
     private fun addOverlay(ctx: Context) {
+        // 幂等：maybeAddOverlay 可能从多个线程/多次 refresh 投递到这里
+        if (added || overlayView != null) return
         // 窗口类型必须**低于 IME**（2011）：IME insets 只派发给"在 IME 之下"且声明会被 IME 影响的窗口。
         // 实测 `TYPE_APPLICATION_OVERLAY`(2038) 恒 0 ✗。候选（全部 < 2011）：2003/2006/2005/2002。
         val types = intArrayOf(
@@ -667,7 +716,11 @@ object InsetProbe {
                 )
                 lp.gravity = Gravity.BOTTOM or Gravity.START
                 lp.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                // 绝对不参与遮挡：AOSP InputDispatcher::canBeObscuredBy 里
+                // 「alpha==0 且 NOT_TOUCHABLE」的上层窗等同于不可见（不算遮挡）
+                lp.alpha = 0f
                 wm.addView(v, lp)
+                added = true
                 overlayView = v
                 overlayWm = wm
                 // 主动请求一次 insets 派发：否则监听器要等到下一次 insets 变化才回调
@@ -694,8 +747,8 @@ object InsetProbe {
         // 2026-10-17 关键修正：`addOverlay` 原来只在 ensure() 里调一次，而 attach 路径可能已把
         // WMShell 事件源就位 ⇒ metrics 那条路彻底不用（该 ROM 的 metrics 是缓存值 ✗）
         if (wmShellLive) return imeBottomPx > 0
-        // ctxRef 置位 ⇒ overlay **从未被真正添加**（真机上一直看不到它的日志）。这里强制补一次。
-        if (!added) ctx?.let { addOverlay(it) }
+        // WMShell 事件源不可用时才补探针窗（见 wmShellSourceUsable；此前无条件建，白垫一个常驻窗）
+        maybeAddOverlay()
         installInsetsHook()
         // 最权威的来源：直接问 input_method 服务（键盘高度 px）
         val svc = imeHeightFromService()

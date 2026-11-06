@@ -1206,6 +1206,8 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
             provider = { runCatching { EzXposed.appContext }.getOrNull() },
             onReady = { ctx ->
                 com.lsp.hypersidebar.util.FanPrewarmer.preloadConfiguredFanIcons(ctx, remotePrefs)
+                // 小窗资格名单：hydrate 盘缓存 + 后台刷新（启动路径只读内存，见 FreeformEligibility）
+                com.lsp.hypersidebar.util.FreeformEligibility.warm(ctx)
                 // 壁纸位图预载（与 EdgeGestureHook 同款——双宿主一致性 0915 用户定稿）
                 com.lsp.hypersidebar.util.WallpaperSampler.ensure(ctx)
                 mainHandler.postDelayed({

@@ -191,6 +191,7 @@ class XposedInit : XposedModule() {
             "DataLoader(pool)" to { com.lsp.hypersidebar.util.DataLoader.releaseForReload() },
             "StatsRecorder(handler)" to { com.lsp.hypersidebar.util.StatsRecorder.releaseForReload() },
             "FanPrewarmer(pool)" to { com.lsp.hypersidebar.util.FanPrewarmer.releaseForReload() },
+            "FreeformEligibility(executor)" to { com.lsp.hypersidebar.util.FreeformEligibility.releaseForReload() },
         )) {
             runCatching { block() }.onFailure { HLog.w(TAG, "release [$n] failed: ${it.message}") }
         }

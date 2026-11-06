@@ -306,6 +306,8 @@ object PrefKeys {
     const val CACHED_SUGGESTIONS = "cachedSuggestions"
     /** 模块本地 label 镜像键（AppMetaCache 落盘快照，JSON 对象 pkg→label，冷启动组装免逐包 PM binder） */
     const val CACHED_LABELS = "cachedLabels"
+    /** 模块本地分区分组键（label→首字母，JSON 对象；避免冷进程反复跑 ICU 转写） */
+    const val CACHED_SECTION_LETTERS = "cachedSectionLetters"
 }
 
 // channelMode（EDGE/HANDLE）已废弃（1B：EDGE 为唯一产品形态，HANDLE 遗留调试通道代码

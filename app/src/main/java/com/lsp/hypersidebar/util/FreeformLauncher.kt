@@ -81,24 +81,22 @@ object FreeformLauncher {
         }
         try {
             val cls = Class.forName(MIUI_MULTI_WINDOW_UTILS)
-            // 先按 ROM 的资格名单筛一遍（2026-10-17）：名单里没有的包直接跳过，省掉一次必然失败的
-            // `getActivityOptions`；名单取不到（隐藏 API 被挡）⇒ isEligible 返回 null ⇒ 行为与旧版
-            // 完全一致（按"宿主 → 模块"顺序全试）。
+            // 资格名单只作为“模块包 fallback 是否值得试”的缓存提示（2026-11-05）：
+            // 启动路径不再反射 ROM；名单未就绪（peek=null）⇒ 按旧行为全试。
+            val candidates = FreeformLaunchPlanner.candidates(
+                context.packageName,
+                MODULE_PACKAGE,
+                FreeformEligibility.peek(MODULE_PACKAGE)
+            )
             var eligiblePkg = context.packageName
             var options: android.app.ActivityOptions? = null
-            for (pkg in listOf(context.packageName, MODULE_PACKAGE).distinct()) {
-                if (FreeformEligibility.isEligible(context, pkg) == false) {
-                    HLog.i(TAG, "freeform eligibility list excludes $pkg → skip")
-                    continue
+            for (pkg in candidates) {
+                options = getActivityOptions(cls, context, pkg) ?: continue
+                eligiblePkg = pkg
+                if (pkg != context.packageName) {
+                    HLog.i(TAG, "own pkg ineligible, module pkg eligible → freeform via $MODULE_PACKAGE")
                 }
-                options = getActivityOptions(cls, context, pkg)
-                if (options != null) {
-                    eligiblePkg = pkg
-                    if (pkg != context.packageName) {
-                        HLog.i(TAG, "own pkg ineligible, module pkg eligible → freeform via $MODULE_PACKAGE")
-                    }
-                    break
-                }
+                break
             }
             if (options != null) {
                 val method = context.javaClass.getMethod(

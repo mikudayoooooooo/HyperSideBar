@@ -45,6 +45,9 @@ class DirectLaunchStrategy(
     }
 
     override fun launchAllApps(context: Context, source: String?) {
+        // 资格名单“下一次打开更新”（2026-11-05）：本次启动用旧缓存，后台刷新供下次使用。
+        // 必须在启动路径之外完成——ROM 反射约 0.7–1s，主线程等不起。
+        com.lsp.hypersidebar.util.FreeformEligibility.refreshAsync(context)
         // 面板数据在启动时经 intent 传递：:ui 平台签名特权不受 hidden API 限制，getFreeformSuggestionList
         // 反射可用；模块进程是普通 App，被 hidden API blocklist 拒绝（实测 denied），
         // 面板进程内的 DataLoader 永远拿不到建议列表

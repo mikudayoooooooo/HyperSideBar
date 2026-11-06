@@ -2,71 +2,110 @@ package com.lsp.hypersidebar.util
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.util.Log
+import android.os.SystemClock
 import android.util.LruCache
 import androidx.core.graphics.drawable.toBitmap
-import com.lsp.hypersidebar.util.HLog
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 
-/**
- * 应用图标缓存（pkg → 128px Bitmap，迭代二 P1）：
- * 此前 AllApps 面板逐磁贴在主线程组合期做 PM binder + drawable 解码，且 LazyGrid
- * 滑出视口即弃、回滑重拉——滑动卡顿主因。进程级 LruCache 使回滑零成本，binder/解码
- * 全部挪到后台线程。
- *
- * 上限 320 张（全量准入列表 219 + 余量，≈14-20MB、仅面板进程内）：配合 [preload]
- * 面板打开后 4 线程并行预灌缓存，快滑时新磁贴基本同帧命中，消除快滑时的解码风暴与重组洪水。
- */
 private const val TAG = "AppIconCache"
 
+/**
+ * 首屏预灌策略（纯逻辑，可 JVM 单测）。
+ *
+ * 面板打开时只给首屏一个起步量，其余磁贴按需加载——避免 219 个预灌任务与滚动期
+ * 解码抢 CPU/IO（2026-11-05 用户拍板“只灌首屏”）。
+ */
+internal object IconLoadPolicy {
+    const val FIRST_SCREEN_MAX = 60
+
+    fun firstScreen(pkgs: List<String>, max: Int = FIRST_SCREEN_MAX): List<String> =
+        pkgs.asSequence()
+            .filter { it.isNotBlank() }
+            .distinct()
+            .take(max.coerceAtLeast(0))
+            .toList()
+}
+
+/**
+ * 应用图标缓存（pkg → 128px Bitmap，进程级 LruCache）。
+ *
+ * 2026-11-05 重构（高速滑动卡顿）：
+ * - `load` 改 suspend：同包并发用 [CompletableDeferred] 合流，等待者只挂起协程，
+ *   不再用 `FutureTask.get()` 阻塞 IO 线程；
+ * - 可见磁贴与预灌分两条有界通道（2 线程 / 1 线程），预灌不会把滚动请求堵在队列后面；
+ * - `preload` 只灌首屏（[IconLoadPolicy.FIRST_SCREEN_MAX]），其余按需。
+ */
 object AppIconCache {
 
     private const val MAX_ENTRIES = 320
     private const val ICON_SIZE_PX = 128
+    private const val VISIBLE_THREADS = 4
 
     private val cache = LruCache<String, Bitmap>(MAX_ENTRIES)
 
-    // 预加载池：4 线程（2026-09-05 真机实测：冷进程 223 图标单线程串行 1330ms，是磁贴
-    // 占位态时长的主要构成）。逐磁贴 miss 路径（AppTile→load on Dispatchers.IO）不经此池，
-    // 原"单线程限并发防 IO 风暴"约束只针对 preload 自身，提并行无副作用
-    private val loader = java.util.concurrent.Executors.newFixedThreadPool(4) { r ->
-        Thread(r, "AppIconLoader").apply { isDaemon = true }
+    private val visibleExecutor = Executors.newFixedThreadPool(VISIBLE_THREADS) { r ->
+        Thread(r, "AppIconVisible").apply { isDaemon = true }
     }
+    private val visibleDispatcher = visibleExecutor.asCoroutineDispatcher()
+
+    private val preloadExecutor = Executors.newFixedThreadPool(2) { r ->
+        Thread(r, "AppIconPreload").apply {
+            isDaemon = true
+            // 预灌让路给可见磁贴与 UI 线程：只在 CPU 空闲时抢时间片。
+            priority = Thread.MIN_PRIORITY
+        }
+    }
+    private val preloadDispatcher = preloadExecutor.asCoroutineDispatcher()
+
+    private val scope = CoroutineScope(SupervisorJob())
+
+    @Volatile private var released = false
+
+    /** 进行中的解码任务（single-flight）：同包同一时刻只解码一次。 */
+    private val inflight = ConcurrentHashMap<String, CompletableDeferred<Bitmap?>>()
 
     /** 仅查缓存，不触发 binder（主线程组合路径用）。 */
-
-    /** 热重载释放（2026-10-18）：旧代的线程池跨代存活（守护线程不会自己退），
-     *  钉死旧 classloader；新代是全新 object 自带新池。未起过 = 空操作。 */
-    fun releaseForReload() {
-        runCatching { loader.shutdownNow() }
-            .onFailure { HLog.w(TAG, "executor shutdown failed: ${it.message}") }
-        runCatching { cache.evictAll() }
-            .onFailure { HLog.w(TAG, "cache evict failed: ${it.message}") }
-        runCatching { inflight.clear() }
-            .onFailure { HLog.w(TAG, "inflight clear failed: ${it.message}") }
-        runCatching { HLog.i(TAG, "releaseForReload: done") }
-    }
     fun peek(pkg: String): Bitmap? = cache.get(pkg)
 
     /**
-     * 进行中的解码任务（single-flight，2026-10-30）：预灌（4 线程池）与逐磁贴 miss
-     * （每磁贴一个 IO 协程）此前对同一包各做一遍 binder + `toBitmap(128)`；
-     * 面板冷开时固定区与「全部」区同包并存，等于白做一轮解码。
-     * 同一包同一时刻只跑一个任务，其余调用者等它的结果。
+     * 查缓存 + miss 时异步解码；同包并发自动合流。
+     * 必须在协程中调用（等待时不占线程）。
      */
-    private val inflight =
-        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.FutureTask<Bitmap?>>()
+    suspend fun load(context: Context, pkg: String): Bitmap? =
+        loadOn(context.applicationContext ?: context, pkg, visibleDispatcher)
 
-    /** 查缓存 + miss 时 binder 加载解码（同包并发自动合流）。必须在后台线程调用。 */
-    fun load(context: Context, pkg: String): Bitmap? {
+    private suspend fun loadOn(
+        context: Context,
+        pkg: String,
+        dispatcher: CoroutineDispatcher
+    ): Bitmap? {
         cache.get(pkg)?.let { return it }
-        val task = inflight.computeIfAbsent(pkg) { key ->
-            java.util.concurrent.FutureTask { decode(context, key) }
+        if (released) return null
+
+        val mine = CompletableDeferred<Bitmap?>()
+        val existing = inflight.putIfAbsent(pkg, mine)
+        if (existing != null) return existing.await()
+
+        val job = runCatching {
+            scope.launch(dispatcher) {
+                val bitmap = runCatching { decode(context, pkg) }.getOrNull()
+                mine.complete(bitmap)
+                inflight.remove(pkg, mine)
+            }
+        }.getOrNull()
+        if (job == null) {
+            inflight.remove(pkg, mine)
+            mine.complete(null)
         }
-        // FutureTask.run 幂等：只有第一个调用者真正执行，其余立即返回后等 get()
-        runCatching { task.run() }
-        val result = runCatching { task.get() }.getOrNull()
-        inflight.remove(pkg, task)
-        return result ?: cache.get(pkg)
+        return mine.await()
     }
 
     /** 真正干活的那一段（不进 inflight 表，避免自等）。 */
@@ -81,20 +120,45 @@ object AppIconCache {
         return bitmap
     }
 
-    /** 面板打开后全量预灌缓存（后台 4 线程并行，立即返回）。
-     *  耗时锚点：冷启动时本段是磁贴占位态时长的主要构成（逐个 binder+解码）。 */
+    /**
+     * 首屏预灌（后台低优先级通道）。`pkgs` 会被截到 [IconLoadPolicy.FIRST_SCREEN_MAX]；
+     * 面板传入全量列表时也只预灌首屏，其余交给磁贴按需加载。
+     */
     fun preload(context: Context, pkgs: List<String>) {
-        if (pkgs.isEmpty()) return
-        val t0 = android.os.SystemClock.elapsedRealtime()
-        val targets = pkgs.distinct()
-        val remaining = java.util.concurrent.atomic.AtomicInteger(targets.size)
-        targets.forEach { pkg ->
-            loader.execute {
-                runCatching { load(context, pkg) }
-                if (remaining.decrementAndGet() == 0) {
-                    HLog.i(TAG, "preload: ${targets.size} icons in ${android.os.SystemClock.elapsedRealtime() - t0}ms")
+        if (released || pkgs.isEmpty()) return
+        val appCtx = context.applicationContext ?: context
+        val targets = IconLoadPolicy.firstScreen(pkgs)
+        if (targets.isEmpty()) return
+
+        val t0 = SystemClock.elapsedRealtime()
+        runCatching {
+            scope.launch(preloadDispatcher) {
+                targets.forEach { pkg ->
+                    runCatching { loadOn(appCtx, pkg, preloadDispatcher) }
                 }
+                val cost = SystemClock.elapsedRealtime() - t0
+                val msg = "preload: ${targets.size} icons in ${cost}ms (cap=${IconLoadPolicy.FIRST_SCREEN_MAX})"
+                if (cost >= 1000) HLog.w(TAG, "preload slow: $msg") else HLog.i(TAG, msg)
             }
-        }
+        }.onFailure { HLog.w(TAG, "preload enqueue failed: ${it.message}") }
+    }
+
+    /**
+     * API 102 热重载释放：取消 scope / 唤醒等待者 / 关闭两个 dispatcher / 清缓存。
+     * 旧代对象随后不再使用（新代是全新 object）。
+     */
+    fun releaseForReload() {
+        released = true
+        runCatching { scope.cancel() }
+            .onFailure { HLog.w(TAG, "scope cancel failed: ${it.message}") }
+        inflight.values.forEach { it.complete(null) }
+        inflight.clear()
+        runCatching { visibleDispatcher.close() }
+            .onFailure { HLog.w(TAG, "visible dispatcher close failed: ${it.message}") }
+        runCatching { preloadDispatcher.close() }
+            .onFailure { HLog.w(TAG, "preload dispatcher close failed: ${it.message}") }
+        runCatching { cache.evictAll() }
+            .onFailure { HLog.w(TAG, "cache evict failed: ${it.message}") }
+        HLog.i(TAG, "releaseForReload: done")
     }
 }

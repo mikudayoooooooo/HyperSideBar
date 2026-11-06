@@ -19,8 +19,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.lsp.hypersidebar.util.AppIconCache
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
@@ -42,7 +40,7 @@ internal fun SettingsAppIcon(
     var bitmap by remember(packageName) { mutableStateOf(AppIconCache.peek(packageName)) }
     LaunchedEffect(packageName) {
         if (bitmap == null) {
-            bitmap = withContext(Dispatchers.IO) { AppIconCache.load(context, packageName) }
+            bitmap = AppIconCache.load(context, packageName)
         }
     }
     val bmp = bitmap

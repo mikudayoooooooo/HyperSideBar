@@ -1,6 +1,7 @@
 package com.lsp.hypersidebar.util
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import android.util.LruCache
 import com.lsp.hypersidebar.prefs.PrefsFiles
@@ -45,6 +46,42 @@ object AppMetaCache {
         }.getOrDefault(pkg)
         labels.put(pkg, label)
         return label
+    }
+
+    /**
+     * 批量预热标签（2026-11-05）：AllApps 的 219 项目标此前逐包
+     * `getApplicationInfo` + `getApplicationLabel`，冷启动实测秒级。
+     * 改成一次 `getInstalledApplications` 拿全量 ApplicationInfo，再在本地 `loadLabel`；
+     * 失败或包不在列表时由调用方回落逐包 [label]。
+     *
+     * 必须在 IO 线程调用。
+     */
+    fun warmAll(context: Context, pkgs: Collection<String>) {
+        if (pkgs.isEmpty()) return
+        val targets = pkgs.asSequence()
+            .filter { it.isNotBlank() }
+            .filter { labels.get(it) == null && diskLabels?.get(it) == null }
+            .distinct()
+            .toList()
+        if (targets.isEmpty()) return
+
+        val t0 = SystemClock.elapsedRealtime()
+        runCatching {
+            val pm = context.packageManager
+            val byPkg = pm.getInstalledApplications(0).associateBy { it.packageName }
+            for (pkg in targets) {
+                val label = byPkg[pkg]?.let {
+                    runCatching { it.loadLabel(pm).toString() }.getOrNull()
+                } ?: runCatching {
+                    pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+                }.getOrNull() ?: pkg
+                labels.put(pkg, label)
+            }
+        }.onFailure { HLog.w(TAG, "warmAll failed: ${it.message}") }
+
+        val cost = SystemClock.elapsedRealtime() - t0
+        if (cost >= 800) HLog.w(TAG, "warmAll slow: ${targets.size} labels in ${cost}ms")
+        else HLog.i(TAG, "warmAll: ${targets.size} labels in ${cost}ms")
     }
 
     /** 盘灌（IO 线程、每进程一次）：冷启动组装前调用，miss 先落盘值兜底再回 PM。 */

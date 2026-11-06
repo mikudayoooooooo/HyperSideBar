@@ -9,8 +9,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import com.lsp.hypersidebar.util.AppIconCache
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlin.math.absoluteValue
 
 /**
@@ -32,7 +30,7 @@ fun rememberAppIcon(
 
     LaunchedEffect(app.packageName) {
         if (isRealIcon && state.value == null) {
-            state.value = withContext(Dispatchers.IO) { AppIconCache.load(context, app.packageName) }
+            state.value = AppIconCache.load(context, app.packageName)
         }
     }
 

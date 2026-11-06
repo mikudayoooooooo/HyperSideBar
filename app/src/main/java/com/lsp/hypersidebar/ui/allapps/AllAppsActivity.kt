@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -76,10 +77,12 @@ import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import com.lsp.hypersidebar.util.AppIconCache
 import com.lsp.hypersidebar.util.AppMetaCache
 import com.lsp.hypersidebar.util.DataLoader
+import com.lsp.hypersidebar.util.IconLoadPolicy
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.RelayToken
 import com.lsp.hypersidebar.util.HLog
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -302,9 +305,6 @@ private fun AllAppsScreen(
     LaunchedEffect(prefs, initialSuggestions, retryKey) {
         if (!initialSuggestions.isNullOrEmpty()) {
             allPkgs = initialSuggestions
-            // 图标预灌**提前到拿到列表这一刻**（2026-10-30）：此前只在组装完成后才开始，
-            // 与 label 的冷 PM 循环（实测 769ms）串行；现在与它重叠，冷开少一段等待。
-            AppIconCache.preload(context, initialSuggestions)
             // 后台写回保鲜：内容没变不写（AllApps 高频打开，实际写盘趋近于零）
             withContext(Dispatchers.IO) {
                 val json = org.json.JSONArray(initialSuggestions).toString()
@@ -326,7 +326,6 @@ private fun AllAppsScreen(
             }.getOrNull().orEmpty()
             if (cached.isNotEmpty()) {
                 allPkgs = cached
-                AppIconCache.preload(context, cached)
             }
             // 2) 最后兜底 DataLoader（模块进程反射被 hidden API blocklist 拒绝 ⇒ 恒空）。
             //    2026-10-30：删掉原来的 1.5s、每 250ms 一次的等待循环——那条路在本进程
@@ -334,7 +333,6 @@ private fun AllAppsScreen(
             val list = DataLoader.loadApps(context)
             if (list.isNotEmpty()) {
                 allPkgs = list
-                AppIconCache.preload(context, list)
                 withContext(Dispatchers.IO) {
                     runCatching {
                         prefs.edit().putString(PrefKeys.CACHED_SUGGESTIONS, org.json.JSONArray(list).toString()).apply()
@@ -381,11 +379,18 @@ private fun AllAppsScreen(
             }.getOrNull() ?: emptyList()
             // 冷启动盘灌：上次会话的 label 快照先顶住，miss 才回 PM（实测冷组装 769ms 的主构成）
             AppMetaCache.warmFromDisk(context)
+            // 分区首字母也走盘缓存：没有缓存时才跑 ICU（262 个标签 ~1.2s）
+            SectionLetterCache.warm(context)
+            val knownLetters = SectionLetterCache.snapshot()
             // ===== 第一段：只用缓存/盘灌 label（零 binder）先出一版 =====
             // 旧实现等全量 PM label 回来才发布 entries，骨架屏因此要挡到整表组装完。
             val peeked = (pkgs + fixed).distinct().associateWith { AppMetaCache.peek(it) ?: it }
-            val stage1 = buildEntries(pkgs, sortFixed(fixed, fixedOrder, peeked), peeked, addedHeader)
-            Triple(fixed, fixedOrder, stage1)
+            val built = buildEntries(pkgs, sortFixed(fixed, fixedOrder, peeked), peeked, addedHeader, knownLetters)
+            SectionLetterCache.persist(context, built.newLetters)
+            if (built.newLetters.isNotEmpty()) {
+                Log.w(TAG, "section letters computed: ${built.newLetters.size} (known=${knownLetters.size})")
+            }
+            Triple(fixed, fixedOrder, built.entries)
         }
         if (meta == null) {
             hasFixedApps = false
@@ -395,22 +400,34 @@ private fun AllAppsScreen(
         val (fixed, fixedOrder, stage1) = meta
         hasFixedApps = fixed.isNotEmpty()
         entries = stage1
-        Log.i(TAG, "assemble stage1: entries=${stage1.size} cost=${System.currentTimeMillis() - t0}ms")
-
+        val cost1 = System.currentTimeMillis() - t0
+        Log.i(TAG, "assemble stage1: entries=${stage1.size} cost=${cost1}ms")
+        if (cost1 >= 500) Log.w(TAG, "assemble stage1 SLOW: entries=${stage1.size} cost=${cost1}ms")
         // ===== 第二段：全量 label（PM 兜底）覆盖发布 =====
         val result = withContext(Dispatchers.IO) {
             // 绑定/数据到达窗口内本 effect 会连环重启（实测 3 次）：被取消的跑次逐包
             // ensureActive 立即终止，避免多份冷 PM label 循环并发互抢（769ms 被顶到 1376ms）
+            val targets = (pkgs + fixed).distinct()
+            // 一次 getInstalledApplications 批量取标签，替代 219 次逐包 PM binder（2026-11-05）
+            AppMetaCache.warmAll(context, targets)
             val fetched = mutableMapOf<String, String>()
-            for (pkg in (pkgs + fixed).distinct()) {
+            for (pkg in targets) {
                 ensureActive()
                 fetched[pkg] = AppMetaCache.label(context, pkg)
             }
             labels = fetched
-            buildEntries(pkgs, sortFixed(fixed, fixedOrder, fetched), fetched, addedHeader)
+            val knownLetters = SectionLetterCache.snapshot()
+            val built = buildEntries(pkgs, sortFixed(fixed, fixedOrder, fetched), fetched, addedHeader, knownLetters)
+            SectionLetterCache.persist(context, built.newLetters)
+            if (built.newLetters.isNotEmpty()) {
+                Log.w(TAG, "section letters computed: ${built.newLetters.size} (known=${knownLetters.size})")
+            }
+            built
         }
-        entries = result
-        Log.i(TAG, "assemble done: entries=${result.size} cost=${System.currentTimeMillis() - t0}ms")
+        entries = result.entries
+        val cost2 = System.currentTimeMillis() - t0
+        Log.i(TAG, "assemble done: entries=${result.entries.size} cost=${cost2}ms")
+        if (cost2 >= 800) Log.w(TAG, "assemble done SLOW: entries=${result.entries.size} cost=${cost2}ms")
         // 本地镜像（IO）：CACHED_SUGGESTIONS/CUSTOM_APPS/CUSTOM_APPS_ORDER 写入模块本地
         // prefs——冷进程 remotePrefs 未绑定时读端（remotePrefs ?: fallbackPrefs）可直接
         // 出列表，绑定完成后 remotePrefs 为权威、镜像只作快速路径预览（旧值短暂展示可接受）。
@@ -435,70 +452,20 @@ private fun AllAppsScreen(
             }
             AppMetaCache.persistToDisk(context, labels)
         }
-        // 固定区图标补灌（全部列表的预灌已在拿到数据那一刻起，见上面的数据 effect）：
-        // 固定区来自 CUSTOM_APPS，可能含不在建议列表里的包，这里补一份；
-        // single-flight 保证与在途的预灌/磁贴 miss 不重复解码
-        AppIconCache.preload(context, fixed.toList())
     }
 
     val gridState = rememberLazyGridState()
-    val scope = rememberCoroutineScope()
-    // 字母 → 该组 header 在网格条目中的下标
-    val letterOffsets = remember(entries) {
-        entries.mapIndexedNotNull { idx, e ->
-            (e as? GridEntry.Header)?.let { if (!it.isFixed) it.text to idx else null }
-        }.toMap()
-    }
 
-    // ---- A2 索引条交互态 ----
-    val view = LocalView.current
-    // 拖动/点按中的字母：驱动中央气泡与索引条高亮；null=无交互
-    var activeLetter by remember { mutableStateOf<String?>(null) }
-    // 拖动进行中守卫：点按气泡的延时清除不得误杀拖动中的气泡
-    var dragActive by remember { mutableStateOf(false) }
-    // 索引条内容区高度（onSizeChanged 与 pointerInput 同在 padding 之后，坐标系一致）
-    var barHeightPx by remember { mutableStateOf(0f) }
-    val letters = remember(letterOffsets) { letterOffsets.keys.toList() }
-
-    // 跨字母震动：activeLetter 变化即 CLOCK_TICK——structuralEqualityPolicy 保证
-    // 同字母重复赋值不触发 effect 重启，"跨字母才震"由此天然满足（点按/拖动共用）
-    LaunchedEffect(activeLetter) {
-        if (activeLetter != null) {
-            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-            // 点按场景气泡短暂驻留后自动消失；拖动场景由 dragActive 守卫不清除
-            delay(600)
-            if (!dragActive) activeLetter = null
-        }
-    }
-
-    // 当前组高亮：firstVisibleItemIndex 反查最近的字母 header。
-    // "已添加"不在 letterOffsets（构建时已过滤），首屏停留在固定区时无高亮，符合预期；
-    // derivedStateOf 只在跨组时产生新值，避免滚动逐帧驱动索引条重组
-    val currentLetter by remember(letterOffsets) {
-        derivedStateOf {
-            val first = gridState.firstVisibleItemIndex
-            var best: String? = null
-            var bestIdx = -1
-            letterOffsets.forEach { (l, idx) ->
-                if (idx <= first && idx > bestIdx) { best = l; bestIdx = idx }
-            }
-            best
-        }
-    }
-
-    fun jumpTo(letter: String?) {
-        if (letter == null) return
-        letterOffsets[letter]?.let { idx ->
-            activeLetter = letter
-            scope.launch { gridState.scrollToItem(idx) }
-        }
-    }
-
-    // 均分映射：条内 y 坐标 → 字母（MIUI 抽屉同款近似，字母行高均匀）
-    fun letterAt(y: Float): String? {
-        if (barHeightPx <= 0f || letters.isEmpty()) return null
-        val i = ((y / barHeightPx) * letters.size).toInt().coerceIn(0, letters.size - 1)
-        return letters.getOrNull(i)
+    // 首屏图标预灌（2026-11-05）：只灌 entries 前 N 个应用磁贴（固定区自然排在最前），
+    // 其余由磁贴按需加载，避免 219 个预灌任务与滚动抢 CPU/IO。
+    LaunchedEffect(entries) {
+        if (entries.isEmpty()) return@LaunchedEffect
+        val first = entries.asSequence()
+            .filterIsInstance<GridEntry.App>()
+            .take(IconLoadPolicy.FIRST_SCREEN_MAX)
+            .map { it.pkg }
+            .toList()
+        AppIconCache.preload(context, first)
     }
 
     Scaffold(
@@ -580,78 +547,138 @@ private fun AllAppsScreen(
                     }
                 }
             }
-            // 字母索引条：贴右缘。点按跳组 + 垂直拖动连续跳组（A2）；
-            // 字母本身不再各自 clickable——整条两个 pointerInput 接管，tap 识别器自动让位 drag
-            Column(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .fillMaxHeight()
-                    .width(INDEX_BAR_WIDTH)
-                    .padding(vertical = 8.dp)
-                    .onSizeChanged { barHeightPx = it.height.toFloat() }
-                    .pointerInput(letterOffsets) {
-                        detectTapGestures { offset -> jumpTo(letterAt(offset.y)) }
-                    }
-                    .pointerInput(letterOffsets) {
-                        detectVerticalDragGestures(
-                            onDragStart = { dragActive = true },
-                            onDragEnd = { dragActive = false; activeLetter = null },
-                            onDragCancel = { dragActive = false; activeLetter = null },
-                            onVerticalDrag = { change, _ ->
-                                // change.position 为相对本节点坐标，与 barHeightPx 同坐标系
-                                dragActive = true
-                                jumpTo(letterAt(change.position.y))
-                            }
-                        )
-                    },
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                // 每字母 weight(1f) 均分条高：27 字母不再溢出被裁；且与 letterAt 的
-                // 均匀映射（y/条高×字母数）同源，点按/拖动命中与视觉槽位一致
-                letters.forEach { letter ->
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            letter,
-                            style = MiuixTheme.textStyles.footnote2,
-                            // 优先级：拖动/点按中的字母 > 当前组字母 > 普通态
-                            color = if (letter == (activeLetter ?: currentLetter)) {
-                                MiuixTheme.colorScheme.primary
-                            } else {
-                                MiuixTheme.colorScheme.onSurfaceVariantSummary
-                            }
-                        )
-                    }
-                }
+            AllAppsLetterBar(gridState = gridState, entries = entries)
+        }
+    }
+}
+
+/** 索引条 y → 字母（纯函数，均匀槽位；与视觉布局同源）。 */
+internal fun letterAt(y: Float, barHeightPx: Float, letters: List<String>): String? {
+    if (barHeightPx <= 0f || letters.isEmpty()) return null
+    val index = ((y / barHeightPx) * letters.size).toInt().coerceIn(0, letters.lastIndex)
+    return letters.getOrNull(index)
+}
+
+/**
+ * 字母索引条 + 中央气泡（2026-11-05 重组作用域隔离）：
+ * activeLetter/currentLetter 只在本 composable 内读取，跨字母/拖动不再重组整个网格。
+ */
+@Composable
+private fun AllAppsLetterBar(
+    gridState: LazyGridState,
+    entries: List<GridEntry>
+) {
+    val view = LocalView.current
+    val scope = rememberCoroutineScope()
+    val letterOffsets = remember(entries) {
+        entries.mapIndexedNotNull { idx, entry ->
+            (entry as? GridEntry.Header)?.let { if (!it.isFixed) it.text to idx else null }
+        }.toMap()
+    }
+    val letters = remember(letterOffsets) { letterOffsets.keys.toList() }
+
+    var activeLetter by remember { mutableStateOf<String?>(null) }
+    var dragActive by remember { mutableStateOf(false) }
+    var barHeightPx by remember { mutableStateOf(0f) }
+    var jumpJob by remember { mutableStateOf<Job?>(null) }
+
+    // 跨字母震动：structuralEqualityPolicy 保证同字母重复赋值不触发 effect 重启。
+    LaunchedEffect(activeLetter) {
+        if (activeLetter != null) {
+            view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            delay(600)
+            if (!dragActive) activeLetter = null
+        }
+    }
+
+    // 当前组高亮：firstVisibleItemIndex 反查最近的字母 header。
+    // derivedStateOf 只在跨组时产生新值；读取点已经下沉到本 composable，不再驱动网格重组。
+    val currentLetter by remember(letterOffsets) {
+        derivedStateOf {
+            val first = gridState.firstVisibleItemIndex
+            var best: String? = null
+            var bestIdx = -1
+            letterOffsets.forEach { (letter, idx) ->
+                if (idx <= first && idx > bestIdx) { best = letter; bestIdx = idx }
             }
-            // 中央大字气泡（A2）：MIUI 抽屉同款，primary 蓝底白字（暗色 primaryContainer
-            // 是灰底灰字对比不足，故弃用）；拖动中实时跟随，松手即收
-            AnimatedVisibility(
-                visible = activeLetter != null,
-                enter = fadeIn() + scaleIn(initialScale = 0.6f),
-                exit = scaleOut(targetScale = 0.6f) + fadeOut(),
-                modifier = Modifier.align(Alignment.Center)
-            ) {
+            best
+        }
+    }
+
+    fun jumpTo(letter: String?) {
+        // 拖动事件高频：同字母直接返回；不同字母也只保留一个在途 scrollToItem。
+        if (letter == null || letter == activeLetter) return
+        val idx = letterOffsets[letter] ?: return
+        activeLetter = letter
+        jumpJob?.cancel()
+        jumpJob = scope.launch { gridState.scrollToItem(idx) }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(INDEX_BAR_WIDTH)
+                .padding(vertical = 8.dp)
+                .onSizeChanged { barHeightPx = it.height.toFloat() }
+                .pointerInput(letterOffsets) {
+                    detectTapGestures { offset -> jumpTo(letterAt(offset.y, barHeightPx, letters)) }
+                }
+                .pointerInput(letterOffsets) {
+                    detectVerticalDragGestures(
+                        onDragStart = { dragActive = true },
+                        onDragEnd = { dragActive = false; activeLetter = null },
+                        onDragCancel = { dragActive = false; activeLetter = null },
+                        onVerticalDrag = { change, _ ->
+                            dragActive = true
+                            jumpTo(letterAt(change.position.y, barHeightPx, letters))
+                        }
+                    )
+                },
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // 每字母 weight(1f) 均分条高：与 letterAt 的均匀映射同源。
+            letters.forEach { letter ->
                 Box(
-                    modifier = Modifier
-                        .size(88.dp)
-                        .squircleSurface(
-                            color = MiuixTheme.colorScheme.primary,
-                            cornerRadius = BUBBLE_CORNER
-                        ),
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        activeLetter.orEmpty(),
-                        style = MiuixTheme.textStyles.title1,
-                        color = MiuixTheme.colorScheme.onPrimary
+                        letter,
+                        style = MiuixTheme.textStyles.footnote2,
+                        // 优先级：拖动/点按中的字母 > 当前组字母 > 普通态
+                        color = if (letter == (activeLetter ?: currentLetter)) {
+                            MiuixTheme.colorScheme.primary
+                        } else {
+                            MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        }
                     )
                 }
+            }
+        }
+        // 中央大字气泡：拖动/点按中实时跟随，松手即收。
+        AnimatedVisibility(
+            visible = activeLetter != null,
+            enter = fadeIn() + scaleIn(initialScale = 0.6f),
+            exit = scaleOut(targetScale = 0.6f) + fadeOut(),
+            modifier = Modifier.align(Alignment.Center)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(88.dp)
+                    .squircleSurface(
+                        color = MiuixTheme.colorScheme.primary,
+                        cornerRadius = BUBBLE_CORNER
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    activeLetter.orEmpty(),
+                    style = MiuixTheme.textStyles.title1,
+                    color = MiuixTheme.colorScheme.onPrimary
+                )
             }
         }
     }
@@ -723,7 +750,7 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
     var bitmap by remember(section, pkg) { mutableStateOf(AppIconCache.peek(pkg)) }
     LaunchedEffect(section, pkg) {
         if (bitmap == null) {
-            val loaded = withContext(Dispatchers.IO) { AppIconCache.load(context, pkg) }
+            val loaded = AppIconCache.load(context, pkg)
             if (loaded != null) bitmap = loaded
         }
     }
@@ -781,20 +808,34 @@ private fun AppTile(pkg: String, label: String, section: String, onClick: () -> 
 }
 
 /** 网格扁平条目组装（IO 线程调用）：header 占满整行，应用为磁贴。 */
+private data class BuiltEntries(
+    val entries: List<GridEntry>,
+    /** 本次新算出的 label→首字母（供 [SectionLetterCache] 落盘）。 */
+    val newLetters: Map<String, String>
+)
+
 private fun buildEntries(
     allPkgs: List<String>,
     fixed: List<Pair<String, String>>,
     labels: Map<String, String>,
-    fixedHeader: String
-): List<GridEntry> = buildList {
-    if (fixed.isNotEmpty()) {
-        add(GridEntry.Header(fixedHeader, isFixed = true))
-        fixed.forEach { add(GridEntry.App(it.first, it.second, "fixed")) }
+    fixedHeader: String,
+    knownLetters: Map<String, String>
+): BuiltEntries {
+    val (groups, newLetters) = buildGroups(
+        allPkgs.map { it to (labels[it] ?: it) },
+        knownLetters
+    )
+    val entries = buildList {
+        if (fixed.isNotEmpty()) {
+            add(GridEntry.Header(fixedHeader, isFixed = true))
+            fixed.forEach { add(GridEntry.App(it.first, it.second, "fixed")) }
+        }
+        groups.forEach { g ->
+            add(GridEntry.Header(g.letter))
+            g.items.forEach { add(GridEntry.App(it.first, it.second, "all")) }
+        }
     }
-    buildGroups(allPkgs.map { it to (labels[it] ?: it) }).forEach { g ->
-        add(GridEntry.Header(g.letter))
-        g.items.forEach { add(GridEntry.App(it.first, it.second, "all")) }
-    }
+    return BuiltEntries(entries, newLetters)
 }
 
 /** 固定区按用户拖动顺序排序，未在顺序表里的排后面（两段发布共用同一规则）。 */
@@ -806,12 +847,28 @@ private fun sortFixed(
     .sortedBy { pkg -> order.indexOf(pkg).let { if (it >= 0) it else Int.MAX_VALUE } }
     .map { it to (labels[it] ?: it) }
 
-private fun buildGroups(items: List<Pair<String, String>>): List<LetterGroup> {
+private fun buildGroups(
+    items: List<Pair<String, String>>,
+    knownLetters: Map<String, String>
+): Pair<List<LetterGroup>, Map<String, String>> {
     // letterFor 是 ICU 转写（首字符 → 字母）：旧实现把它放进 groupBy **和**排序比较器里，
     // 每次比较都重算一遍（200+ 项 ≈ n log n 次转写）。先算一次进 Map，再分组/排序。
+    // 2026-11-05：label→首字母 跨会话稳定，优先命中盘缓存；只有 miss 才跑 ICU。
     val letterOf = HashMap<String, String>(items.size * 2)
-    items.forEach { letterOf[it.second] = letterFor(it.second) }
-    return items
+    val newLetters = HashMap<String, String>()
+    items.forEach { item ->
+        val label = item.second
+        if (letterOf.containsKey(label)) return@forEach
+        val known = knownLetters[label]
+        if (known != null) {
+            letterOf[label] = known
+        } else {
+            val letter = letterFor(label)
+            letterOf[label] = letter
+            newLetters[label] = letter
+        }
+    }
+    val groups = items
         .groupBy { letterOf.getValue(it.second) }
         .toSortedMap(compareBy({ it == "#" }, { it }))
         .map { (letter, list) ->
@@ -824,4 +881,5 @@ private fun buildGroups(items: List<Pair<String, String>>): List<LetterGroup> {
                     .map { it.first }
             )
         }
+    return groups to newLetters
 }

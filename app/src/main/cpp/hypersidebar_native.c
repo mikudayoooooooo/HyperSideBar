@@ -29,6 +29,7 @@
 #include <time.h>   /* clock_gettime(CLOCK_MONOTONIC) —— 心跳的"安装后秒数"基准 */
 #include <pthread.h> /* 心跳线程（补丁完整性巡检，见 §5.2 G1） */
 #include <sys/system_properties.h>
+#include <sys/stat.h>   /* stat(MiuiHome.apk) —— 自定位缓存用构建 mtime/size 判定是否重扫 */
 #include "launcher_profiles.h"
 /* 结构性身份校验底座（2026-10-16，来自参考工程 MiuiBackGestureHook，Apache-2.0；
  * 见 hsb_elf_view.h 的头注释）。只被 hsb_locate 的锚点结构校验用。 */
@@ -2210,29 +2211,30 @@ static void hsb_merge_xsegs(void) {
  * 为什么要它：设备构建（4.0.0.14）与手头镜像（marble .12 / dada .16）的 .text 会整体
  * 漂移（.12 vs .16 已见 0x390 位移），固定 st_value 在异构建上必然对不上；而同一 Rust
  * crate 的同版本族里**函数序言字节通常不变**，扫特征就能把地址自愈回来。
- * 安全：只在 prop 开时扫；步长 4（AArch64 入口必 4 对齐）；命中数≠1 一律不用（歧义=拒）。
+ * 安全：只在 prop 开时扫；步长 4（AArch64 入口必 4 对齐）。
+ *
+ * 2026-11-07 改「收全部命中」：原先一发现第二处命中就早停返回 0（"歧义即拒"）。这条纪律
+ * 在 OS4.0.6 OTA 上把功能整段打死——桌面 launcher 从 8.01.02.7719 换成 8.01.02.8602，
+ * `handle_back_gesture` 整体位移，而它的 32B 序言在这份 .text 里有**三份**（Rust 单态化/
+ * 代码复用），于是：偏移路 prologue mismatch → 特征扫 hits=3 → 拒装 → 扇形再也呼不出来
+ * （自检只报"桌面侧无应答"，看不出是这一环）。
+ *
+ * 现在把命中收进表里，由调用方用**结构判据**（required_imports：函数体内确有 bl 落到
+ * 指定导入的 GOT 槽）消歧；只有"恰好一条命中通过结构校验"才采纳。0 条或多条通过
+ * ⇒ 仍然拒绝（宁可不装也不猜——在错误的地址上装 inline hook 会崩桌面）。
  */
-static uintptr_t hsb_sigscan(const uint8_t *pat, uint32_t *hits_out) {
-    uintptr_t found = 0;
-    uint32_t hits = 0;
-    for (unsigned i = 0; i < g_xseg_count; i++) {
-        const uint8_t *base = (const uint8_t *) g_xsegs[i].start;
-        size_t span = (size_t) (g_xsegs[i].end - g_xsegs[i].start);
-        if (span < HSB_PROLOGUE_BYTES) continue;
-        size_t n = span - HSB_PROLOGUE_BYTES + 1u;
-        for (size_t k = 0; k < n; k += 4u) {
-            if (base[k] != pat[0]) continue;
-            unsigned b = 1u;
-            for (; b < HSB_PROLOGUE_BYTES; b++) if (base[k + b] != pat[b]) break;
-            if (b == HSB_PROLOGUE_BYTES) {
-                hits++;
-                found = (uintptr_t) (base + k);
-                if (hits > 1u) { *hits_out = hits; return 0u; }  /* 歧义：早停，别猜 */
-            }
-        }
-    }
-    *hits_out = hits;
-    return hits == 1u ? found : 0u;
+#define HSB_MAX_SIG_HITS 8u
+/* 允许走"结构消歧"的命中数上限：命中越多说明这段序言越泛（例如 action_probe 的序言在
+ * 8602 里有 88 处），此时"恰好一条通过导入校验"也可能只是运气 ⇒ 维持旧口径直接拒。
+ * 实测参考：handle_back_gesture = 3 处（消歧成功）；on_back_invoke = 55 处、
+ * action_probe = 88 处（必须拒，尤其 action_probe 的桩在抑制档下会改系统判定）。 */
+#define HSB_MAX_DISAMBIG_HITS 4u
+static uintptr_t g_sig_hits[HSB_MAX_SIG_HITS];
+static uint32_t g_sig_hit_count;   /* 全部命中数，可能 > HSB_MAX_SIG_HITS（表只存前 8 条） */
+
+static void hsb_sigscan_note(uintptr_t addr) {
+    if (g_sig_hit_count < HSB_MAX_SIG_HITS) g_sig_hits[g_sig_hit_count] = addr;
+    g_sig_hit_count++;
 }
 
 /*
@@ -2283,17 +2285,16 @@ static int hsb_pl_match(const volatile uint8_t *p, const uint8_t *pat, uint32_t 
     return 1;
 }
 
-/* 掩码版特征扫描：与 hsb_sigscan 同一套纪律（步长 4、命中≠1 即弃），只是按字掩码比。
- * 首字若含 PC 相对字段就不能用"首字节预筛"（立即数变了首字节也变）⇒ 那种情况全量扫。 */
-static uintptr_t hsb_sigscan_mask(const uint8_t *pat, uint32_t *hits_out) {
-    uintptr_t found = 0;
-    uint32_t hits = 0;
+/* 收集型特征扫描：masked=0 逐字节全等（快路径），masked=1 按字掩码。
+ * 返回命中总数并填 g_sig_hits[0..min(总数, HSB_MAX_SIG_HITS))。 */
+static uint32_t hsb_sigscan_collect(const uint8_t *pat, int masked) {
     uint32_t want[HSB_PROLOGUE_BYTES / 4u];
     uint32_t mask[HSB_PROLOGUE_BYTES / 4u];
     for (unsigned i = 0; i < HSB_PROLOGUE_BYTES / 4u; i++) {
         memcpy(&want[i], pat + i * 4u, 4u);
-        mask[i] = hsb_word_mask(want[i]);
+        mask[i] = masked ? hsb_word_mask(want[i]) : 0xFFFFFFFFu;
     }
+    g_sig_hit_count = 0u;
     for (unsigned s = 0; s < g_xseg_count; s++) {
         const volatile uint8_t *base = (const volatile uint8_t *) g_xsegs[s].start;
         size_t span = (size_t) (g_xsegs[s].end - g_xsegs[s].start);
@@ -2308,15 +2309,10 @@ static uintptr_t hsb_sigscan_mask(const uint8_t *pat, uint32_t *hits_out) {
                               ((uint32_t) q[2] << 16) | ((uint32_t) q[3] << 24);
                 if ((qw & mask[w]) != (want[w] & mask[w])) break;
             }
-            if (w == HSB_PROLOGUE_BYTES / 4u) {
-                hits++;
-                found = (uintptr_t) (base + k);
-                if (hits > 1u) { *hits_out = hits; return 0u; }  /* 歧义：早停，别猜 */
-            }
+            if (w == HSB_PROLOGUE_BYTES / 4u) hsb_sigscan_note((uintptr_t) (base + k));
         }
     }
-    *hits_out = hits;
-    return hits == 1u ? found : 0u;
+    return g_sig_hit_count;
 }
 
 /* （第二锚点只支持 pilfer_pointers：backup 存 g_orig_pilfer，存活标志 g_hook2_installed；
@@ -2423,16 +2419,10 @@ static void hsb_install_at(const HsbLauncherAnchor *a, uintptr_t at, uintptr_t b
 }
 
 /*
- * 结构校验需要"扫描命中地址所属的那一段的基址"（ELF 视图的 base）。
- * sigscan 返回的是 base+k（base 为某条可执行段起点）⇒ 从 g_xsegs 里反查包含它的那条。
- * 找不到返回 0（调用方按失败处理）。
+ * （2026-11-07 删除 hsb_xseg_base_of：原先用它把 sigscan 命中地址折算回"可执行段起点"当
+ * ELF 视图 base——那是错的，段起点不是 load bias（本库 exec 段 vaddr=0x4f1c80）。现在由
+ * 下面的 hsb_import_ok_any_base 用 g_cands 里的真 load bias 逐个试。）
  */
-static uintptr_t hsb_xseg_base_of(uintptr_t addr) {
-    for (unsigned i = 0; i < g_xseg_count; i++) {
-        if (addr >= g_xsegs[i].start && addr < g_xsegs[i].end) return g_xsegs[i].start;
-    }
-    return 0u;
-}
 
 /*
  * ===== 锚点结构校验（D2，2026-10-16）=====
@@ -2481,6 +2471,32 @@ static int hsb_anchor_import_ok(const HsbLauncherAnchor *a, uintptr_t base, uint
         }
     }
     return 1;
+}
+
+/*
+ * 特征扫命中地址 → 结构校验（2026-11-07）。
+ * 与偏移路不同，特征扫给的是**绝对地址**，而 hsb_anchor_import_ok 要的是"ELF 视图 base
+ * + 相对偏移"。可执行段起点不是 ELF base（本库 exec 段 vaddr=0x4f1c80，base 才是 vaddr 0），
+ * 所以这里拿load-bias 候选表 g_cands 逐个试：哪个 base 能让 hsb_elf_parse 成立、且命中地址
+ * 落在该映像内，就用它做结构校验。任一 base 通过即算通过。
+ * 返回 1 = 结构证据成立；0 = 无结构判据（未声明 required_imports）或没有任何 base 说得通。
+ */
+static int hsb_import_ok_any_base(const HsbLauncherAnchor *a, uintptr_t at,
+                                  const char **which_out) {
+    if (which_out) *which_out = NULL;
+    if (a->required_imports == NULL) return 0;   /* 无判据 ⇒ 不能用来消歧 */
+    for (unsigned c = 0; c < g_cand_count; c++) {
+        uintptr_t base = g_cands[c];
+        HsbElfView view;
+        const char *bad = NULL;
+        if (at < base) continue;
+        if (!hsb_elf_parse((const uint8_t *) base, &view)) continue;
+        /* 命中地址必须真的落在该映像的可执行段里（防拿别的候选 base 硬凑） */
+        if (!hsb_elf_contains(&view, at - base, 4u, PF_R | PF_X, 0u)) continue;
+        if (hsb_anchor_import_ok(a, base, at, &bad)) return 1;
+        if (which_out && *which_out == NULL) *which_out = bad;
+    }
+    return 0;
 }
 
 /* 定位一个锚点（主/副/附共用）。返回 0 = 没找到。
@@ -2537,40 +2553,546 @@ static uintptr_t hsb_locate(const HsbLauncherAnchor *a, uintptr_t *base_out, cha
         LOGI("cand rejected: %s", g_hook.reason);
     }
 
-    /* 第二路：偏移全崩（构建漂移）⇒ 按 prologue 特征扫地址；全等扫零命中才用掩码版 */
+    /* 第二路：偏移全崩（构建漂移）⇒ 按 prologue 特征扫地址；全等扫零命中才用掩码版。
+     * 2026-11-07：不再要求"全等扫必须唯一"——同一段序言可能对应多处（Rust 单态化），
+     * 用 required_imports 做**结构消歧**：恰好一条通过才采纳，0/多条通过仍拒。
+     * 这条改动是为了 OS4.0.6（launcher 8.01.02.8602）：主锚点位移且 3 处同序言，
+     * 旧口径 hits≠1 直接拒 ⇒ 整个“侧滑停顿呼出”静默失效。 */
     g_hook.sig_scans++;
-    uint32_t hits = 0;
-    uintptr_t sig = hsb_sigscan(a->prologue, &hits);
+    uint32_t hits = hsb_sigscan_collect(a->prologue, 0);
     int masked = 0;
-    if (!sig && hits == 0u) {
-        sig = hsb_sigscan_mask(a->prologue, &hits);
+    if (hits == 0u) {
+        hits = hsb_sigscan_collect(a->prologue, 1);
         masked = 1;
     }
     g_hook.sig_hits = hits;
-    if (sig) {
-        /* 结构校验同样适用于扫描路：命中地址若过不了"必调导入"证明，就不能当这个锚点用
-         * （宁可不装也不装错——错误的地址上挂 inline hook 会崩桌面）。 */
-        const char *bad_imp = NULL;
-        uintptr_t sig_base = (uintptr_t) hsb_xseg_base_of(sig);
-        if (!hsb_anchor_import_ok(a, sig_base, sig, &bad_imp)) {
+    if (hits >= 1u) {
+        uint32_t usable = hits < HSB_MAX_SIG_HITS ? hits : HSB_MAX_SIG_HITS;
+        int has_struct = (a->required_imports != NULL);
+        /* 多命中且"序言太泛/没有结构判据"⇒ 直接拒（别让消歧变成抽签） */
+        if (hits > 1u && (!has_struct || hits > HSB_MAX_DISAMBIG_HITS)) {
             g_hook.prologue_mismatch++;
             snprintf(g_hook.reason, sizeof(g_hook.reason),
-                     "%s sigscan@%p struct-mismatch %s", a->name, (void *) sig,
+                     "%s sigscan hits=%u%s ⇒ 序言不唯一且不可消歧，拒绝安装",
+                     a->name, hits, has_struct ? " (>HSB_MAX_DISAMBIG_HITS)" : " (no required_imports)");
+            LOGI("hook refused: %s", g_hook.reason);
+            return 0u;
+        }
+        uintptr_t pick = g_sig_hits[0];
+        uint32_t pass = 0u;
+        const char *bad_imp = NULL;
+        for (uint32_t i = 0; i < usable; i++) {
+            int ok = has_struct ? hsb_import_ok_any_base(a, g_sig_hits[i], &bad_imp) : 1;
+            if (!ok) continue;
+            pass++;
+            pick = g_sig_hits[i];
+        }
+        /* 采纳条件：通过结构校验的**恰好一条**，且命中表没被截断（截断就说不准唯一） */
+        if (pass == 1u && hits <= usable) {
+            if (masked) g_hook.prologue_masked++;
+            LOGI("sigscan%s found %s at=%p (offsets stale, hits=%u%s)", masked ? "(masked)" : "",
+                 a->name, (void *) pick, hits,
+                 hits == 1u ? "" : ", disambiguated by required_imports");
+            snprintf(how, how_sz, "%s", "sigscan");
+            return pick;
+        }
+        if (hits == 1u) {
+            g_hook.prologue_mismatch++;
+            snprintf(g_hook.reason, sizeof(g_hook.reason),
+                     "%s sigscan@%p struct-mismatch %s", a->name, (void *) pick,
                      bad_imp ? bad_imp : "?");
             LOGI("hook refused: %s", g_hook.reason);
             return 0u;
         }
-        if (masked) g_hook.prologue_masked++;
-        LOGI("sigscan%s found %s at=%p (offsets stale, hits=1)", masked ? "(masked)" : "", a->name,
-             (void *) sig);
-        snprintf(how, how_sz, "%s", "sigscan");
-        return sig;
+        g_hook.prologue_mismatch++;
+        snprintf(g_hook.reason, sizeof(g_hook.reason),
+                 "%s sigscan hits=%u pass=%u%s ⇒ 歧义，拒绝安装（结构判据不足以消歧）",
+                 a->name, hits, pass, hits > usable ? " truncated" : "");
+        LOGI("hook refused: %s", g_hook.reason);
+        return 0u;
     }
     snprintf(g_hook.reason, sizeof(g_hook.reason),
              "offset cands=%u mismatch=%u | sigscan hits=%u segs=%u (build drift or codegen diff)",
              g_cand_count, g_hook.prologue_mismatch, hits, g_xseg_count);
     LOGI("hook refused: %s", g_hook.reason);
     return 0u;
+}
+
+/* ── 自定位探针（2026-11-07，阶段 2：只读；prop debug.hsb.native.selflocate=1）───────────
+ * 目标：证明"只靠一个稳定导入名 + .eh_frame_hdr"就能在**任意构建**上定位到"判定系统是否
+ * 处理该事件"的闸门函数（= profile 里的 action_probe）。这条链不读 profile 偏移、不读 32B
+ * 序言、不读符号表。
+ *
+ * 链条（全部只读）：
+ *   ① 导入 input_InputMonitor_pilferPointers → 唯一 JUMP_SLOT → GOT 槽
+ *   ② 扫可执行段找 .plt 桩（adrp x16 / ldr x17 / add x16 / br x17，且解码出的 GOT == 目标槽）
+ *   ③ 扫 BL → 桩 = 包装函数调用点；.eh_frame_hdr 的 FDE 表折回函数起点
+ *   ④ 扫 BL → 包装函数 = 调用者；同样折回函数起点
+ *   ⑤ 调用者内、包装函数调用点前 ≤32B：`BL X` 且下一条是 CBZ/CBNZ w0，且 X 是 FDE 起点 ⇒ 闸门
+ *   ⑥ 全镜像候选必须唯一
+ *
+ * 安全边界：不写宿主内存、不装 hook、不改任何判定；解析失败只打一行日志。
+ * 输出只有一行：
+ *   selflocate: gate=…(base+…) profile=…(base+…) match=… wrapper=… sites=N unique=… fde=… cost=…us
+ */
+#define HSB_SL_PROP "debug.hsb.native.selflocate"
+#define HSB_SL_IMPORT "input_InputMonitor_pilferPointers"
+#define HSB_SL_DT_EH_FRAME 0x6ffffef5u
+#define HSB_SL_MAX_SITES 8u
+#define HSB_SL_MAX_GATES 8u
+#define HSB_SL_MAX_FDE 262144u
+#define HSB_SL_BACK_WINDOW 32u
+
+typedef struct {
+    uintptr_t hdr;      /* .eh_frame_hdr 起点（也是 datarel 基准） */
+    uintptr_t href;     /* 表项数组起点 */
+    uint32_t count;
+    uint8_t table_enc;
+    int ok;
+} HsbSlHdr;
+
+static int hsb_sl_read(const HsbElfView *v, uintptr_t off, void *dst, size_t n) {
+    if (!hsb_elf_contains(v, off, n, PF_R, 0u)) return 0;
+    memcpy(dst, v->base + off, n);
+    return 1;
+}
+
+/* 缓存自证用：读 gate 处 8 字节（构建变了，同一偏移上的字节必然不同） */
+static int hsb_sl_fp8(const HsbElfView *v, uintptr_t off, uint8_t out[8]) {
+    return hsb_sl_read(v, off, out, 8);
+}
+
+/* DW_EH_PE 解码（只支持实际出现的格式；其余一律失败） */
+static int hsb_sl_dec(const HsbElfView *v, uint8_t enc, uintptr_t *cursor,
+                      uintptr_t datarel, uintptr_t *out) {
+    uint8_t fmt = (uint8_t) (enc & 0x0fu);
+    uint8_t app = (uint8_t) (enc & 0x70u);
+    uintptr_t field = *cursor;
+    uintptr_t val = 0u;
+    if (fmt == 0x00u) {                       /* absptr */
+        uint64_t x = 0;
+        if (!hsb_sl_read(v, *cursor, &x, 8)) return 0;
+        val = (uintptr_t) x;
+        *cursor += 8u;
+    } else if (fmt == 0x01u) {                /* uleb128 */
+        unsigned shift = 0;
+        for (unsigned i = 0; i < 10u; i++) {
+            uint8_t b = 0;
+            if (!hsb_sl_read(v, *cursor, &b, 1)) return 0;
+            *cursor += 1u;
+            val |= (uintptr_t) (b & 0x7fu) << shift;
+            if (!(b & 0x80u)) break;
+            shift += 7u;
+            if (i == 9u) return 0;
+        }
+    } else if (fmt == 0x02u) {                /* udata2 */
+        uint16_t x = 0;
+        if (!hsb_sl_read(v, *cursor, &x, 2)) return 0;
+        val = x;
+        *cursor += 2u;
+    } else if (fmt == 0x03u) {                /* udata4 */
+        uint32_t x = 0;
+        if (!hsb_sl_read(v, *cursor, &x, 4)) return 0;
+        val = x;
+        *cursor += 4u;
+    } else if (fmt == 0x04u) {                /* udata8 */
+        uint64_t x = 0;
+        if (!hsb_sl_read(v, *cursor, &x, 8)) return 0;
+        val = (uintptr_t) x;
+        *cursor += 8u;
+    } else if (fmt == 0x0bu) {                /* sdata4 */
+        int32_t x = 0;
+        if (!hsb_sl_read(v, *cursor, &x, 4)) return 0;
+        val = (uintptr_t) (intptr_t) x;
+        *cursor += 4u;
+    } else {
+        return 0;
+    }
+    if (app == 0x10u) val += field;            /* pcrel */
+    else if (app == 0x30u) val += datarel;     /* datarel */
+    else if (app != 0x00u) return 0;           /* textrel 等不支持 */
+    *out = val;
+    return 1;
+}
+
+/* 找 .eh_frame_hdr：优先 PT_GNU_EH_FRAME（规范做法，APK 内嵌也不依赖节头表），
+ * 退回 .dynamic 的 DT_GNU_EH_FRAME。
+ * 2026-11-07 实测（8602）：DT_GNU_EH_FRAME 的值是 0xd958，而 .eh_frame_hdr 在 0x3a3328
+ * ——那个 tag 在这份构建里指的不是真位置，**不能只信它**；PT_GNU_EH_FRAME(0x6474e550)
+ * 的 p_vaddr 才是 0x3a3328。节头表本身在 e_shoff=0xf7dd38，超出所有 PT_LOAD ⇒ 运行期
+ * 根本读不到节头，所以只能走程序头。 */
+#define HSB_SL_PT_GNU_EH_FRAME 0x6474e550u
+
+static uintptr_t hsb_sl_find_hdr(const HsbElfView *v) {
+    uint64_t phoff = 0;
+    uint16_t phentsize = 0, phnum = 0;
+    uintptr_t dt_fallback = 0u;
+    if (!hsb_sl_read(v, 0x20u, &phoff, 8)) return 0u;
+    if (!hsb_sl_read(v, 0x36u, &phentsize, 2)) return 0u;
+    if (!hsb_sl_read(v, 0x38u, &phnum, 2)) return 0u;
+    if (phentsize < 56u || phnum == 0u || phnum > 64u) return 0u;
+    for (uint16_t i = 0; i < phnum; i++) {
+        uintptr_t ph = (uintptr_t) phoff + (uintptr_t) i * phentsize;
+        uint32_t type = 0;
+        uint64_t vaddr = 0, memsz = 0;
+        if (!hsb_sl_read(v, ph, &type, 4)) return 0u;
+        if (type == HSB_SL_PT_GNU_EH_FRAME) {
+            if (!hsb_sl_read(v, ph + 0x10u, &vaddr, 8)) return 0u;
+            return (uintptr_t) vaddr;       /* 程序头给的就是映像内偏移（vaddr 基准 0） */
+        }
+        if (type != PT_DYNAMIC) continue;
+        if (!hsb_sl_read(v, ph + 0x10u, &vaddr, 8)) return 0u;
+        if (!hsb_sl_read(v, ph + 0x28u, &memsz, 8)) return 0u;
+        if (memsz == 0u || memsz > 0x100000u) return 0u;
+        for (uintptr_t d = (uintptr_t) vaddr; d + 16u <= (uintptr_t) vaddr + memsz; d += 16u) {
+            int64_t tag = 0;
+            uint64_t value = 0;
+            uintptr_t off = 0;
+            if (!hsb_sl_read(v, d, &tag, 8)) return 0u;
+            if (!hsb_sl_read(v, d + 8u, &value, 8)) return 0u;
+            if (tag == 0) break;
+            if ((uint64_t) tag != HSB_SL_DT_EH_FRAME) continue;
+            if (hsb_elf_normalize_dynamic_pointer(v, (Elf64_Addr) value, &off)) dt_fallback = off;
+        }
+    }
+    return dt_fallback;
+}
+
+static int hsb_sl_parse_hdr(const HsbElfView *v, uintptr_t hdr, HsbSlHdr *h) {
+    uint8_t b[4];
+    uintptr_t cur, tmp = 0u, cnt = 0u;
+    memset(h, 0, sizeof(*h));
+    if (!hsb_sl_read(v, hdr, b, 4)) return 0;
+    if (b[0] != 1u) return 0;                       /* version */
+    cur = hdr + 4u;
+    if (!hsb_sl_dec(v, b[1], &cur, hdr, &tmp)) return 0;   /* eh_frame_ptr */
+    if (!hsb_sl_dec(v, b[2], &cur, hdr, &cnt)) return 0;   /* fde count */
+    if (cnt == 0u || cnt > HSB_SL_MAX_FDE) return 0;
+    h->hdr = hdr;
+    h->href = cur;
+    h->count = (uint32_t) cnt;
+    h->table_enc = b[3];
+    h->ok = 1;
+    return 1;
+}
+
+/* PC → 所在函数的 FDE 起点（表按 loc 升序；线性早停，查几次而已） */
+static int hsb_sl_fde_start(const HsbElfView *v, const HsbSlHdr *h, uintptr_t pc,
+                            uintptr_t *out) {
+    uintptr_t cur = h->href, loc = 0u, fde = 0u, best = 0u;
+    int have = 0;
+    if (!h->ok) return 0;
+    for (uint32_t i = 0; i < h->count; i++) {
+        if (!hsb_sl_dec(v, h->table_enc, &cur, h->hdr, &loc)) return 0;
+        if (!hsb_sl_dec(v, h->table_enc, &cur, h->hdr, &fde)) return 0;
+        (void) fde;
+        if (loc > pc) break;
+        best = loc;
+        have = 1;
+    }
+    if (!have) return 0;
+    *out = best;
+    return 1;
+}
+
+/* 找"加载目标 GOT 槽"的 .plt 桩（16B 对齐扫） */
+static uintptr_t hsb_sl_find_stub(const HsbElfView *v, uintptr_t got_off) {
+    for (unsigned s = 0; s < v->load_count; s++) {
+        const uint8_t *p;
+        uintptr_t start, end, a;
+        if ((v->loads[s].flags & (PF_R | PF_X)) != (PF_R | PF_X)) continue;
+        start = (v->loads[s].start + 15u) & ~(uintptr_t) 15u;
+        end = v->loads[s].end;
+        p = v->base + start;
+        for (a = start; a + 16u <= end; a += 16u) {
+            uint32_t w = 0;
+            uintptr_t g = 0u;
+            memcpy(&w, p + (a - start), 4);
+            if ((w & 0x9f00001fu) != 0x90000010u) continue;   /* adrp x16 */
+            if (hsb_a64_decode_plt_got(v, a, &g) && g == got_off) return a;
+        }
+    }
+    return 0u;
+}
+
+/* 扫 BL → target 的调用点；返回总数（最多写 cap 条到 out） */
+static uint32_t hsb_sl_bl_sites(const HsbElfView *v, uintptr_t target,
+                                uintptr_t *out, uint32_t cap) {
+    uint32_t n = 0u;
+    for (unsigned s = 0; s < v->load_count; s++) {
+        const uint8_t *p;
+        uintptr_t start, end, a;
+        if ((v->loads[s].flags & (PF_R | PF_X)) != (PF_R | PF_X)) continue;
+        start = v->loads[s].start;
+        end = v->loads[s].end;
+        p = v->base + start;
+        for (a = start; a + 4u <= end; a += 4u) {
+            uint32_t w = 0;
+            uintptr_t t = 0u;
+            memcpy(&w, p + (a - start), 4);
+            if ((w & 0xfc000000u) != 0x94000000u) continue;
+            if (!hsb_a64_decode_bl_target(v, a, &t)) continue;
+            if (t != target) continue;
+            if (n < cap) out[n] = a;
+            n++;
+            if (n > 64u) return n;          /* 早停：异常多的调用点必然不是我们要的形态 */
+        }
+    }
+    return n;
+}
+
+/* 自定位主流程（只读）。返回 1 = 得到了唯一的闸门候选。 */
+static const char *g_sl_stage = "?";
+static uintptr_t g_sl_got, g_sl_hdr, g_sl_stub;
+
+static int hsb_sl_run(uintptr_t base, uintptr_t *gate_out, uintptr_t *wrapper_out,
+                      uint32_t *sites_out) {
+    HsbElfView v;
+    HsbSlHdr h;
+    uintptr_t hdr, got = 0u, stub = 0u;
+    uintptr_t sites[HSB_SL_MAX_SITES];
+    uintptr_t wrappers[HSB_SL_MAX_SITES];
+    uint32_t site_count = 0u, wrapper_count = 0u, caller_total = 0u;
+    uintptr_t gates[HSB_SL_MAX_GATES];
+    uint32_t gate_count = 0u;
+    *gate_out = 0u;
+    *wrapper_out = 0u;
+    *sites_out = 0u;
+    g_sl_stage = "elf";
+    if (!hsb_elf_parse((const uint8_t *) base, &v)) return 0;
+    g_sl_stage = "import";
+    if (!hsb_import_find_got(&v, HSB_SL_IMPORT, &got)) return 0;
+    g_sl_got = got;
+    g_sl_stage = "hdr";
+    hdr = hsb_sl_find_hdr(&v);
+    g_sl_hdr = hdr;
+    if (hdr == 0u || !hsb_sl_parse_hdr(&v, hdr, &h)) return 0;
+    g_sl_stage = "stub";
+    stub = hsb_sl_find_stub(&v, got);
+    g_sl_stub = stub;
+    if (stub == 0u) return 0;
+    g_sl_stage = "sites";
+    site_count = hsb_sl_bl_sites(&v, stub, sites, HSB_SL_MAX_SITES);
+    if (site_count == 0u || site_count > HSB_SL_MAX_SITES) return 0;
+    *sites_out = site_count;
+    for (uint32_t i = 0; i < site_count; i++) {
+        uintptr_t w = 0u;
+        int dup = 0;
+        if (!hsb_sl_fde_start(&v, &h, sites[i], &w)) return 0;
+        for (uint32_t k = 0; k < wrapper_count; k++) if (wrappers[k] == w) dup = 1;
+        if (!dup) {
+            if (wrapper_count >= HSB_SL_MAX_SITES) return 0;
+            wrappers[wrapper_count++] = w;
+        }
+    }
+    if (wrapper_count == 0u) return 0;
+    *wrapper_out = wrappers[0];
+    for (uint32_t i = 0; i < wrapper_count; i++) {
+        uintptr_t cs[HSB_SL_MAX_SITES];
+        uint32_t cn = hsb_sl_bl_sites(&v, wrappers[i], cs, HSB_SL_MAX_SITES);
+        if (cn == 0u || cn > HSB_SL_MAX_SITES) continue;
+        caller_total += cn;
+        for (uint32_t j = 0; j < cn; j++) {
+            uintptr_t caller = 0u;
+            if (!hsb_sl_fde_start(&v, &h, cs[j], &caller)) continue;
+            if (cs[j] < HSB_SL_BACK_WINDOW) continue;          /* 防下溢（正常调用点不会这么靠前） */
+            for (uintptr_t pc = cs[j] - HSB_SL_BACK_WINDOW, lim = cs[j];
+                 pc != lim && pc >= caller; pc += 4u) {
+                uintptr_t t = 0u, start = 0u;
+                uint32_t w2 = 0u;
+                if (!hsb_a64_decode_bl_target(&v, pc, &t)) continue;
+                if (!hsb_sl_read(&v, pc + 4u, &w2, 4)) continue;
+                if ((w2 & 0x7e000000u) != 0x34000000u) continue;   /* CBZ/CBNZ */
+                if ((w2 & 0x1fu) != 0u) continue;                  /* 只看 w0 */
+                if (!hsb_sl_fde_start(&v, &h, t, &start) || start != t) continue;
+                {
+                    int dup = 0;
+                    for (uint32_t g = 0; g < gate_count; g++) if (gates[g] == t) dup = 1;
+                    if (!dup && gate_count < HSB_SL_MAX_GATES) gates[gate_count++] = t;
+                }
+            }
+        }
+    }
+    (void) caller_total;
+    if (gate_count != 1u) return 0;
+    *gate_out = gates[0];
+    return 1;
+}
+
+/* 探针入口（2026-11-07 起带缓存）：每个进程只跑一次。
+ *
+ * 扫描只在"桌面构建变化后的第一次启动"发生（实测 ~159ms），之后命中缓存直接返回；
+ * 属性 debug.hsb.native.selflocate：空=按缓存跑（默认静默）、0=完全关、1=强制重扫。
+ *
+ * 缓存格式（一行，见 hsb_sl_cache_load）：
+ *   v1 ok <gate_off> <fp8_hex>            —— 命中时用 gate 处 8 字节自证，字节变了就重扫
+ *   v1 fail <apk_mtime> <apk_size> <stage>—— 失败也落盘；APK 未变就不再重扫（否则每次启动
+ *                                            白烧 159ms）
+ * 用 fp8 而非 build-id 的原因：这份 libapp_launcher.so 没有 .note.gnu.build-id，
+ * PT_NOTE 里只有一条 Android note。
+ */
+#define HSB_SL_CACHE_PATH "/data/user_de/0/com.miui.home/hsb_selflocate.cache"
+#define HSB_SL_APK_PATH "/product/priv-app/MiuiHome/MiuiHome.apk"
+
+static void hsb_sl_hex8(const uint8_t in[8], char out[17]) {
+    static const char *digits = "0123456789abcdef";
+    for (int i = 0; i < 8; i++) {
+        out[i * 2] = digits[in[i] >> 4];
+        out[i * 2 + 1] = digits[in[i] & 0x0fu];
+    }
+    out[16] = '\0';
+}
+
+static int hsb_sl_unhex8(const char *in, uint8_t out[8]) {
+    if (in == NULL || strlen(in) != 16u) return 0;
+    for (int i = 0; i < 8; i++) {
+        int v = 0;
+        for (int k = 0; k < 2; k++) {
+            char c = in[i * 2 + k];
+            int d;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+            else return 0;
+            v = (v << 4) | d;
+        }
+        out[i] = (uint8_t) v;
+    }
+    return 1;
+}
+
+static int hsb_sl_apk_stat(long long *mt, long *sz) {
+    struct stat st;
+    if (mt == NULL || sz == NULL) return 0;
+    if (stat(HSB_SL_APK_PATH, &st) != 0) return 0;
+    *mt = (long long) st.st_mtime;
+    *sz = (long) st.st_size;
+    return 1;
+}
+
+static int hsb_sl_cache_load(uintptr_t *gate, char fp[17], int *is_fail,
+                             long long *mt, long *sz, char *stage, size_t stage_sz) {
+    FILE *f = fopen(HSB_SL_CACHE_PATH, "rb");
+    char line[192];
+    size_t n;
+    unsigned long long g = 0;
+    char fphex[24] = {0}, st[24] = {0};
+    long long m = 0;
+    long s = 0;
+    if (!f) return 0;
+    n = fread(line, 1, sizeof(line) - 1u, f);
+    fclose(f);
+    if (n == 0u) return 0;
+    line[n] = '\0';
+    if (sscanf(line, "v1 ok %llx %23s", &g, fphex) == 2) {
+        *gate = (uintptr_t) g;
+        snprintf(fp, 17, "%s", fphex);
+        *is_fail = 0;
+        return 1;
+    }
+    if (sscanf(line, "v1 fail %lld %ld %23s", &m, &s, st) == 3) {
+        *is_fail = 1;
+        *mt = m;
+        *sz = s;
+        snprintf(stage, stage_sz, "%s", st);
+        return 1;
+    }
+    return 0;
+}
+
+static void hsb_sl_cache_store(const char *text) {
+    char tmp[128];
+    FILE *f;
+    snprintf(tmp, sizeof(tmp), "%s.tmp", HSB_SL_CACHE_PATH);
+    f = fopen(tmp, "wb");
+    if (!f) return;
+    fputs(text, f);
+    fclose(f);
+    if (rename(tmp, HSB_SL_CACHE_PATH) != 0) (void) remove(tmp);
+}
+
+static void hsb_selflocate_probe(uintptr_t base) {
+    struct timespec t0, t1;
+    HsbElfView v;
+    uintptr_t gate = 0u, wrapper = 0u, prof_off = 0u;
+    uint32_t sites = 0u;
+    long long cost_us;
+    int ok, forced = 0, is_fail = 0;
+    char fp[17] = {0}, stage[24] = {0}, prop[8] = {0};
+    long long mt = 0, cmt = 0;
+    long sz = 0, csz = 0;
+    static int done;
+    if (done) return;
+    done = 1;
+    __system_property_get(HSB_SL_PROP, prop);
+    if (prop[0] == '0') return;                 /* 显式关闭 */
+    forced = (prop[0] == '1');                  /* 强制重扫 */
+    for (unsigned i = 0; i < HSB_ANCHOR_COUNT; i++) {
+        if (strcmp(kHsbAnchors[i].name, "action_probe") == 0) {
+            prof_off = (uintptr_t) kHsbAnchors[i].offset;
+            break;
+        }
+    }
+    if (!hsb_elf_parse((const uint8_t *) base, &v)) {
+        LOGI("selflocate: elf parse fail");
+        return;
+    }
+    if (!forced && hsb_sl_cache_load(&gate, fp, &is_fail, &cmt, &csz, stage, sizeof(stage))) {
+        if (is_fail) {
+            if (hsb_sl_apk_stat(&mt, &sz) && mt == cmt && sz == csz) {
+                LOGI("selflocate: skip（上次失败 stage=%s，桌面构建未变）", stage);
+                return;
+            }
+        } else if (gate != 0u) {
+            uint8_t want[8], have[8];
+            if (hsb_sl_unhex8(fp, want) && hsb_sl_fp8(&v, gate, have) &&
+                    memcmp(want, have, 8) == 0) {
+                LOGI("selflocate: cache hit gate=0x%lx(base+0x%lx) profile=0x%lx match=%s",
+                     (unsigned long) (base + gate), (unsigned long) gate,
+                     (unsigned long) (prof_off ? base + prof_off : 0u),
+                     (gate == prof_off) ? "yes" : "NO");
+                return;
+            }
+        }
+    }
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    ok = hsb_sl_run(base, &gate, &wrapper, &sites);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    /* 有符号减法：tv_nsec 回绕时不能按无符号算（首版算出了 1.8e16us 的假数） */
+    cost_us = (long long) (t1.tv_sec - t0.tv_sec) * 1000000LL +
+              (long long) (t1.tv_nsec - t0.tv_nsec) / 1000LL;
+    if (cost_us < 0) cost_us = 0;
+    if (!ok) {
+        char buf[160];
+        LOGI("selflocate: gate=- profile=0x%lx match=no wrapper=- sites=%u unique=no stage=%s "
+             "got=0x%lx hdr=0x%lx stub=0x%lx cost=%lldus",
+             (unsigned long) prof_off, sites, g_sl_stage,
+             (unsigned long) g_sl_got, (unsigned long) g_sl_hdr, (unsigned long) g_sl_stub,
+             cost_us);
+        if (hsb_sl_apk_stat(&mt, &sz)) {
+            snprintf(buf, sizeof(buf), "v1 fail %lld %ld %s\n", mt, sz, g_sl_stage);
+        } else {
+            snprintf(buf, sizeof(buf), "v1 fail 0 0 %s\n", g_sl_stage);
+        }
+        hsb_sl_cache_store(buf);
+        return;
+    }
+    LOGI("selflocate: gate=0x%lx(base+0x%lx) profile=0x%lx(base+0x%lx) match=%s wrapper=0x%lx "
+         "sites=%u unique=yes fde=ok cost=%lldus",
+         (unsigned long) (base + gate), (unsigned long) gate,
+         (unsigned long) (prof_off ? base + prof_off : 0u), (unsigned long) prof_off,
+         (gate == prof_off) ? "yes" : "NO", (unsigned long) (base + wrapper),
+         sites, cost_us);
+    {
+        uint8_t fp8[8];
+        char fphex[17] = {0};
+        char buf[128];
+        if (hsb_sl_fp8(&v, gate, fp8)) {
+            hsb_sl_hex8(fp8, fphex);
+            snprintf(buf, sizeof(buf), "v1 ok %lx %s\n", (unsigned long) gate, fphex);
+            hsb_sl_cache_store(buf);
+        }
+    }
 }
 
 /* 解析并安装一个具名锚点（主/副共用）。返回 1 = 装成功。 */
@@ -2647,6 +3169,10 @@ static void hsb_try_install_hooks(void) {
         LOGI("hook not ready: %s", g_hook.reason);
         return;
     }
+
+    /* 自定位探针（2026-11-07，默认关）：只读一行日志；失败不影响任何后续逻辑。
+     * 放在安装之前，保证即使锚点拒装也能拿到"自定位算到了什么"的读数。 */
+    if (g_cand_count > 0u) hsb_selflocate_probe(g_cands[0]);
 
     if (!g_hook.hook_installed) {
         const char *want = hsb_chosen_anchor();

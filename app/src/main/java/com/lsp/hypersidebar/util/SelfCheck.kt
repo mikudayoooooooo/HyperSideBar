@@ -86,6 +86,11 @@ object SelfCheck {
             // 探针显式定向宿主包（接收器 RECEIVER_EXPORTED；executor 附带令牌，
             // 隐式发送可被任意 App 截收——0912 审查，与 sendSync 同类修复）
             val home = probe(context, Intent(PrefKeys.PROBE_ACTION_HOME).setPackage(HostPackages.HOME))
+            // 桌面形态：OS4 起 MiuiHome 是 Rust/Flutter 纯 native（APK 里没有 dex，也没有模块
+            // Java 半侧）⇒ `com.miui.home` 里**从来没有**能应答 PROBE_ACTION_HOME 的接收器。
+            // 不区分形态就会把"结构上不可能有应答"读成"桌面侧 hook 未加载"——2026-11-07
+            // OTA 后用户就是被这一行带偏的（真因在 native 锚点，自检正文看不出）。
+            val os4NativeHome = runCatching { NativeGateBridge.isOs4NativeLauncher() }.getOrDefault(false)
             val relayToken = RelayToken.read(prefs)
             val executor = probe(
                 context,
@@ -121,6 +126,16 @@ object SelfCheck {
             val statuses = LogCollector.statuses.toMap()
 
             val verdict = when {
+                // 先判形态再判应答：OS4 桌面没有 Java 半侧 ⇒ 触发端必然无应答，
+                // 这时"无应答"是常态而不是故障（真因去 native 取证段看 hook installed/refused）。
+                os4NativeHome && home == PrefKeys.PROBE_CODE_DEAD -> {
+                    val uiOk = if (executor == PrefKeys.PROBE_CODE_OK) "执行端(:ui)正常。" else ""
+                    "桌面是 OS4 纯 native 形态（MiuiHome.apk 内含 libapp_launcher.so，无 dex、无模块 Java 半侧）" +
+                        "⇒ 触发端探针天然无应答，不代表 hook 没装上。" +
+                        "请改看报告末尾「native root 取证」段或 HSBNative 日志：有 hook installed / hooks ready 才算装上；" +
+                        "出现 hook refused（cand rejected … prologue / sigscan hits=N）说明桌面构建变了、锚点没跟上。" +
+                        uiOk
+                }
                 home == PrefKeys.PROBE_CODE_DEAD ->
                     "桌面侧 hook 未加载：检查 LSPosed 模块总开关与作用域（系统桌面），重启桌面或手机后重测"
                 debugSwitch ->
@@ -154,7 +169,20 @@ object SelfCheck {
                 appendLine("唤醒锁: 无（本模块不使用 PowerManager/WakeLock/KEEP_SCREEN_ON）")
                 appendLine()
                 appendLine("== 探针双路 ==")
-                appendLine("触发端 (com.miui.home): ${decodeProbe(home)} (code=$home)")
+                appendLine(
+                    "桌面形态: " + (if (os4NativeHome) {
+                        "OS4 纯 native（Rust/Flutter，无 dex/无 Java 半侧 ⇒ 触发端探针不适用）"
+                    } else {
+                        "OS2/OS3 Java 桌面（触发端探针有效）"
+                    })
+                )
+                appendLine(
+                    "触发端 (com.miui.home): " + (if (os4NativeHome && home == PrefKeys.PROBE_CODE_DEAD) {
+                        "不适用（OS4 native 桌面，结构上无接收器）"
+                    } else {
+                        decodeProbe(home)
+                    }) + " (code=$home)"
+                )
                 appendLine("执行端 (com.miui.securitycenter:ui): ${decodeProbe(executor)} (code=$executor)")
                 appendLine()
                 appendLine("== 开关与状态 ==")

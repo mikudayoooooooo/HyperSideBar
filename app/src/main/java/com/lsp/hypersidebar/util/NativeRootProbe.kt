@@ -78,8 +78,7 @@ object NativeRootProbe {
         "init_gesture_type" to "ff0303d1e83300fdfd7b07a9fa6708a9",
         "is_in_bottom_gesture_region" to "ffc300d1fd7b01a9f31300f9fd430091",
         "match_region_check" to "0800381e01020036093040b93f01086b",
-        "pilfer_pointers" to "400400b4ff8301d1fd7b04a9f32b00f9",
-        "cancel_home_gesture_to_engine" to "ff8303d1fd7b0ba9f6570ca9f44f0da9",
+        "pilfer_pointers" to "ff4301d1fd7b03a9f44f04a9fdc30091",
         // 2026-10-12：手势终态路径入口（"取消"的第二半：箭头收尾 + 取消/提交分叉都在它下游）
         "on_swipe_stop_direct" to "ffc301d1e82300fdfdfb04a9f52f00f9",
         // 2026-10-14：系统导航热区谓词（只读观测锚点，prop debug.hsb.native.anchor3 nav_hot_zone）
@@ -87,7 +86,7 @@ object NativeRootProbe {
         // 2026-10-15：Home 判据本体 trigger_gesture_judge（只读观测锚点，prop anchor3 judge_probe）
         "judge_probe" to "ff8304d1ec5300fdeb2b0b6de9230c6d",
         // 2026-10-15：pilfer 动作本体 do_pilfer（只读观测锚点，prop anchor3 pilfer_probe）
-        "pilfer_probe" to "ffc301d1fd7b04a9f52b00f9f44f06a9",
+        "pilfer_probe" to "ffc301d1fd7b04a9f65705a9f44f06a9",
         // 2026-10-16：系统"是否处理事件"总闸 should_handle_event（只读观测锚点，prop anchor3 action_probe）
         "action_probe" to "ffc304d1fd7b0da9fc6f0ea9fa670fa9",
         // 2026-10-18：当前旋转下的屏尺寸 display_api::get_current_rotate_screen_size

@@ -902,6 +902,60 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     /** SystemUI 侧（2a）是否已对本流 pilfer：是 ⇒ :ui 不再发跨进程抢占指令 */
     private var cSysPilfered = false
 
+    /**
+     * "底角斜滑独占"当前是否生效（native 侧读的是同一个属性 `persist.hsb.corner.supp`，
+     * 见 CornerGeomBridge）。1 秒缓存：它在终态判定里被读，不能每次回调都走属性。
+     *
+     * 为什么要在 :ui 侧也读它：8602 上"我们拒 pilfer"会让系统把流收回（终态变 CANCEL），
+     * 这个 CANCEL 与"桌面手势窗口抢走流"的 CANCEL 长得一样，但后果完全相反——
+     * 前者系统没接管、安全；后者系统 Home 已经在跑、必须收窗。见 [StreamEndPolicy]。
+     */
+    private var cSuppOn = false
+    private var cSuppCheckedS = 0L
+
+    private fun cornerSuppressionOn(): Boolean {
+        val now = android.os.SystemClock.elapsedRealtime() / 1000L
+        if (now != cSuppCheckedS) {
+            cSuppCheckedS = now
+            val v = runCatching {
+                com.lsp.hypersidebar.util.SysProps.get(
+                    com.lsp.hypersidebar.util.CornerGeomBridge.PROP_CORNER_SUPP
+                )
+            }.getOrDefault("")
+            cSuppOn = if (v.isNotEmpty()) {
+                v.trim() == "1"
+            } else {
+                // 属性读不到（极少数机型/权限）⇒ 回落到设置项默认，与 native 的缺省一致
+                runCatching {
+                    remotePrefs.getBoolean(
+                        PrefKeys.CORNER_SUPPRESS_ENABLED,
+                        LayoutDefaults.CORNER_SUPPRESS_ENABLED
+                    )
+                }.getOrDefault(LayoutDefaults.CORNER_SUPPRESS_ENABLED)
+            }
+        }
+        return cSuppOn
+    }
+
+    /**
+     * 角滑是否要发 pilfer（**默认关**：`debug.hsb.corner.pilfer=1` 才回到旧行为）。1 秒缓存。
+     *
+     * 2026-11-09 实机定案：pilfer 是本机"扇形闪一下就消失"的直接原因，见调用点注释。
+     */
+    private var cPilferOn = false
+    private var cPilferCheckedS = 0L
+
+    private fun cornerPilferEnabled(): Boolean {
+        val now = android.os.SystemClock.elapsedRealtime() / 1000L
+        if (now != cPilferCheckedS) {
+            cPilferCheckedS = now
+            val v = runCatching { SysProps.get(PropNames.CORNER_PILFER) }.getOrDefault("").trim()
+            // 只有显式 "1" 才开；缺席（空串）= 关
+            cPilferOn = v == "1"
+        }
+        return cPilferOn
+    }
+
     fun feedCornerGesture(ctx: Context, ev: MotionEvent, sysPilfered: Boolean = false) {
         // 流归属门（2026-10-31）：OS4 恒开；OS2/3 只有"底角兜底"接管时收流。
         // 与 RelayGestureSink.dispatch 同一判据，双保险防"抢了流没人消费"。
@@ -919,15 +973,30 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 }
                 fanController.dispatchTouchEvent(ev)
                 if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
-                    if (ev.actionMasked == MotionEvent.ACTION_CANCEL) {
-                        // 安全阀：被系统抢流 ⇒ 立刻收窗（见下方 UP/CANCEL 分支的同款注释）。
-                        // 这里尤其关键：扇形正在展示时来 CANCEL，若不收窗，手指剩余的触摸
-                        // 会继续走拖选 ⇒ 与系统 Home 叠加成"三连"。
-                        cancelPendingStripShow()
-                        if (fanController.isShowing) fanController.dismiss()
-                    } else if (fanController.isShowing) {
-                        if (fanController.stayAfterRelease()) fanController.onGestureEnded()
-                        else fanController.dismiss()
+                    val isCancel = ev.actionMasked == MotionEvent.ACTION_CANCEL
+                    if (isCancel) cancelPendingStripShow()
+                    if (fanController.isShowing) {
+                        val keep = StreamEndPolicy.decide(
+                            isCancel = isCancel,
+                            isShowing = true,
+                            stayAfterRelease = fanController.stayAfterRelease(),
+                            // 2026-11-09：只在"我们自己 pilfer"时，CANCEL 才是自造的、才该保留扇形。
+                            // 默认已不发 pilfer ⇒ CANCEL 又回到"系统真的接管了"，必须收窗（否则三连）。
+                            cornerSelfSuppressed = cornerSuppressionOn() && cornerPilferEnabled()
+                        ) == StreamEndPolicy.Decision.KEEP_FOR_TAP
+                        if (keep) {
+                            // 独占开着时的 CANCEL 是我们自己造的（拒 pilfer ⇒ 系统把流收回，
+                            // 但没跑 Home/recents）⇒ 保留扇形转点选态。否则表现就是"闪一下消失"。
+                            HLog.i(
+                                TAG,
+                                "corner 流终态 ${if (isCancel) "CANCEL" else "UP"} ⇒ 保留扇形（转点选态）"
+                            )
+                            fanController.onGestureEnded()
+                        } else {
+                            // 安全阀：到这里才是"系统已接管且正在跑 Home/recents"，必须收窗——
+                            // 否则手指剩余触摸会继续走拖选 ⇒ 回桌面 + 扇形 + 启动应用三连。
+                            fanController.dismiss()
+                        }
                     }
                     cornerTrigger.reset()
                     cFanSeen = false
@@ -997,7 +1066,18 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                         StatsRecorder.onStall()
                         // 2a：SystemUI 侧已同进程 pilfer 过就不再发广播指令（发了只会
                         // 打出 identity mismatch 噪声）。没打过才走原来的跨进程路径。
-                        if (!cSysPilfered) RelayGestureSink.requestPilfer()
+                        //
+                        // ⚠ 2026-11-09 起**默认不发**（`debug.hsb.corner.pilfer=1` 可回旧行为）：
+                        // 实证本机一 pilfer，8602 立刻 `request_redirect(from=home_not_pilfered)`
+                        // 把监视器流收掉（`sys-corner … NO_MOVE`），扇形随即 CANCEL ——
+                        // 这就是用户看到的"呼出后闪一下消失"。而**不发** pilfer 时：
+                        // 监视器流活满整条手势（`dur=1500ms moves=180 fwd=88`），
+                        // 拖选两次 `sel change` 后 `UP commit` 正常启动应用，
+                        // 且没有任何 `request_redirect`；独占由 native 的
+                        // `should_handle_event` 抑制（`action SUPPRESS … rv=1->0`）继续保证。
+                        if (!cSysPilfered && cornerPilferEnabled()) {
+                            RelayGestureSink.requestPilfer()
+                        }
                         postShowCornerFan(ctx, ev)
                         break
                     }
@@ -1013,13 +1093,27 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 val engaged = cornerTrigger.claimed && !cornerTrigger.abandoned && !cornerTrigger.consumedToEnd
                 if (ev.actionMasked == MotionEvent.ACTION_CANCEL) {
                     // ⚠ 安全阀（2026-10-14 实测：贴角时会"系统 Home + 扇形 + 启动应用"三连）：
-                    // CANCEL 只可能由输入系统发出——桌面 pilfer 抢走了这条流。此时系统的
-                    // Home/recents 很可能**已经在跑**，我们绝不保留扇形、也绝不让排队中的
-                    // show 落地：窗口留着，手指剩余的触摸会被 overlay 当成拖选 ⇒ 点中图标
-                    // ⇒ "回桌面"和"打开应用"同时发生。所以 CANCEL 一律收窗 + 撤排队，
-                    // 不顾常驻档（`fanPersistentOnRelease` 只对真正的 UP 有意义）。
+                    // CANCEL 只可能由输入系统发出，但含义有两种，必须分开（2026-11-08）：
+                    //   ① 桌面手势窗口抢走流（**独占关着**）⇒ 系统 Home/recents 很可能已经在跑
+                    //      ⇒ 立刻收窗，绝不让排队中的 show 落地（否则三连）。
+                    //   ② 我们**自己发了 pilfer**、系统把流收回（8602 的 `request_redirect`
+                    //      路径）⇒ 系统并没有接管 ⇒ 收窗就只剩"闪一下"，应转点选态保留扇形。
+                    //      判据见 StreamEndPolicy；2026-11-09 起 pilfer 默认关，这一支基本走不到。
                     cancelPendingStripShow()
-                    if (fanController.isShowing) fanController.dismiss()
+                    if (fanController.isShowing) {
+                        val keep = StreamEndPolicy.decide(
+                            isCancel = true,
+                            isShowing = true,
+                            stayAfterRelease = fanController.stayAfterRelease(),
+                            cornerSelfSuppressed = cornerSuppressionOn() && cornerPilferEnabled()
+                        ) == StreamEndPolicy.Decision.KEEP_FOR_TAP
+                        if (keep) {
+                            HLog.i(TAG, "k#$cornerSeq corner CANCEL（自造）⇒ 保留扇形（转点选态）")
+                            fanController.onGestureEnded()
+                        } else {
+                            fanController.dismiss()
+                        }
+                    }
                 } else if (engaged) {
                     if (fanController.isShowing) {
                         if (fanController.stayAfterRelease()) fanController.onGestureEnded()

@@ -201,6 +201,13 @@ object PrefKeys {
     const val RELAY_LAUNCH_ACTION = "com.lsp.hypersidebar.action.RELAY_LAUNCH_SHORTCUT"
     const val RELAY_LAUNCH_EXTRA_SHORTCUT = "shortcut"
     const val RELAY_LAUNCH_EXTRA_TOKEN = "token"
+    /**
+     * 能力位（2026-11-06）：发送方判定 **launcher 的 Java 层桥结构性缺席**（OS4 原生桌面，
+     * com.miui.home 无 dex ⇒ startShortcut 代发接收器不存在）。带上后接收端跳过
+     * `SHORTCUT_ID_REPLY_TIMEOUT_MS`（3s）的必然超时等待，直接进 root 兜底。
+     * 缺省 false = 旧行为（先试桥），OS2/OS3 零变化。
+     */
+    const val RELAY_LAUNCH_EXTRA_NO_BRIDGE = "noBridge"
 
     /** root 代发结果回告（模块 App → :ui，失败 toast 前台；内容同时落 LAST_RELAY_RESULT 供自检报告） */
     const val ACTION_RELAY_RESULT = "com.lsp.hypersidebar.action.RELAY_RESULT"
@@ -353,6 +360,18 @@ object PropNames {
     /** 系统手势门总闸（默认开；'0' = 退回"自判即呼出"，诊断用，见 TurboLayout.sysGateEnabled）。 */
     const val STRIP_SYSGATE = "debug.hsb.strip.sysgate"
     const val NATIVE_HOOK = "debug.hsb.native.hook"
+
+    /**
+     * 角滑"要不要 pilfer"开关（2026-11-09 定案：**默认关**，只有显式 `1` 才回到旧行为）。
+     *
+     * 实证动机：`:ui` 一在 SHOW 时发 pilfer，8602 立刻回
+     * `HomeEventDispatchHelper request_redirect: from=home_not_pilfered`
+     * 并把监视器流收掉（`sys-corner … NO_MOVE`，扇形随即 CANCEL 消失）。
+     * 不发 pilfer 时同一条手势：`dur=1500ms moves=180 fwd=88`，拖选 `sel change` 后
+     * `UP commit` 正常启动应用，且**没有任何 request_redirect**；独占仍由 native 的
+     * `should_handle_event` 抑制（`action SUPPRESS … rv=1->0`）保证。
+     */
+    const val CORNER_PILFER = "debug.hsb.corner.pilfer"
     val EVOKE_PROPS = arrayOf(
         "debug.hsb.evoke", "sys.hsb.evoke", "vendor.hsb.evoke",
         "persist.sys.hsb.evoke", "persist.hsb.evoke",

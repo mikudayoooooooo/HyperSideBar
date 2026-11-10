@@ -46,4 +46,27 @@ object CornerPilferPolicy {
         if (launcherVersionCode <= 0L) return true   // 读不到 ⇒ 保守走旧行为
         return launcherVersionCode < revokedFrom
     }
+
+    /**
+     * 2a（SystemUI 同进程抢流，`sysPilferNow`）的分档判据。与 [decide] 同一事实基础
+     * （8602 起一次 pilfer 会触发 `on_home_event_not_pilfered → request_redirect` 收回流），
+     * 但属性语义沿用旧代码：`CORNER_SYSJUDGE != "0"` ⇒ 开，即**任何非 "0" 的显式值
+     * （包括乱码）保持开**；只有"未设置"才交给版本分档。
+     *
+     * @param explicitProp `debug.hsb.corner.sysjudge` 的原始值（空串=未设置）
+     * @return true = 2a 判定（含同进程抢流）保持可用
+     */
+    fun decideSysJudge(
+        explicitProp: String,
+        launcherVersionCode: Long,
+        revokedFrom: Long = REVOKED_FROM
+    ): Boolean {
+        when (explicitProp.trim()) {
+            "0" -> return false
+            "1" -> return true
+            else -> if (explicitProp.trim().isNotEmpty()) return true
+        }
+        if (launcherVersionCode <= 0L) return true   // 读不到 ⇒ 保守走旧行为（开）
+        return launcherVersionCode < revokedFrom
+    }
 }

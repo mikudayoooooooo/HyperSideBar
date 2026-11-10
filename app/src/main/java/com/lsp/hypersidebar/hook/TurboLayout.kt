@@ -1010,9 +1010,10 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                             isCancel = isCancel,
                             isShowing = true,
                             stayAfterRelease = fanController.stayAfterRelease(),
-                            // 2026-11-09：只在"我们自己 pilfer"时，CANCEL 才是自造的、才该保留扇形。
-                            // 默认已不发 pilfer ⇒ CANCEL 又回到"系统真的接管了"，必须收窗（否则三连）。
-                            cornerSelfSuppressed = cornerSuppressionOn() && cornerPilferEnabled()
+                            // 独占开着（①发 pilfer，或 2a 已同进程 pilfer 过）时 CANCEL 是我们自己造的 ⇒
+                            // 保留扇形；否则系统真的在跑 Home，必须收窗（防三连）。
+                            cornerSelfSuppressed =
+                                cornerSuppressionOn() && (cornerPilferEnabled() || cSysPilfered)
                         ) == StreamEndPolicy.Decision.KEEP_FOR_TAP
                         if (keep) {
                             // 独占开着时的 CANCEL 是我们自己造的（拒 pilfer ⇒ 系统把流收回，

@@ -457,13 +457,40 @@ object SystemUiInputSpy {
         }.getOrDefault(false)
     }
 
+    /** launcher versionCode（懒解析一次；读不到=0，调用方按"旧行为"处理）。
+     *  与 TurboLayout.launcherVersionCode() 镜像——两进程各自解析，勿合并。 */
+    @Volatile
+    private var launcherCodeCache = -1L
+
+    private fun launcherVersionCode(): Long {
+        if (launcherCodeCache >= 0L) return launcherCodeCache
+        launcherCodeCache = runCatching {
+            val app = Class.forName("android.app.ActivityThread")
+                .getMethod("currentApplication")
+                .invoke(null) as? android.content.Context
+            app?.packageManager
+                ?.getPackageInfo(com.lsp.hypersidebar.prefs.HostPackages.HOME, 0)
+                ?.longVersionCode ?: 0L
+        }.getOrDefault(0L)
+        HLog.i(
+            TAG,
+            "launcher versionCode=$launcherCodeCache（2a 分档阈值=${CornerPilferPolicy.REVOKED_FROM}）"
+        )
+        return launcherCodeCache
+    }
+
     private fun sysJudgeEnabled(): Boolean {
         val now = android.os.SystemClock.uptimeMillis()
         if (now - sysJudgeCacheAt > 1_000L) {
             // OS4：显式 '0' 才关；空/异常 = 开（2a 是当前要验证的路径）。
             // OS2/3：只认"底角斜滑兜底"开关（读 prefs + Secure.navigation_mode，1s 一次足够）
             sysJudgeCacheVal = if (cornerPilferHost) {
-                SysProps.get(PropNames.CORNER_SYSJUDGE) != "0"
+                // 2a 分档与①同源（CornerPilferPolicy）：8602 起 2a 的 pilfer 同样会被
+                // launcher request_redirect 收回；显式属性非 "0" 仍可排障开启。
+                CornerPilferPolicy.decideSysJudge(
+                    runCatching { SysProps.get(PropNames.CORNER_SYSJUDGE).trim() }.getOrDefault(""),
+                    launcherVersionCode()
+                )
             } else {
                 cornerFallbackActive()
             }

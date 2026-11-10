@@ -348,9 +348,13 @@ private fun LayoutSheetContent(
                 // 「独占」2026-11-03 起固定开启、不再暴露开关：底角斜滑时不能让系统同时判
                 //（否则"三连"：系统 Home + 扇形 + 应用启动）。CORNER_SUPPRESS_ENABLED 恒 true，
                 // 推 persist.hsb.corner.supp，native 1 秒缓存读。
-                if (cornerOn) {
-                    // 导航栏隐藏（全屏/游戏）时 launcher 的 NavStubView 不在，改由 SystemUI
-                    // 输入面识别底角斜滑再转发 :ui——这条只在底角斜滑本身开启时才有意义。
+                // 「导航栏隐藏时也能滑」= 兜底：导航栏隐藏（全屏/游戏）时 launcher 的
+                // NavStubView 不在，改由 SystemUI 输入面识别底角斜滑再转发 :ui。
+                // OS4（native launcher）上这条**恒为空操作**：角区流已由 b2 转发路径消费，
+                // SystemUiInputSpy.cornerFallbackActive() 对 cornerPilferHost 早退防 2026-10-17
+                // 双触发 ⇒ 整行隐藏（2026-11-10 用户要求；判据 Os4Marker.romIsOs4，模块进程同步可用）。
+                if (cornerOn && !com.lsp.hypersidebar.hook.Os4Marker.romIsOs4()) {
+                    // 只在底角斜滑本身开启时才有意义。
                     SwitchPreference(
                         title = stringResource(R.string.corner_spy_fallback_title),
                         checked = repo.cornerSpyFallbackEnabled(),

@@ -938,22 +938,52 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     }
 
     /**
-     * 角滑是否要发 pilfer（**默认关**：`debug.hsb.corner.pilfer=1` 才回到旧行为）。1 秒缓存。
+     * 角滑是否要发 pilfer。**按 launcher 构建分档，不无条件改所有版本的行为**：
      *
-     * 2026-11-09 实机定案：pilfer 是本机"扇形闪一下就消失"的直接原因，见调用点注释。
+     * - `debug.hsb.corner.pilfer` 显式设置时以它为准（`1` 开 / `0` 关），排障用；
+     * - 未设置时按 launcher versionCode 判：
+     *   - **8602 及以后**（`>= 801028602`，即现行 OS4 launcher）⇒ **不发**。
+     *     实证：本机一 pilfer，8602 立刻 `request_redirect(from=home_not_pilfered)`
+     *     把监视器流收掉（`sys-corner … NO_MOVE`），扇形随即 CANCEL —— 就是"闪一下消失"。
+     *   - **8602 之前**（OS2/OS3 的 launcher、以及 7719 等旧 OS4 构建）⇒ **照旧发**。
+     *     那些构建上没有这条收回路径，pilfer 一直正常工作；没有证据就不动它们。
+     *   - 版本读不到（0）⇒ 保守按旧行为（发），避免"读失败反而改变老版本行为"。
+     *
+     * 1 秒缓存：它在终态判定里也被读，不能每次回调都查包信息。
      */
     private var cPilferOn = false
     private var cPilferCheckedS = 0L
 
+    /** 8602 = `RELEASE-8.01.02.8602-…`，`com.miui.home` versionCode 801028602。 */
     private fun cornerPilferEnabled(): Boolean {
         val now = android.os.SystemClock.elapsedRealtime() / 1000L
         if (now != cPilferCheckedS) {
             cPilferCheckedS = now
-            val v = runCatching { SysProps.get(PropNames.CORNER_PILFER) }.getOrDefault("").trim()
-            // 只有显式 "1" 才开；缺席（空串）= 关
-            cPilferOn = v == "1"
+            val explicit = runCatching { SysProps.get(PropNames.CORNER_PILFER).trim() }.getOrDefault("")
+            // 判据集中在纯逻辑里（CornerPilferPolicy，带单测）：显式属性 > launcher 版本分档
+            cPilferOn = CornerPilferPolicy.decide(explicit, launcherVersionCode())
         }
         return cPilferOn
+    }
+
+    /** launcher versionCode（懒解析一次；读不到=0，调用方按"旧行为"处理）。 */
+    @Volatile
+    private var launcherCodeCache = -1L
+
+    private fun launcherVersionCode(): Long {
+        if (launcherCodeCache >= 0L) return launcherCodeCache
+        launcherCodeCache = runCatching {
+            val app = Class.forName("android.app.ActivityThread")
+                .getMethod("currentApplication")
+                .invoke(null) as? Context
+            app?.packageManager?.getPackageInfo(HostPackages.HOME, 0)?.longVersionCode ?: 0L
+        }.getOrDefault(0L)
+        HLog.i(
+            TAG,
+            "launcher versionCode=${launcherCodeCache}（corner pilfer 分档阈值=" +
+                "${CornerPilferPolicy.REVOKED_FROM}）"
+        )
+        return launcherCodeCache
     }
 
     fun feedCornerGesture(ctx: Context, ev: MotionEvent, sysPilfered: Boolean = false) {

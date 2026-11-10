@@ -21,12 +21,12 @@ object Os4Marker {
      * `OS4.0.6.0.XPCCNXM`（与本机 `ro.mi.os.version.name=OS4.0` 同一来源的展示值，
      * 2026-11-10 真机 os4-8602 实测）。
      *
-     * 为什么不用 [sidebarPresent]/AIDL 探测：`ISidebarOverlay` 只存在于宿主
-     * （SystemUI/launcher）的 dex，模块 App 进程解析不到（同日真机核查：
-     * miui-framework / miui-services / xiaomi-framework 三个 boot jar 均无该类）；
-     * 设置页需要**同步**判据，故用 ROM 版本前缀。只匹配 `OS4.`：OS1/2/3
-     * （预计 INCREMENTAL 为 `OS3.`/`OS2.` 前缀【待验证】，与 ro.mi.os.version.name 同族命名）
-     * 及任何未知形态一律 false ⇒ 与历史行为一致，不做额外隐藏。
+     * 为什么不用 [sidebarPresent]/AIDL 探测：`ISidebarOverlay` 按 dex 内容全量扫描
+     * （2026-11-10 真机）**只定义在 MIUISecurityCenter.apk 的 classes3.dex**，
+     * boot jar / MiuiSystemUI.apk / MiuiHome.apk 均无 ⇒ 模块 App 进程（以及 SystemUI
+     * 进程）都解析不到它，设置页需要**同步**判据只能走 ROM 版本前缀。
+     * 只匹配 `OS4.`：OS1/2/3（预计 INCREMENTAL 为 `OS3.`/`OS2.` 前缀【待验证】，与
+     * ro.mi.os.version.name 同族命名）及任何未知形态一律 false ⇒ 与历史行为一致，不做额外隐藏。
      */
     fun romIsOs4(): Boolean = android.os.Build.VERSION.INCREMENTAL.startsWith("OS4.")
 }

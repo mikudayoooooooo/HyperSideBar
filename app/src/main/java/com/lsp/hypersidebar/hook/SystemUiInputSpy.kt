@@ -424,6 +424,14 @@ object SystemUiInputSpy {
      * launcher 收不到 MOVE（实测 `EdgeGesture: c#3 UP/CANCEL … shown=false`）、转发侧又
      * 无人消费 ⇒ **底角彻底不出**。判据与 `TurboLayout.isOs4Sidebar` 同源：AIDL 稳定名
      * `com.miui.sidebar.ISidebarOverlay` 存在即 OS4 系（OS2/OS3 没有此类）。
+     *
+     * 【2026-11-10 真机实证·重要】该类只定义在 MIUISecurityCenter.apk（classes3.dex），
+     * **SystemUI 的类加载器解析不到**（boot jar / MiuiSystemUI.apk / MiuiHome.apk 全量按
+     * dex 内容扫描均无命中）⇒ 在本进程里 cornerPilferHost 实际恒为 false，
+     * 日志佐证：8602 两轮抓流、十几次角手势全程没有一条 `sys-corner DOWN … judge=` 行。
+     * 所以**不要指望本早退保护 OS4**；OS4 上"兜底开关不能开"的保护实际来自：
+     * ① 设置页在 OS4 隐藏该开关（LayoutBottomSheet）；② 2a 分档
+     * （`CornerPilferPolicy.decideSysJudge`：8602 起未显式置非 "0" 即关）。
      */
     private val cornerPilferHost: Boolean = runCatching {
         Class.forName(
@@ -444,9 +452,13 @@ object SystemUiInputSpy {
      * 竖屏全屏（游戏/视频）时 ROM 会主动收起底栏，底角斜滑因此无人接收，兜底就是为
      * 这种时刻准备的；底栏在屏时**不接管**（那时 launcher/系统手势链路本来就在）。
      * 可见性来自 `InsetProbe` 的 SystemUI 视图 insets（显示级）；未知 ⇒ 不接管。
-     * OS4（cornerPilferHost）另走既有 b2 转发路径（`TurboLayout.b2Enabled()`），
-     * 角区流的消费门已经开着，所以本开关在 OS4 上是空操作——不要在这里放开，
-     * 否则两条路径同时判"可消费"，会落入 2026-10-17 那类双触发。
+     *
+     * 【2026-11-10 更正】原文写"OS4（cornerPilferHost）……本开关在 OS4 上是空操作"——
+     * 该早退在本进程实际**从不触发**（见 cornerPilferHost 的真机实证：AIDL 类只在
+     * securitycenter dex）。也就是说 OS4 上打开这个开关**不是空操作**：它会真的在
+     * SystemUI 侧武装 2a 抢流，而 8602 起 2a pilfer 会触发 `request_redirect` 收回流
+     * （CornerPilferPolicy 已按版本禁掉）⇒ 打开即把角滑弄坏。保护改由设置页在 OS4
+     * 隐藏该开关 + 2a 分档承担；此处保留原语义（OS2/OS3 的兜底仍要给三键用户用）。
      */
     private fun cornerFallbackActive(): Boolean {
         if (cornerPilferHost) return false

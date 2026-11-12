@@ -69,7 +69,12 @@ class ConfigRestoreReceiver : BroadcastReceiver() {
         val pending = goAsync()
         Thread {
             try {
+                val mirror = context.getSharedPreferences(
+                    com.lsp.hypersidebar.prefs.PrefsFiles.APP_LOCAL, Context.MODE_PRIVATE
+                )
+                RelayToken.primeFromMirror(mirror)
                 if (!RelayToken.awaitAndVerify(intent)) return@Thread
+                RelayToken.saveMirror(mirror)
                 val trace = intent.getStringExtra(com.lsp.hypersidebar.util.Trace.EXTRA)
                 val value = resolveRestoreValue(intent) ?: return@Thread
                 val parsed = parseRestoreValue(value, kind) ?: run {

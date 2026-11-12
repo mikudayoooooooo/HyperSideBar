@@ -89,4 +89,12 @@ object ConfigFileBridge {
             HLog.i(TAG, "config dump: ${f.readText().trim().replace('\n', '|')}")
         }.onFailure { HLog.w(TAG, "config dump failed: ${it.message}") }
     }
+
+    /** 自检用：hsb.conf 的绝对路径（路径构造失败返回 null）。 */
+    fun confPath(): String? = confFile()?.absolutePath
+
+    /** 自检用：读回文件内容（不存在/读失败返回 null）。 */
+    fun readConf(): String? = runCatching {
+        confFile()?.takeIf { it.isFile }?.readText()
+    }.getOrNull()
 }

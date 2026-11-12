@@ -1,18 +1,16 @@
 package com.lsp.hypersidebar.util
 
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Build
-import android.os.Environment
 import android.os.Handler
 import android.os.Looper
-import android.provider.MediaStore
-import android.util.Log
 import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.LayoutDefaults
 import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.prefs.PrefsFiles
+import com.lsp.hypersidebar.prefs.PropNames
 import com.lsp.hypersidebar.ui.fan.ACTION_FAN_LAUNCH
 import io.github.libxposed.service.XposedService
 import kotlinx.coroutines.Dispatchers
@@ -125,7 +123,28 @@ object SelfCheck {
             val procLogs = LogCollector.mergedForExport()
             val statuses = LogCollector.statuses.toMap()
 
+            val diskVc = runCatching {
+                context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
+            }.getOrDefault(com.lsp.hypersidebar.BuildConfig.VERSION_CODE.toLong())
+            val appVc = com.lsp.hypersidebar.BuildConfig.VERSION_CODE.toLong()
+            val acks = ConfigSync.ackSnapshot()
+            val staleHosts = ConfigSync.staleHostPackages(diskVc)
+
             val verdict = when {
+                // 配置/令牌/旧 dex 是比探针更上游的失败面，先判（2026-11-11）。
+                RemotePrefsBridge.prefs == null ->
+                    "LSPosed 服务未绑定：本页写入只落本地回退，hook 进程收不到任何改动。" +
+                        "先确认模块已在 LSPosed 中启用、作用域包含三个宿主，再重启本应用。"
+                !RelayToken.authorityReady() ->
+                    "令牌权威未就绪（仅镜像或完全未就绪）：root 代发/解冻/恢复可能被拒。" +
+                        "打开一次设置页等桥绑定，或检查 LSPosed 服务；镜像只保首次可用性。"
+                staleHosts.isNotEmpty() || appVc != diskVc ->
+                    "检测到宿主/本进程仍在跑旧 dex（运行 vc=$appVc，磁盘 vc=$diskVc，陈旧宿主=$staleHosts）" +
+                        "——更新 APK 后 SystemUI 功能不生效（含点空白忽略键盘）通常就是这个；" +
+                        "重启对应宿主或设备，不要先改逻辑。"
+                acks.isEmpty() ->
+                    "本次启动后没有任何 hook 应答配置同步（SYNC_ACK）：hook 未注入/宿主冻结/作用域缺失。" +
+                        "先看 LSPosed 是否注入（modules_*.log 有 hypersidebar），再重启宿主。"
                 // 先判形态再判应答：OS4 桌面没有 Java 半侧 ⇒ 触发端必然无应答，
                 // 这时"无应答"是常态而不是故障（真因去 native 取证段看 hook installed/refused）。
                 os4NativeHome && home == PrefKeys.PROBE_CODE_DEAD -> {
@@ -189,6 +208,40 @@ object SelfCheck {
                 appendLine("模块启用开关(应用内): ${runCatching { prefs.getBoolean(PrefKeys.ENABLED, true) }.getOrDefault(true)}")
                 appendLine("★ 调试开关(模拟执行端失联): $debugSwitch")
                 appendLine()
+                appendLine("== 配置通道 ==")
+                appendLine(
+                    "LSPosed 绑定: " + if (RemotePrefsBridge.prefs != null) {
+                        "已绑定"
+                    } else {
+                        "未绑定（写入只落本地回退，hook 收不到）"
+                    }
+                )
+                appendLine(
+                    "令牌: " + when {
+                        RelayToken.authorityReady() -> "已就绪（权威）"
+                        RelayToken.isReady() -> "仅镜像（bind 未完成）"
+                        else -> "未就绪（root 代发会拒绝）"
+                    }
+                )
+                if (acks.isEmpty()) {
+                    appendLine("配置同步回执: 无（本次启动后没有 hook 应答 SYNC_ACK）")
+                } else {
+                    acks.values.forEach { a ->
+                        appendLine(
+                            "配置同步回执: ${a.proc ?: "?"} keys=${a.keys} vc=${a.vc}" +
+                                "（${(android.os.SystemClock.elapsedRealtime() - a.at) / 1000}s 前）"
+                        )
+                    }
+                }
+                appendLine(
+                    "进程版本: " + (if (acks.isEmpty()) "无" else acks.values.joinToString {
+                        "${it.proc ?: "?"} vc=${it.vc}"
+                    }) + "（磁盘 vc=$diskVc）"
+                )
+                if (staleHosts.isNotEmpty() || appVc != diskVc) {
+                    appendLine("陈旧宿主: $staleHosts（运行旧 dex，需重启对应宿主/应用）")
+                }
+                appendLine()
                 appendLine("== 配置快照 ==")
                 appendLine("图标大小: ${f(prefs, PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE)} dp" +
                     " / 内圈半径: ${f(prefs, PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS)}" +
@@ -216,6 +269,44 @@ object SelfCheck {
                 appendLine("上次 root 代发结果: " + runCatching {
                     prefs.getString(PrefKeys.LAST_RELAY_RESULT, "无记录")
                 }.getOrNull() ?: "无记录")
+                val localPrefs = context.getSharedPreferences(PrefsFiles.APP_LOCAL, Context.MODE_PRIVATE)
+                appendLine(
+                    "缓存: labels=${localPrefs.getString(PrefKeys.CACHED_LABELS, null)?.length ?: 0}B" +
+                        " suggestions=${localPrefs.getString(PrefKeys.CACHED_SUGGESTIONS, null)?.length ?: 0}B" +
+                        " sectionLetters=${localPrefs.getString(PrefKeys.CACHED_SECTION_LETTERS, null)?.length ?: 0}B"
+                )
+                appendLine()
+                appendLine("== native 配置 ==")
+                appendLine("hsb.conf: " + (ConfigFileBridge.confPath() ?: "路径构造失败"))
+                val conf = runCatching { ConfigFileBridge.readConf() }.getOrNull()
+                if (conf.isNullOrBlank()) {
+                    appendLine("（文件不存在或为空 ⇒ native 回落属性/缺省）")
+                } else {
+                    conf.lineSequence().take(40).forEach { appendLine("  $it") }
+                }
+                appendLine(
+                    "persist.hsb.native.hook=" +
+                        SysProps.get(NativeGateBridge.PROP_HOOK).ifEmpty { "<unset>" }
+                )
+                appendLine(
+                    "persist.hsb.corner.supp=" +
+                        SysProps.get(CornerGeomBridge.PROP_CORNER_SUPP).ifEmpty { "<unset>" }
+                )
+                appendLine(
+                    "debug.hsb.corner.pilfer=" +
+                        SysProps.get(PropNames.CORNER_PILFER).ifEmpty { "<unset>" }
+                )
+                appendLine()
+                appendLine("== 模块安装 ==")
+                runCatching {
+                    val pi = context.packageManager.getPackageInfo(context.packageName, 0)
+                    appendLine("APK: ${pi.applicationInfo?.sourceDir}")
+                    appendLine(
+                        "安装时间: " + SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                            .format(Date(pi.lastUpdateTime))
+                    )
+                    appendLine("versionCode: ${pi.longVersionCode}")
+                }.onFailure { appendLine("安装信息读取失败: ${it.message}") }
                 appendLine()
                 appendLine()
                 appendLine("== 进程状态快照 ==")
@@ -252,23 +343,6 @@ object SelfCheck {
                 .getOrElse { "取证失败：${it.message}" } + "\n"
         val fileName = "hypersidebar_selfcheck_" +
             SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date()) + ".txt"
-        runCatching {
-            val values = ContentValues().apply {
-                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
-            }
-            val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                ?: error("MediaStore insert returned null")
-            context.contentResolver.openOutputStream(uri)?.use { it.write(withNative.toByteArray()) }
-                ?: error("openOutputStream returned null")
-            "下载/$fileName"
-        }.getOrElse { e ->
-            HLog.w(TAG, "MediaStore export failed, fallback to app dir: ${e.message}")
-            // 兜底：应用私有外部目录（文件管理器可达性差但至少能取到）
-            val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS)
-                ?: context.filesDir
-            java.io.File(dir, fileName).writeText(withNative)
-            "应用目录/${dir.name}/$fileName"
-        }
+        DownloadsWriter.write(context, fileName, "text/plain", withNative)
     }
 }

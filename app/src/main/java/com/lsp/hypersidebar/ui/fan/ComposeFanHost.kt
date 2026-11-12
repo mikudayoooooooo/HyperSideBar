@@ -77,9 +77,30 @@ class ComposeFanHost(
     private val geometryState: MutableState<FanGeometry?> = mutableStateOf(null)
     private val touchState: MutableState<FanTouchState> =
         mutableStateOf(FanTouchState(0f, 0f, 3, -1))
+
+    /**
+     * 触摸状态发布（2026-11-11，M16）：`FanMenuCompose` 只读 `touchAction`/两个 index，
+     * x/y 全仓无消费者。每个 MOVE 无条件写 state 会让整棵树重组；这里只在
+     * action/选中项变化时写。x/y 依旧存进 state（保留调试/未来用），但不驱动重组。
+     */
+    private fun publishTouch(x: Float, y: Float, action: Int, fanSel: Int, quickSel: Int = -1) {
+        val cur = touchState.value
+        if (cur.touchAction == action && cur.selectedIndex == fanSel &&
+            cur.selectedQuickIndex == quickSel
+        ) {
+            return
+        }
+        touchState.value = FanTouchState(x, y, action, fanSel, quickSel)
+    }
     private var config: FanConfig = FanConfig()
     private var density = 1f
     private var pendingInput: GeometryInput? = null
+
+    /** 2026-11-11（M25）：在场窗口尺寸变化（转屏/inset 切换）→ 回调 controller 收窗。 */
+    var onWindowResized: (() -> Unit)? = null
+    private var shownSize: androidx.compose.ui.unit.IntSize? = null
+    /** 零尺寸几何的单次重试计数（防止首帧 0×0 留下空窗）。 */
+    private var geometryRetry = 0
 
     // ===== 收拢动画协议（2026-09-13，用户拍板"加收拢动画"）=====
     // dismiss 不再同步摘窗：递增 exitTick → 组合内三通道回 0（缩向锚点+淡出+scrim 淡出）
@@ -353,7 +374,9 @@ class ComposeFanHost(
     /** 逐呼出重置交互态（几何清空 → 首帧前不渲染，touch/选中态归零）。 */
     private fun resetInteractionState() {
         geometryState.value = null
-        touchState.value = FanTouchState(0f, 0f, 3, -1)
+        publishTouch(0f, 0f, 3, -1)
+        shownSize = null
+        geometryRetry = 0
         lastSelectedFanIndex = -1
         lastSelectedQuickIndex = -1
         originValid = false
@@ -367,6 +390,26 @@ class ComposeFanHost(
     private fun computeAndPublishGeometry() {
         val input = pendingInput ?: return
         val wrapper = wrapperView ?: return
+        if (wrapper.width <= 0 || wrapper.height <= 0) {
+            if (geometryRetry++ < 1) {
+                wrapper.post { computeAndPublishGeometry() }
+            } else {
+                HLog.w(TAG, "geometry skip: win=${wrapper.width}x${wrapper.height}")
+            }
+            return
+        }
+        // 转屏窗口期：show 时定格的方向与当前 Configuration 不一致 ⇒ 收窗，不画错位几何。
+        val cfgLand = context.resources.configuration.orientation ==
+            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        if (cfgLand != input.isLandscape) {
+            HLog.w(
+                TAG,
+                "geometry skip: orientation changed cfgLand=$cfgLand input=${input.isLandscape}"
+            )
+            onWindowResized?.invoke()
+            return
+        }
+        geometryRetry = 0
         val loc = IntArray(2)
         runCatching { wrapper.getLocationOnScreen(loc) }
         // 壁纸对位：把实测窗口原点交给渲染层（采样壁纸按屏幕还原后再平移这个原点）。
@@ -380,6 +423,7 @@ class ComposeFanHost(
             input.cornerAnchor
         )
         geometryState.value = g
+        shownSize = IntSize(wrapper.width, wrapper.height)
         HLog.i(
             TAG,
             "geometry: origin=(${loc[0]},${loc[1]}) winSize=(${wrapper.width},${wrapper.height}) " +
@@ -528,14 +572,14 @@ class ComposeFanHost(
                         // 底层收不到任何触摸；收起后下一次触摸自然回归底层。
                         if (released && fanSel == -1 && quickSel == -1) {
                             Log.d(TAG, "persistent tap outside → dismiss")
-                            touchState.value = FanTouchState(x, y, 2, -1, -1)
+                            publishTouch(x, y, 2, -1, -1)
                             onOutsideTap?.invoke()
                             return true
                         }
                         if (fanSel != -1 || quickSel != -1) {
                             StatsRecorder.onFanPreselected()
                         }
-                        touchState.value = FanTouchState(x, y, 0, fanSel, quickSel)
+                        publishTouch(x, y, 0, fanSel, quickSel)
                         Log.d(TAG, "touch DOWN fan=$fanSel quick=$quickSel dist=${dist.toInt()}")
                         return true
                     }
@@ -552,7 +596,7 @@ class ComposeFanHost(
                         if (inCancelZone && (prevFan != -1 || prevQuick != -1)) {
                             lastSelectedFanIndex = -1
                             lastSelectedQuickIndex = -1
-                            touchState.value = FanTouchState(x, y, 0, -1, -1)
+                            publishTouch(x, y, 0, -1, -1)
                             Log.d(TAG, "touch CLEAR by cancel zone (inner=${innerCancelPx.toInt()}, outer=${outerCancelPx.toInt()})")
                             return true
                         }
@@ -566,7 +610,7 @@ class ComposeFanHost(
                             if (fanSel != -1 || quickSel != -1) StatsRecorder.onFanPreselected()
                         }
 
-                        touchState.value = FanTouchState(x, y, 0, fanSel, quickSel)
+                        publishTouch(x, y, 0, fanSel, quickSel)
 
                         // 悬停展开组（2026-10-31 用户口径：手指停在组图标上就展开，不必松手）：
                         // 停够 GROUP_HOVER_OPEN_MS 即开层，后续事件由 handlePopupTouch 接管。
@@ -630,12 +674,12 @@ class ComposeFanHost(
                         val anyQuick = quickSel in geometry.quickApps.indices
                         when {
                             anySelected -> {
-                                touchState.value = FanTouchState(x, y, 2, fanSel, quickSel)
+                                publishTouch(x, y, 2, fanSel, quickSel)
                                 HLog.i(TAG, "selected fan: ${geometry.items[fanSel].app.packageName}")
                                 onAppSelected?.invoke(geometry.items[fanSel].app)
                             }
                             anyQuick -> {
-                                touchState.value = FanTouchState(x, y, 2, fanSel, quickSel)
+                                publishTouch(x, y, 2, fanSel, quickSel)
                                 val item = geometry.quickApps[quickSel]
                                 if (item.group != null) {
                                     // 组=入口不是动作：松手展开弹层，扇保持（不启动、不收起）
@@ -646,13 +690,13 @@ class ComposeFanHost(
                                 }
                             }
                             else -> {
-                                touchState.value = FanTouchState(x, y, 2, -1, -1)
+                                publishTouch(x, y, 2, -1, -1)
                                 handleQuickBarTap(x, y, geometry)
                             }
                         }
                     }
                     MotionEvent.ACTION_CANCEL -> {
-                        touchState.value = FanTouchState(x, y, 3, -1, -1)
+                        publishTouch(x, y, 3, -1, -1)
                         lastSelectedFanIndex = -1
                         lastSelectedQuickIndex = -1
                         hoverGroupIndex = -1
@@ -669,6 +713,19 @@ class ComposeFanHost(
         wrapper.setViewTreeLifecycleOwner(lcOwner)
         wrapper.setViewTreeSavedStateRegistryOwner(lcOwner)
         this.wrapperView = wrapper
+        // 池化复用：监听只加一次。shownSize 由 computeAndPublishGeometry 在首帧后写入；
+        // 转屏/inset 让窗口尺寸变化 >32px 时收窗（M25），不留下按旧坐标画的扇形。
+        wrapper.addOnLayoutChangeListener { _, l, t, r, b, _, _, _, _ ->
+            val now = androidx.compose.ui.unit.IntSize(r - l, b - t)
+            val prev = shownSize ?: return@addOnLayoutChangeListener
+            if (kotlin.math.abs(now.width - prev.width) > 32 ||
+                kotlin.math.abs(now.height - prev.height) > 32
+            ) {
+                shownSize = now
+                HLog.w(TAG, "window resized $prev → $now while shown → notify controller")
+                onWindowResized?.invoke()
+            }
+        }
     }
 
     private fun buildWindowParams(): WindowManager.LayoutParams =

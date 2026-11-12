@@ -1676,8 +1676,11 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                 // 转屏当帧立即收敛（主线程投递——coverRefs/flag 写只在主线程）
                 mainHandler.post {
                     runCatching {
+                        // 转屏当帧先撤在途/已落地的扇形（2026-11-11 M25），再收敛 cover flag
+                        cancelPendingStripShow()
+                        if (fanController.isShowing) fanController.dismiss(DismissCause.PREEMPTED)
                         coverRefs.forEach { ref -> ref.get()?.let { applyCoverFlag(it) } }
-                    }.onFailure { HLog.w(TAG, "rotate cover flag convergence failed: ${it.message}") }
+                    }.onFailure { HLog.w(TAG, "rotate convergence failed: ${it.message}") }
                 }
             }
 

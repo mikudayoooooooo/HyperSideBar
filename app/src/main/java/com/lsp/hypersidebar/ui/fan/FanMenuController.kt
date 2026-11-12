@@ -144,6 +144,20 @@ class FanMenuController(
         Trace.current = Trace.new()
         HLog.i(TAG, tl() + "showInternal enter: isShowing=$isShowing host=${host != null} anchor=($anchorX,$anchorY) src=${source ?: "-"}")
         if (isShowing && host != null) return
+        // 转屏窗口期（2026-11-11 M25）：Configuration 与 display.rotation 对不上时，
+        // 窗口随后会按新方向布局，而本次 show 已按旧方向定格 ⇒ 扇形卡屏幕中央。
+        // 在 isShowing=true 之前丢弃；已落地的窗口由 ComposeFanHost 的尺寸监听兜底。
+        val cfgLand = context.resources.configuration.orientation ==
+            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val rotation = runCatching { context.display?.rotation }.getOrNull()
+            ?: runCatching {
+                (context.getSystemService(android.content.Context.WINDOW_SERVICE)
+                    as android.view.WindowManager).defaultDisplay.rotation
+            }.getOrDefault(-1)
+        if (RotationGuard.mismatch(rotation, cfgLand)) {
+            HLog.w(TAG, "show: orientation mismatch rot=$rotation cfgLand=$cfgLand → drop")
+            return
+        }
         // 耗时锚点（呼出卡顿归因）：cost=本次呼出主线程装配全程；firstAssembly=true
         // =本进程池为空（进程冷启/被杀后首呼出），这是"有时候呼出会卡"的头号嫌疑段
         val t0 = android.os.SystemClock.elapsedRealtime()
@@ -159,8 +173,7 @@ class FanMenuController(
         HLog.i(TAG, "show: anchor=($anchorX, $anchorY)")
 
         try {
-            val isLandscape = context.resources.configuration.orientation ==
-                android.content.res.Configuration.ORIENTATION_LANDSCAPE
+            val isLandscape = cfgLand
 
             frozenSource = source
             val data = assembleFanData(context, cornerAnchor)
@@ -171,6 +184,8 @@ class FanMenuController(
             val fanHost = obtainHost()
             host = fanHost
             fanHost.show(anchorX, anchorY, data.apps, data.allQuick, isLandscape, cornerAnchor)
+            // 转屏/尺寸变化即收窗（M25）：窗口按新尺寸布局后旧锚点已失效，留着就是卡中央。
+            fanHost.onWindowResized = { dismiss(DismissCause.PREEMPTED) }
             // 常驻模式：装配中已松手（markReleasedOnArrival）→ 落地即进点选态；消费即清
             val release = releasedOnArrival
             releasedOnArrival = false

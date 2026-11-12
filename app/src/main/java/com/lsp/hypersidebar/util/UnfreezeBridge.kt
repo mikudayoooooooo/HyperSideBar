@@ -47,7 +47,12 @@ object UnfreezeBridge {
     private val lastUnfreezeAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /** 应答回调线程：Messenger 的 replyTo 需要 looper，不能在调用方裸线程上建 */
-    private val replyThread = HandlerThread("UnfreezeClient").apply { start() }
+    @Volatile private var replyThreadRef: HandlerThread? = null
+
+    private fun replyThread(): HandlerThread = replyThreadRef ?: synchronized(this) {
+        replyThreadRef ?: HandlerThread("UnfreezeClient").apply { start() }
+            .also { replyThreadRef = it }
+    }
 
     /** 30s 内解冻过（进程大概率已活且未冻结） */
     fun isFresh(pkg: String): Boolean =
@@ -64,7 +69,9 @@ object UnfreezeBridge {
      * 兜底（调用方语义本来就是"尽力而为"，false = 失败照常发点击）。
      */
     fun releaseForReload() {
-        runCatching { replyThread.quitSafely() }
+        val t = replyThreadRef
+        replyThreadRef = null
+        runCatching { t?.quitSafely() }
             .onFailure { HLog.w(TAG, "replyThread quit failed: ${it.message}") }
     }
 
@@ -85,7 +92,7 @@ object UnfreezeBridge {
         val t0 = SystemClock.elapsedRealtime()
         val latch = java.util.concurrent.CountDownLatch(1)
         var ok = false
-        val replyHandler = object : Handler(replyThread.looper) {
+        val replyHandler = object : Handler(replyThread().looper) {
             override fun handleMessage(msg: Message) {
                 ok = msg.arg1 == 1
                 latch.countDown()

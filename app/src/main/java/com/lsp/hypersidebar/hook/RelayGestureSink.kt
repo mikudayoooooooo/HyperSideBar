@@ -107,7 +107,10 @@ object RelayGestureSink {
             ctx.registerReceiver(
                 recv,
                 IntentFilter(PrefKeys.SPY_STREAM_ACTION),
-                Context.RECEIVER_EXPORTED
+                // 2026-11-11 架构收口：发送方 SystemUI 与接收方 :ui 同为 uid 1000，
+                // 用内核 uid 判定（NOT_EXPORTED）替代跨进程字符串令牌，每事件零成本。
+                // 若 ROM 的 AMS 不放行同 uid 跨进程，回退 EXPORTED 并记录（见计划 §4a）。
+                Context.RECEIVER_NOT_EXPORTED
             )
             streamReceiver = recv
             HLog.i(TAG, "spy stream sink registered (OS4 恒开，b2Enabled 门控)")

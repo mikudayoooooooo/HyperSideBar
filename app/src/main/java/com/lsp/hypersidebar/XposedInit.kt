@@ -184,6 +184,7 @@ class XposedInit : XposedModule() {
         // 全部幂等（未起过 = 空操作）；旧代自清 ⇒ 旧 classloader 才能被回收。
         // 2026-10-18 依 libxposed skill 03 的清理清单补：Java 线程 / 外部回调 / 宿主侧引用。
         for ((n, block) in listOf(
+            "ShortcutRelayBridge(bind)" to { com.lsp.hypersidebar.util.ShortcutRelayBridge.releaseForReload() },
             "InsetProbe(overlay)" to { com.lsp.hypersidebar.hook.InsetProbe.releaseForReload() },
             "ConfigPullBridge(HandlerThread)" to { com.lsp.hypersidebar.util.ConfigPullBridge.releaseForReload() },
             "UnfreezeBridge(HandlerThread)" to { com.lsp.hypersidebar.util.UnfreezeBridge.releaseForReload() },

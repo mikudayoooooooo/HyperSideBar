@@ -189,7 +189,8 @@ object ShortcutLauncher {
         context: Context,
         action: ShortcutAction,
         strategy: LaunchStrategy,
-        allowRootFallback: Boolean = true
+        allowRootFallback: Boolean = true,
+        launcherBridgeAbsent: Boolean = false
     ): LaunchResult {
         HLog.i(TAG, "launch: id=${action.id} kind=${action.kind} strategy=${strategy.name}")
 
@@ -212,7 +213,9 @@ object ShortcutLauncher {
         // SHORTCUT_ID（动态/固定快捷方式，2026-09-08）：目标 intent 对非桌面不可见，
         // 无法组件/intent 直启——launcher 进程桥 startShortcut 代发
         if (action.kind == ShortcutKind.SHORTCUT_ID) {
-            return launchShortcutId(context, action, RelayToken.current(), allowRootFallback)
+            return launchShortcutId(
+                context, action, RelayToken.current(), allowRootFallback, launcherBridgeAbsent
+            )
         }
 
         // COMPONENT 自动探测类型后分发
@@ -642,7 +645,8 @@ object ShortcutLauncher {
         context: Context,
         action: ShortcutAction,
         token: String?,
-        allowRootFallback: Boolean = true
+        allowRootFallback: Boolean = true,
+        launcherBridgeAbsent: Boolean = false
     ): LaunchResult {
         val pkg = action.packageName
         val sid = action.shortcutId
@@ -651,6 +655,23 @@ object ShortcutLauncher {
                 FailureReason.INVALID_CONFIG,
                 "SHORTCUT_ID requires packageName + shortcutId"
             )
+        }
+        // OS4 纯 native 桌面没有 Java 桥（MiuiHome 无 dex）⇒ 3s 有序广播必空等。
+        // 能力位由调用方判定（DirectLaunchStrategy.launcherBridgeAbsent）；OS2/3 恒 false。
+        if (launcherBridgeAbsent) {
+            HLog.i(
+                TAG,
+                "launchShortcutId: launcher bridge absent (OS4 native) → skip " +
+                    "${SHORTCUT_ID_REPLY_TIMEOUT_MS}ms wait"
+            )
+            return if (allowRootFallback && isRootAvailable()) {
+                launchShortcutIdViaRoot(pkg, sid)
+            } else {
+                LaunchResult.Failure(
+                    FailureReason.LAUNCH_EXCEPTION,
+                    "launcher bridge absent (OS4 native launcher)"
+                )
+            }
         }
         val latch = java.util.concurrent.CountDownLatch(1)
         var ok = false

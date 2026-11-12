@@ -144,6 +144,19 @@ object AppIconCache {
     }
 
     /**
+     * 内存压力回收（2026-11-11，M17/AllApps 缓存）：320×128×128×4 ≈ 21MB 上限，
+     * 低内存时释放一半、COMPLETE 时清空。由 AllAppsActivity.onTrimMemory 调用。
+     */
+    fun trim(level: Int) {
+        when {
+            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> cache.evictAll()
+            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ->
+                cache.trimToSize(cache.size() / 2)
+            else -> Unit
+        }
+    }
+
+    /**
      * API 102 热重载释放：取消 scope / 唤醒等待者 / 关闭两个 dispatcher / 清缓存。
      * 旧代对象随后不再使用（新代是全新 object）。
      */

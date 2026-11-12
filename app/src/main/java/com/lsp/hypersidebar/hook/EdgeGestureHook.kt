@@ -154,6 +154,10 @@ class EdgeGestureHook(
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingShow: Runnable? = null
 
+    /** 转屏收敛（2026-11-11 M25）：撤在途 show + 收已落地扇形；热重载对称注销。 */
+    @Volatile private var rotationCallbacks: android.content.ComponentCallbacks? = null
+    @Volatile private var rotationApp: Context? = null
+
     /** 原生触摸处理器字段（OS2 `mGesturesBackController` / OS3 `mGesturesBackTouchProcessor`），
      *  解析一次后缓存（非 Volatile：仅在手势输入线程上读写） */
     private var cachedProcessorField: java.lang.reflect.Field? = null
@@ -306,6 +310,31 @@ class EdgeGestureHook(
         // 本进程三个接收器都用这个 ctx 注册，所以在这里就记下，别等到 probe 那一支里记
         // （probe 注册失败时也要能注销 manifest/shortcut 那两个）。
         registeredCtx = ctx
+        // 转屏收敛（2026-11-11 M25）：launcher 侧同样撤在途 show / 收已落地扇形。
+        if (rotationCallbacks == null) {
+            runCatching {
+                val app = ctx.applicationContext ?: ctx
+                val cb = object : android.content.ComponentCallbacks {
+                    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+                        mainHandler.post {
+                            runCatching {
+                                cancelPendingShow()
+                                if (fanController.isShowing) {
+                                    fanController.dismiss(DismissCause.PREEMPTED)
+                                }
+                            }.onFailure { HLog.w(TAG, "rotate fan convergence failed: ${it.message}") }
+                        }
+                    }
+
+                    @Suppress("OVERRIDE_DEPRECATION")
+                    override fun onLowMemory() {}
+                }
+                app.registerComponentCallbacks(cb)
+                rotationApp = app
+                rotationCallbacks = cb
+                HLog.i(TAG, "rotation callbacks registered (via $via)")
+            }.onFailure { HLog.w(TAG, "rotation callbacks register failed: ${it.message}") }
+        }
         // 状态探针接收器（§2.5.4）：设置页对 home 进程发有序 ping（PROBE_ACTION_HOME），
         // 应答 resultCode（熔断态）。
         if (!probeRegistered) {
@@ -333,7 +362,7 @@ class EdgeGestureHook(
         }.onFailure { HLog.w(TAG, "anchor complete failed: ${it.message}") }
         // 配置同步通道（批次 2）：收设置页全量推送，根治 hook 进程死快照
         runCatching {
-            com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx)
+            com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx, remotePrefs)
             HLog.i(TAG, "config sync receiver registered (via $via)")
         }.onFailure { HLog.w(TAG, "config sync register failed: ${it.message}") }
         registerManifestShortcutsBridge(ctx, via)
@@ -532,6 +561,13 @@ class EdgeGestureHook(
         shortcutLaunchReceiver = null
         registeredCtx = null
         probeRegistered = false
+        runCatching {
+            val app = rotationApp
+            val cb = rotationCallbacks
+            if (app != null && cb != null) app.unregisterComponentCallbacks(cb)
+        }.onFailure { HLog.w(TAG, "rotation callbacks unregister failed: ${it.message}") }
+        rotationApp = null
+        rotationCallbacks = null
         // 共享通道（本进程各自注册了一份）
         runCatching { com.lsp.hypersidebar.util.ConfigSync.releaseForReload() }
             .onFailure { HLog.w(TAG, "config sync release failed: ${it.message}") }

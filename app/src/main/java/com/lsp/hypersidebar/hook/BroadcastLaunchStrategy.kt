@@ -11,6 +11,11 @@ import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.ui.fan.FanLaunchStrategy
 import com.lsp.hypersidebar.util.RelayToken
+import com.lsp.hypersidebar.util.LaunchResult
+import com.lsp.hypersidebar.util.NativeGateBridge
+import com.lsp.hypersidebar.util.ShortcutKind
+import com.lsp.hypersidebar.util.ShortcutLauncher
+import com.lsp.hypersidebar.util.ShortcutRelayBridge
 import com.lsp.hypersidebar.util.Trace
 import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.HLog
@@ -51,9 +56,58 @@ class BroadcastLaunchStrategy(
     }
 
     override fun launchShortcut(context: Context, shortcut: ShortcutAction) {
-        sendToRelay(context, "shortcut id=${shortcut.id}") {
-            putExtra(PrefKeys.FAN_EXTRA_SHORTCUT, shortcut.toJson().toString())
-        }
+        // 2026-11-12：快捷方式 root 代发改走 bindService（不再广播冷启模块 App）——
+        // 广播路径下模块 App 约 5s 就被 SmartPower 冻结，首次点击必静默失败。
+        // bind 失败才回退旧广播（兼容未更新模块/服务不可用）。
+        val appCtx = context.applicationContext
+        val token = relayToken()
+        Thread {
+            // OS2/OS3 的 launcher 自己有 Java startShortcut 桥：SHORTCUT_ID 先本地代发，
+            // 不经过模块 App/root（快，且不受 SmartPower 冻结影响）。失败才走 Binder 代发。
+            if (shortcut.kind == ShortcutKind.SHORTCUT_ID &&
+                !runCatching { NativeGateBridge.isOs4NativeLauncher() }.getOrDefault(false)
+            ) {
+                val local = ShortcutLauncher.launchShortcutId(
+                    appCtx, shortcut, token, allowRootFallback = false,
+                    launcherBridgeAbsent = false
+                )
+                if (local is LaunchResult.Success) {
+                    Handler(Looper.getMainLooper()).post {
+                        runCatching {
+                            Toast.makeText(
+                                appCtx, "已启动：${shortcut.label}", Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                    return@Thread
+                }
+                HLog.w(TAG, "launcher local startShortcut failed, fallback relay: $local")
+            }
+            val outcome = ShortcutRelayBridge.launchBlocking(appCtx, shortcut, token)
+            if (outcome == null) {
+                HLog.w(TAG, "shortcut bind unavailable, fallback broadcast: id=${shortcut.id}")
+                sendToRelay(context, "shortcut id=${shortcut.id}") {
+                    putExtra(PrefKeys.FAN_EXTRA_SHORTCUT, shortcut.toJson().toString())
+                }
+                return@Thread
+            }
+            onRelayResult?.invoke(true, "shortcut id=${shortcut.id}")
+            // timeout 只说明没等到回执，服务可能仍在跑；未明确失败不 toast，避免误报。
+            if (!outcome.handled) {
+                HLog.w(TAG, "shortcut relay no reply yet: ${outcome.reason}")
+                return@Thread
+            }
+            Handler(Looper.getMainLooper()).post {
+                runCatching {
+                    val text = if (outcome.ok) {
+                        "已启动：${shortcut.label}"
+                    } else {
+                        "无法启动：${shortcut.label}（${outcome.reason.take(80)}）"
+                    }
+                    Toast.makeText(appCtx, text, Toast.LENGTH_LONG).show()
+                }.onFailure { HLog.w(TAG, "shortcut toast failed: ${it.message}") }
+            }
+        }.start()
     }
 
     override fun openNativePanel(context: Context) {
@@ -83,7 +137,21 @@ class BroadcastLaunchStrategy(
             null,
             object : BroadcastReceiver() {
                 override fun onReceive(c: Context, result: Intent?) {
-                    if (resultCode != 0) {
+                    val code = resultCode
+                    if (code == PrefKeys.PROBE_CODE_TOKEN_MISMATCH) {
+                        // 令牌拒绝 ≠ 执行端死亡（M05）：单独提示，不进熔断计数。
+                        HLog.w(TAG, "relay token mismatch: $what（不计 dead）")
+                        onRelayResult?.invoke(true, what)
+                        runCatching {
+                            Toast.makeText(
+                                c,
+                                "配置令牌不同步，请重启安全中心或手机",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }.onFailure { HLog.w(TAG, "token mismatch toast failed: ${it.message}") }
+                        return
+                    }
+                    if (code != 0) {
                         HLog.i(TAG, "relay alive: $what delivered")
                         onRelayResult?.invoke(true, what)
                         return

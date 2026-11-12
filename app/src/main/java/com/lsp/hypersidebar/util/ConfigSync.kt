@@ -110,8 +110,35 @@ object ConfigSync {
     /** 最近一次收到 SYNC 的时刻（elapsedRealtime）；0=从未收到（init 快照兜底态） */
     @Volatile private var lastSyncAt = 0L
 
+    /**
+     * 逐进程 SYNC 回执（2026-11-11）：proc → 最近一次 acks。
+     * `vc` = 该 hook 进程**正在运行**的 BuildConfig.VERSION_CODE（旧 dex 时是旧值），
+     * 模块 App 与磁盘 APK 版本比较即可发现“更新后宿主没换代码”。
+     */
+    data class Ack(val proc: String?, val keys: Int, val vc: Int, val at: Long)
+
+    private val acks = java.util.concurrent.ConcurrentHashMap<String, Ack>()
+
+    fun ackSnapshot(): Map<String, Ack> = HashMap(acks)
+
+    /** 陈旧宿主包名集合（vc 与磁盘 APK 不一致；旧代码没有 `vc` extra ⇒ -1，同样算陈旧）。 */
+    fun staleHostPackages(diskVc: Long): Set<String> = acks.values
+        .filter { it.vc.toLong() != diskVc }
+        .mapNotNull { a ->
+            when (a.proc) {
+                HLog.PROC_LAUNCHER -> HostPackages.HOME
+                HLog.PROC_UI -> HostPackages.UI_HOST
+                HLog.PROC_SYS -> HostPackages.SYSTEM_UI
+                else -> null
+            }
+        }
+        .toSet()
+
     /** hook 侧 context（回执广播用）；由 [registerHookSide] 记下 */
     @Volatile private var hookCtx: Context? = null
+
+    /** hook 侧 prefs（读令牌做 SYNC 来源闸）；由 [registerHookSide] 记下，release 置 null */
+    @Volatile private var hookPrefs: SharedPreferences? = null
 
     /** 收到 SYNC 全量覆盖（键值均为 Bundle 可序列化基础类型/StringSet）。 */
     fun applySync(raw: Map<*, *>) {
@@ -142,6 +169,7 @@ object ConfigSync {
                     .setPackage(BuildConfig.APPLICATION_ID)
                     .putExtra("proc", HLog.proc())
                     .putExtra("n", keyCount)
+                    .putExtra("vc", BuildConfig.VERSION_CODE)
             )
         }
     }
@@ -248,10 +276,11 @@ object ConfigSync {
             // 所以「日志页 → 本应用 → ack」是判定投递是否成功的有效信号
             val ackReceiver = object : BroadcastReceiver() {
                 override fun onReceive(c: Context, intent: Intent) {
-                    HLog.i(
-                        TAG,
-                        "ack: proc=${intent.getStringExtra("proc")} keys=${intent.getIntExtra("n", -1)}"
-                    )
+                    val proc = intent.getStringExtra("proc")
+                    val keys = intent.getIntExtra("n", -1)
+                    val vc = intent.getIntExtra("vc", -1)
+                    acks[proc ?: "?"] = Ack(proc, keys, vc, android.os.SystemClock.elapsedRealtime())
+                    HLog.i(TAG, "ack: proc=$proc keys=$keys vc=$vc")
                 }
             }
             context.registerReceiver(
@@ -332,6 +361,9 @@ object ConfigSync {
                 val intent = Intent(ACTION_SYNC)
                     .setPackage(host)
                     .putExtra("map", map as java.io.Serializable)
+                // 令牌闸（M02，2026-11-11）：每改一次设置一次字符串比较，不在手势热路径。
+                // 令牌未下发时 attach no-op，hook 侧 verifyFan 对空 expected 仍放行（首装窗口）。
+                RelayToken.attach(intent, RelayToken.current())
                 context.sendBroadcast(intent)
             }
             // 诊断锚点：与 hook 侧 "config synced" 配对——推了没收到=投递问题，
@@ -380,15 +412,30 @@ object ConfigSync {
      * [releaseForReload] 里被复位，所以重挂能真正再注册一次，并顺带重发一次
      * ACTION_REQUEST（热重载后立即拉一次最新配置）。
      */
-    fun registerHookSide(context: Context) {
+    fun registerHookSide(context: Context, prefs: SharedPreferences) {
         if (hookRegistered) return
         hookRegistered = true
         hookCtx = context.applicationContext
         hookRegCtx = context
+        hookPrefs = prefs
         runCatching {
             val syncRecv = object : BroadcastReceiver() {
                 override fun onReceive(c: Context, intent: Intent) {
                     val map = intent.getSerializableExtra("map") as? Map<*, *> ?: return
+                    // 令牌闸（M02，2026-11-11）：阻止任意 App 伪造 ACTION_SYNC 注入
+                    // shortcut_actions/customApps。expected 为空时 verifyFan 放行（首装窗口）。
+                    val expected = hookPrefs?.let { RelayToken.read(it) }
+                    if (!RelayToken.verifyFan(intent, expected)) {
+                        HLog.w(TAG, "sync rejected: bad token (proc=${HLog.proc()})")
+                        // 自愈：令牌轮换/宿主旧快照时，强制下一次 ConfigPullBridge 拉取
+                        // （uid-ACL 通道会 adopt 新令牌并 applySync，不必等 60s 节流）。
+                        lastSyncAt = 0L
+                        hookCtx?.let { ctx ->
+                            runCatching { ConfigPullBridge.refreshNow(ctx) }
+                                .onFailure { HLog.w(TAG, "token mismatch pull failed: ${it.message}") }
+                        }
+                        return
+                    }
                     // 来源闸已放弃（2026-11-02 真机实测）：`sentFromUid`/`sentFromPackage`
                     // 在本机 OS4/API 36 上对跨应用广播恒为 null/INVALID ⇒ 恒 fail-open，
                     // 只带来虚假安全感（伪造回包实测被放行）。硬边界在 applySync 的
@@ -436,6 +483,7 @@ object ConfigSync {
         }.onFailure { HLog.w(TAG, "hook-side unregister failed: ${it.message}") }
         hookSyncReceiver = null
         hookRegCtx = null
+        hookPrefs = null
         runCatching { hookRequestHandler?.removeCallbacksAndMessages(null) }
             .onFailure { HLog.w(TAG, "hook request callback cleanup failed: ${it.message}") }
         hookRequestHandler = null

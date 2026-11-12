@@ -870,7 +870,9 @@ object SystemUiInputSpy {
             ctx.registerReceiver(
                 recv,
                 android.content.IntentFilter(com.lsp.hypersidebar.prefs.PrefKeys.SPY_PILFER_ACTION),
-                android.content.Context.RECEIVER_EXPORTED
+                // 2026-11-11：:ui → SystemUI 同为 uid 1000，内核 uid 收口（零成本）。
+                // ROM 若不放行同 uid 跨进程，回退 EXPORTED（见计划 §4a）。
+                android.content.Context.RECEIVER_NOT_EXPORTED
             )
             pilferReceiver = recv
             HLog.i(TAG, "pilfer receiver registered (底角线)")

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.prefs.PrefsFiles
 import com.lsp.hypersidebar.util.DefaultLaunchStrategy
 import com.lsp.hypersidebar.util.RelayToken
 import com.lsp.hypersidebar.util.ShortcutAction
@@ -55,10 +56,13 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
         val pending = goAsync()
         Thread {
             try {
+                val mirror = context.getSharedPreferences(PrefsFiles.APP_LOCAL, Context.MODE_PRIVATE)
+                RelayToken.primeFromMirror(mirror)
                 // 冷启动补挂（2026-11-02 审查 P1 重排）：原实现的补挂排在 verifyRelay 的
                 // `return` 之后 ⇒ 流程图里那段代码是死的。现在先补挂再严格比对；
                 // 补挂失败（LSPosed 桥不可用）仍按无令牌拒绝，安全档不变。
                 if (!RelayToken.awaitAndVerify(intent)) return@Thread
+                RelayToken.saveMirror(mirror)
                 // 链路追踪（util/Trace）：relay 意图自带呼出链 id，写入本进程供日志前缀。
                 // 鉴权之后才写——伪造广播不得污染本进程的诊断上下文。
                 val trace = intent.getStringExtra(com.lsp.hypersidebar.util.Trace.EXTRA)
@@ -70,7 +74,11 @@ class ShortcutRelayReceiver : BroadcastReceiver() {
                     return@Thread
                 }
                 HLog.i(TAG, "[${trace ?: "-"}] relay launch: id=${shortcut.id} kind=${shortcut.kind}")
-                val result = ShortcutLauncher.launch(context, shortcut, DefaultLaunchStrategy())
+                val noBridge = intent.getBooleanExtra(PrefKeys.RELAY_LAUNCH_EXTRA_NO_BRIDGE, false)
+                val result = ShortcutLauncher.launch(
+                    context, shortcut, DefaultLaunchStrategy(),
+                    launcherBridgeAbsent = noBridge
+                )
                 HLog.i(TAG, "[${trace ?: "-"}] relay launch result: $result")
 
                 // 结果回执（2026-09-05）：①写 remotePrefs 供自检报告读取（远程排障

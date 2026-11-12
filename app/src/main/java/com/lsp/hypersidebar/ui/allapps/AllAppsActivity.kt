@@ -137,6 +137,11 @@ class AllAppsActivity : ComponentActivity() {
     private var suggestions by mutableStateOf<List<String>?>(null)
     /** 呼出扇形时的前台应用（source 三跳第二跳：面板内选择后随回传广播到 :ui 记录点） */
     private var frozenSource: String? = null
+    /**
+     * 调用方（:ui）在启动本面板时随 intent 带来的令牌；模块进程冷启时
+     * [RelayToken.current] 可能还是 null，必须复用它，否则面板里点应用发不出可验的广播。
+     */
+    private var launchToken: String? = null
 
     // 绑定桥监听存字段（2026-10-26 审查 B3）：onDestroy 用**同一引用**注销（面板是
     // singleTask 高频重入，匿名闭包每次 onCreate 泄漏一份捕获本 Activity）
@@ -163,6 +168,8 @@ class AllAppsActivity : ComponentActivity() {
         remotePrefs = RemotePrefsBridge.prefs
         suggestions = intent.getStringArrayListExtra(EXTRA_SUGGESTIONS)
         frozenSource = intent.getStringExtra(PrefKeys.FAN_EXTRA_SOURCE)
+        launchToken = intent.getStringExtra(PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN)
+            ?: RelayToken.current()
         RemotePrefsBridge.addListener(bridgeListener)
 
         setContent {
@@ -181,7 +188,7 @@ class AllAppsActivity : ComponentActivity() {
                                 // source 三跳第三跳：回传呼出时冻结的前台应用到记录点
                                 frozenSource?.let { putExtra(PrefKeys.FAN_EXTRA_SOURCE, it) }
                                 // 跨进程防伪令牌（:ui 侧 FreeformRelayHook 校验）
-                                RelayToken.attach(this, RelayToken.current())
+                                RelayToken.attach(this, launchToken ?: RelayToken.current())
                             }.let { applicationContext.sendBroadcast(it) }
                         }.onFailure {
                             Toast.makeText(this, "启动失败：$pkg", Toast.LENGTH_SHORT).show()
@@ -235,6 +242,13 @@ class AllAppsActivity : ComponentActivity() {
         // singleTask 重入（上次未关闭）：同样先过令牌闸，再刷新传入的建议列表
         verifyCaller()
         suggestions = intent.getStringArrayListExtra(EXTRA_SUGGESTIONS)
+        launchToken = intent.getStringExtra(PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN)
+            ?: launchToken ?: RelayToken.current()
+    }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        com.lsp.hypersidebar.util.AppIconCache.trim(level)
     }
 
     override fun onDestroy() {

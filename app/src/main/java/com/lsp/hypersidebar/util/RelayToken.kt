@@ -4,6 +4,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.util.Log
 import com.lsp.hypersidebar.prefs.PrefKeys
+import com.lsp.hypersidebar.prefs.PrefsFiles
 import java.util.UUID
 import com.lsp.hypersidebar.util.HLog
 
@@ -35,7 +36,17 @@ object RelayToken {
     @Volatile
     private var cached: String? = null
 
-    /** 冷启动补挂的单飞锁：并发进来的 relay/restore 广播只等一次绑定（≤3s）。 */
+    /**
+     * 模块进程私有镜像（[PrefsFiles.APP_LOCAL] 的 relayToken 副本；2026-11-11）。
+     *
+     * 只做 bind 之前的校验快路径，**不占用 [cached]**——旧方案把镜像写进 cached 会让
+     * [awaitAndVerify] 的 `cached == null` 条件永不成立，远端令牌换了也永远不刷新。
+     * 权威仍是 [sync] 从 remotePrefs 读到的 cached；bind 成功后 cached 覆盖本字段的有效期。
+     */
+    @Volatile
+    private var mirrorToken: String? = null
+
+    /** 冷启动补挂的单飞锁：并发进来的 relay/restore 广播只等一次绑定（≤6s）。 */
     private val provisionLock = Any()
 
     /** hook 进程侧经可信拉取通道拿到的令牌（见 [adopt]）。 */
@@ -60,8 +71,34 @@ object RelayToken {
         null
     }
 
-    /** 当前令牌（收发两端共用）；从未同步过时返回 null。 */
-    fun current(): String? = cached
+    /**
+     * 模块进程：把私有镜像里的令牌读进 [mirrorToken]（只读快路径，不写 [cached]）。
+     * 必须在鉴权前调用；已存在镜像时不覆盖。
+     */
+    fun primeFromMirror(mirror: SharedPreferences?) {
+        if (!mirrorToken.isNullOrEmpty()) return
+        val t = runCatching { mirror?.getString(PrefKeys.RELAY_TOKEN, null) }.getOrNull()
+        if (!t.isNullOrEmpty()) {
+            mirrorToken = t
+            HLog.i(TAG, "token mirror primed")
+        }
+    }
+
+    /** 模块进程：把权威 [cached] 回写私有镜像（只读缓存的写路径）。 */
+    fun saveMirror(mirror: SharedPreferences?) {
+        val t = cached ?: return
+        runCatching { mirror?.edit()?.putString(PrefKeys.RELAY_TOKEN, t)?.apply() }
+            .onFailure { HLog.w(TAG, "mirror write failed: ${it.message}") }
+    }
+
+    /** 是否有任一来源（权威/镜像）可用；自检用。 */
+    fun isReady(): Boolean = !cached.isNullOrEmpty() || !mirrorToken.isNullOrEmpty()
+
+    /** 权威令牌（remotePrefs 绑定后）是否就绪；自检用它区分“仅镜像”与“已就绪”。 */
+    fun authorityReady(): Boolean = !cached.isNullOrEmpty()
+
+    /** 当前令牌（收发两端共用）；权威优先，镜像兜底。 */
+    fun current(): String? = cached ?: mirrorToken
 
     /**
      * 模块进程专用（**会在调用线程阻塞 ≤[timeoutSec] 秒，禁止主线程调用**）：
@@ -72,8 +109,16 @@ object RelayToken {
      * 补挂 = 等 LSPosed 服务绑定后 [sync]（≤[timeoutSec]）；绑定不可用时超时并按无令牌拒绝，
      * 安全档不变。
      */
-    fun awaitAndVerify(intent: Intent, timeoutSec: Long = 3): Boolean {
+    fun awaitAndVerify(intent: Intent, timeoutSec: Long = 6): Boolean {
         if (cached == null) {
+            // 镜像快路径：只校验、不写 cached；失败再 bind（镜像过期不会挡住刷新）。
+            // 这里直接比较而不复用 verifyRelayAgainst —— 镜像过期是常态，不该打 "rejected" 误导排障。
+            val mirror = mirrorToken
+            val got = intent.getStringExtra(PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN)
+            if (!mirror.isNullOrEmpty() && !got.isNullOrEmpty() && got == mirror) {
+                HLog.i(TAG, "token mirror fast-path ok")
+                return true
+            }
             synchronized(provisionLock) {
                 if (cached == null) {
                     val ok = RemotePrefsBridge.awaitTokenProvision(timeoutSec)
@@ -121,8 +166,10 @@ object RelayToken {
     }
 
     /** 接收端（模块 root 代发）：严格——无有效令牌不得借 root 启动任何组件。 */
-    fun verifyRelay(intent: Intent): Boolean {
-        val expected = cached
+    fun verifyRelay(intent: Intent): Boolean = verifyRelayAgainst(intent, expectedToken())
+
+    /** 严格校验的唯实现：expected = cached ?: mirrorToken（镜像只读快路径）。 */
+    private fun verifyRelayAgainst(intent: Intent, expected: String?): Boolean {
         val got = intent.getStringExtra(PrefKeys.RELAY_LAUNCH_EXTRA_TOKEN)
         if (expected.isNullOrEmpty() || got.isNullOrEmpty() || got != expected) {
             HLog.w(TAG, "root relay rejected: bad token (provisioned=${!expected.isNullOrEmpty()})")
@@ -130,4 +177,6 @@ object RelayToken {
         }
         return true
     }
+
+    private fun expectedToken(): String? = cached ?: mirrorToken
 }

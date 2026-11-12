@@ -48,11 +48,15 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import com.lsp.hypersidebar.BuildConfig
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.prefs.savePref
+import com.lsp.hypersidebar.util.ConfigBackup
+import com.lsp.hypersidebar.util.ConfigSync
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.UpdateChecker
 import io.github.libxposed.service.XposedService
@@ -156,6 +160,52 @@ internal fun AboutPage(
     var selectedRestarts by remember { mutableStateOf(emptySet<String>()) }
     var hostRestartBusy by remember { mutableStateOf(false) }
 
+    // 配置备份（2026-11-11）：导入/导出都走 IO；busy 只在真正读写时置位，
+    // 打开文件选择器期间不锁按钮（用户可能停很久）。
+    val backupScope = rememberCoroutineScope()
+    var backupBusy by remember { mutableStateOf(false) }
+    var importPreview by remember { mutableStateOf<ConfigBackup.Snapshot?>(null) }
+    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            backupBusy = true
+            backupScope.launch {
+                val parsed = runCatching {
+                    withContext(Dispatchers.IO) {
+                        ConfigBackup.decode(ConfigBackup.readFromUri(context, uri))
+                    }
+                }
+                backupBusy = false
+                parsed.onSuccess { importPreview = it }
+                    .onFailure { e ->
+                        Toast.makeText(
+                            context,
+                            context.getString(R.string.backup_import_failed, e.message ?: ""),
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+            }
+        }
+    }
+
+    // 旧 dex（2026-11-11）：APK 更新后宿主可能仍跑旧代码；ack 带运行版本，和磁盘 APK 比。
+    // 模块绝不自动重启宿主，只把陈旧宿主预选进现有重启对话框。
+    var staleHosts by remember { mutableStateOf(emptySet<String>()) }
+    var hookAckMissing by remember { mutableStateOf(false) }
+    LaunchedEffect(prefsRevision) {
+        // 模块 App 冷启动时桥绑定/首推可能晚于页面首帧：短轮询几次，拿到 ack 即停。
+        repeat(5) {
+            delay(800)
+            val disk = runCatching {
+                context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
+            }.getOrDefault(BuildConfig.VERSION_CODE.toLong())
+            val stale = ConfigSync.staleHostPackages(disk)
+            staleHosts = stale
+            if (stale.isNotEmpty()) return@LaunchedEffect
+        }
+        // 旧 dex 没有 `vc` extra / hook 没注入/冻结：一条 ack 都收不到。
+        hookAckMissing = RemotePrefsBridge.prefs != null && ConfigSync.ackSnapshot().isEmpty()
+    }
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -237,6 +287,67 @@ internal fun AboutPage(
         item { SectionTitle(text = stringResource(R.string.about_more)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
+                // 配置备份（2026-11-11）：JSON 覆盖布局/交互/操作/固定应用/快捷方式/组
+                ArrowPreference(
+                    title = stringResource(R.string.backup_export),
+                    summary = when {
+                        backupBusy -> stringResource(R.string.backup_busy)
+                        RemotePrefsBridge.prefs == null -> stringResource(R.string.backup_unbound)
+                        else -> null
+                    },
+                    onClick = {
+                        if (!backupBusy) {
+                            backupBusy = true
+                            backupScope.launch {
+                                val exported = runCatching {
+                                    val json = withContext(Dispatchers.IO) {
+                                        ConfigBackup.encodeFromPrefs(effectivePrefs, versionName)
+                                    }
+                                    ConfigBackup.exportToDownloads(context, json)
+                                }
+                                backupBusy = false
+                                exported.onSuccess { path ->
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.backup_export_done, path),
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }.onFailure { e ->
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.backup_export_failed, e.message ?: ""),
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        }
+                    }
+                )
+                ArrowPreference(
+                    title = stringResource(R.string.backup_import),
+                    summary = if (backupBusy) stringResource(R.string.backup_busy) else null,
+                    onClick = { if (!backupBusy) importPicker.launch(arrayOf("*/*")) }
+                )
+                if (staleHosts.isNotEmpty()) {
+                    ArrowPreference(
+                        title = stringResource(R.string.stale_host_title),
+                        summary = stringResource(R.string.stale_host_summary, staleHosts.size),
+                        onClick = {
+                            selectedRestarts = staleHosts
+                            showHostRestart = true
+                        }
+                    )
+                }
+                if (hookAckMissing) {
+                    ArrowPreference(
+                        title = stringResource(R.string.hook_ack_missing_title),
+                        summary = stringResource(R.string.hook_ack_missing_summary),
+                        onClick = {
+                            selectedRestarts = HostRestarter.HOSTS.map { it.pkg }.toSet()
+                            showHostRestart = true
+                        }
+                    )
+                }
                 // 恢复默认值（0922 从首页迁入）：低频破坏性操作不再占首页一个分区；
                 // 只回写布局/手势/背景参数，应用选择与快捷方式不受影响（确认 dialog 里说清）
                 BasicComponent(
@@ -397,6 +508,31 @@ internal fun AboutPage(
         }
     )
 
+    // 备份恢复确认（2026-11-11）：解析成功才弹；确认后 IO 写、主线程 toast。
+    ImportConfirmDialog(
+        snapshot = importPreview,
+        onConfirm = { snapshot ->
+            importPreview = null
+            backupBusy = true
+            backupScope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    ConfigBackup.apply(effectivePrefs, snapshot)
+                }
+                backupBusy = false
+                val msg = when (result) {
+                    is ConfigBackup.ApplyResult.Success -> context.getString(
+                        R.string.backup_import_done,
+                        result.settingsWritten,
+                        result.shortcutsWritten
+                    )
+                    is ConfigBackup.ApplyResult.Rejected -> result.reason
+                }
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            }
+        },
+        onDismiss = { importPreview = null }
+    )
+
     // 一键重置确认 dialog（0922 随功能行自首页迁入，样式未变）
     ResetConfirmDialog(
         show = showResetConfirm,
@@ -410,6 +546,36 @@ internal fun AboutPage(
             ).show()
         },
         onDismiss = { showResetConfirm = false }
+    )
+}
+
+/** 备份恢复确认（结构同 [ResetConfirmDialog]；snapshot=null 即不显示）。 */
+@Composable
+private fun ImportConfirmDialog(
+    snapshot: ConfigBackup.Snapshot?,
+    onConfirm: (ConfigBackup.Snapshot) -> Unit,
+    onDismiss: () -> Unit
+) {
+    WindowDialog(
+        show = snapshot != null,
+        title = stringResource(R.string.backup_import_confirm_title),
+        summary = snapshot?.let {
+            stringResource(
+                R.string.backup_import_confirm_summary,
+                it.settings.size,
+                it.customApps?.size ?: 0,
+                it.shortcuts?.size ?: 0
+            )
+        } ?: "",
+        onDismissRequest = onDismiss,
+        content = {
+            ConfirmCancelRow(
+                confirmText = stringResource(R.string.backup_import_confirm_action),
+                onConfirm = { snapshot?.let(onConfirm) },
+                onCancel = onDismiss,
+                primary = true
+            )
+        }
     )
 }
 

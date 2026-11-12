@@ -3,6 +3,9 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 2026-11-12：快捷方式 root 代发需要把冻结的模块 App 拉成前台服务再跑 su -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
@@ -67,7 +70,13 @@
              防伪=服务内 Binder uid + 令牌双重校验 -->
         <service
             android:name=".UnfreezeRelayService"
-            android:exported="true" />
+            android:exported="true"
+            android:foregroundServiceType="specialUse">
+            <!-- Android 14+ 的 specialUse 子类型声明；用途=短时 root 代发，不是常驻服务 -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="shortcut root relay" />
+        </service>
 
         <!-- hook 宿主 → 模块 App 配置拉取（迭代六 §11.1）：ConfigSync 广播对冻结宿主
              静默丢弃，hook 侧 stale 时 bind 本服务拉全量配置兜底（bind 唤醒冻结/死进程）。

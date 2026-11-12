@@ -15,6 +15,7 @@ import com.lsp.hypersidebar.util.FailureReason
 import com.lsp.hypersidebar.util.FanPrewarmer
 import com.lsp.hypersidebar.util.FreeformLauncher
 import com.lsp.hypersidebar.util.LaunchResult
+import com.lsp.hypersidebar.util.NativeGateBridge
 import com.lsp.hypersidebar.util.QsTileClickBridge
 import com.lsp.hypersidebar.util.UnfreezeBridge
 import com.lsp.hypersidebar.util.RelayToken
@@ -22,6 +23,7 @@ import com.lsp.hypersidebar.util.Trace
 import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutLauncher
+import com.lsp.hypersidebar.util.ShortcutRelayBridge
 import com.lsp.hypersidebar.util.SystemLaunchStrategy
 import com.lsp.hypersidebar.util.HLog
 
@@ -126,28 +128,49 @@ class DirectLaunchStrategy(
                 // root 反查在此落空（2026-10-05 实测：测试页=模块 App 可行、fan 不行）。
                 // 本进程只试桥（allowRootFallback=false 跳过 su 探测），失败即转发
                 // relay（与 QS_TILE 磁贴回退同通道）；OS3 桥永远成功，relay 不触发。
+                val token = RelayToken.read(remotePrefs)
                 val result = ShortcutLauncher.launchShortcutId(
-                    appCtx0, shortcut, RelayToken.read(remotePrefs), allowRootFallback = false
+                    appCtx0, shortcut, token, allowRootFallback = false,
+                    launcherBridgeAbsent = launcherBridgeAbsent()
                 )
-                val relayed = result is LaunchResult.Failure &&
-                    relayLaunchToModule(appCtx0, shortcut)
+                // 2026-11-12：root 代发改 bind（bind 保活模块 App，避免 SmartPower 5s 冻结
+                // 把 su 冻死）；bind 不可用才回退旧广播。
+                var outcome: ShortcutRelayBridge.Outcome? = null
+                var relayed = false
+                if (result is LaunchResult.Failure) {
+                    outcome = ShortcutRelayBridge.launchBlocking(appCtx0, shortcut, token)
+                    if (outcome == null) relayed = relayLaunchToModule(appCtx0, shortcut)
+                }
                 Handler(Looper.getMainLooper()).post {
                     runCatching {
-                        Toast.makeText(
-                            appCtx0,
-                            when {
-                                result is LaunchResult.Success -> "已启动：${shortcut.label}"
-                                relayed -> "已转发启动：${shortcut.label}"
-                                else -> "无法启动：${shortcut.label}"
-                            },
-                            Toast.LENGTH_SHORT
-                        ).show()
+                        // timeout（arrived=false）只说明客户端没等到回执，服务很可能仍在跑；
+                        // 2026-11-12 真机：SmartPower 把 FGS 启动排队 20s，25s 超时后误报
+                        // "relay timeout"，而快捷方式其实已经拉起。未收到明确失败结果时不 toast。
+                        val text: String? = when {
+                            result is LaunchResult.Success -> "已启动：${shortcut.label}"
+                            outcome?.ok == true -> "已启动：${shortcut.label}"
+                            outcome?.handled == true ->
+                                "无法启动：${shortcut.label}（${outcome.reason.take(80)}）"
+                            outcome != null -> null
+                            relayed -> "已转发启动：${shortcut.label}"
+                            else -> "无法启动：${shortcut.label}"
+                        }
+                        text?.let { Toast.makeText(appCtx0, it, Toast.LENGTH_LONG).show() }
                     }.onFailure { HLog.w(TAG, "shortcut toast failed: ${it.message}") }
                 }
             }.start()
             return
         }
 
+        // 非导出预检 + SystemLaunchStrategy + root 降级可能同步跑 su（首探 10s）；
+        // 这些分支此前在 :ui 接收器主线程上执行（M09）。统一挪到后台线程，
+        // toast 回主线程；relay 广播可从后台线程发。
+        val appCtx = context.applicationContext
+        Thread { launchShortcutDirect(appCtx, shortcut) }.start()
+    }
+
+    /** [launchShortcut] 的非 QS/非 SHORTCUT_ID 路径（后台线程；M09 主线程 su 隔离）。 */
+    private fun launchShortcutDirect(context: Context, shortcut: ShortcutAction) {
         // 非 exported 目标预检失败时直接转发模块 App 代发（§2.4 实测定案）：
         // 本进程（:ui，平台签名特权；uid=1000/system，0918 ps+dumpsys 定案）startActivityAsUser 对启动不了的目标静默假成功
         // （不抛异常、实际不启动，无法靠异常触发 root 回退），且本进程无 su 授权；
@@ -158,7 +181,13 @@ class DirectLaunchStrategy(
                 (check.reason == FailureReason.ACTIVITY_NOT_FOUND ||
                     check.reason == FailureReason.NOT_EXPORTED)
             ) {
-                if (relayLaunchToModule(context, shortcut)) return
+                // 2026-11-12：走 bind 代发（bind 保活模块 App，避免 SmartPower 5s 冻结
+                // 把 su 冻死）；bind 不可用才回退旧广播。
+                val outcome = ShortcutRelayBridge.launchBlocking(
+                    context, shortcut, RelayToken.read(remotePrefs)
+                )
+                if (outcome?.ok == true) return
+                if (outcome == null && relayLaunchToModule(context, shortcut)) return
                 HLog.w(TAG, "relay launch to module app failed, falling back to local launch")
             }
         }
@@ -166,16 +195,24 @@ class DirectLaunchStrategy(
         val result = ShortcutLauncher.launch(context, shortcut, SystemLaunchStrategy())
         // service 拉起无界面反馈，toast 显式提醒（PRD §7.3.2）
         if (shortcut.kind == ShortcutKind.SERVICE && result is LaunchResult.Success) {
-            runCatching {
-                Toast.makeText(context, "已拉起服务：${shortcut.label}", Toast.LENGTH_SHORT).show()
-            }.onFailure { HLog.w(TAG, "service toast failed: ${it.message}") }
+            Handler(Looper.getMainLooper()).post {
+                runCatching {
+                    Toast.makeText(context, "已拉起服务：${shortcut.label}", Toast.LENGTH_SHORT).show()
+                }.onFailure { HLog.w(TAG, "service toast failed: ${it.message}") }
+            }
         } else if (result is LaunchResult.Failure) {
             // PRD §9.4：非编辑页场景启动失败 toast 兜底（编辑页测试启动自带原因展示）
-            runCatching {
-                Toast.makeText(context, "activity/Service无法正常启动", Toast.LENGTH_SHORT).show()
-            }.onFailure { HLog.w(TAG, "failure toast failed: ${it.message}") }
+            Handler(Looper.getMainLooper()).post {
+                runCatching {
+                    Toast.makeText(context, "activity/Service无法正常启动", Toast.LENGTH_SHORT).show()
+                }.onFailure { HLog.w(TAG, "failure toast failed: ${it.message}") }
+            }
         }
     }
+
+    /** OS4 纯 native 桌面没有 Java launcher 桥（MiuiHome 无 dex）；OS2/3 恒 false。 */
+    private fun launcherBridgeAbsent(): Boolean =
+        runCatching { NativeGateBridge.isOs4NativeLauncher() }.getOrDefault(false)
 
     /** fan 呼出预热（2026-09-07 预热制，替代 unfreeze relay 的免 root 方案）：
      *  ① QS_TILE 目标包：呼出后 ~150ms kill 冻结进程 + 方案 B 预 bind（只 prime 不点击），
@@ -222,6 +259,7 @@ class DirectLaunchStrategy(
                     shortcut.toJson().toString()
                 )
                 putExtra(com.lsp.hypersidebar.util.Trace.EXTRA, com.lsp.hypersidebar.util.Trace.current)
+                putExtra(PrefKeys.RELAY_LAUNCH_EXTRA_NO_BRIDGE, launcherBridgeAbsent())
                 RelayToken.attach(this, RelayToken.read(remotePrefs))
             }
             context.sendBroadcast(intent)

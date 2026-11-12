@@ -85,7 +85,7 @@ class FreeformRelayHook(
         }.onFailure { HLog.w(TAG, "anchor complete failed: ${it.message}") }
         // 配置同步通道（批次 2 同款，:ui 补接）：收设置页全量推送，
         // 总开关/横屏 dwell 等 remotePrefs 读取的实时性不再单靠 LSPosed push
-        runCatching { com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx) }
+        runCatching { com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx, remotePrefs) }
             .onFailure { HLog.w(TAG, "config sync register failed: ${it.message}") }
         // 日志拉取回传（§11.2）：模块 App 请求时回传 HLog 缓冲；:ui 的熔断快照
         // 在 TurboLayout（同进程），经其伴生句柄取，未初始化时给空快照
@@ -187,7 +187,12 @@ class FreeformRelayHook(
                     // 无法用非导出），此前零校验——任意 App 都能发广播借 :ui 特权拉起
                     // 任意应用小窗。改为校验运行期随机令牌（remotePrefs 分发）。
                     // 令牌未配置时按 RelayToken.verifyFan 兼容放行，保证全新安装期主链路可用。
-                    if (!RelayToken.verifyFan(intent, RelayToken.read(remotePrefs))) return
+                    if (!RelayToken.verifyFan(intent, RelayToken.read(remotePrefs))) {
+                        // 独立结果码（M05）：令牌拒绝不能被 launcher 当成"执行端死亡"进熔断。
+                        // 有序广播（launcher 的存活探测）能读到 5；普通广播写 result 会抛。
+                        if (isOrderedBroadcast) resultCode = PrefKeys.PROBE_CODE_TOKEN_MISMATCH
+                        return
+                    }
                     // 固定应用选择页准入列表请求（设置页 ← :ui，探针同款有序广播信道）：
                     // resultExtras 回带 DataLoader 缓存（同步读，陈旧即触发后台刷新，不阻塞
                     // 应答）。模块进程被 blocklist 拒绝调 getFreeformSuggestionList，只能

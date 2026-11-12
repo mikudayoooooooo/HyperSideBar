@@ -32,6 +32,9 @@ object WallpaperSampler {
     @Volatile private var cached: Bitmap? = null
     @Volatile private var cachedAspect = 0f
     @Volatile private var fetchedAt = 0L
+
+    /** 2026-11-11（M17）：TTL/旋转/多宿主同时触发时只允许一个采样线程，后到请求丢弃。 */
+    private val inFlight = java.util.concurrent.atomic.AtomicBoolean(false)
     @Volatile private var receiverRegistered = false
 
     /** 壁纸变更接收器 + 注册它的 context：**原先是匿名注册（无处注销）**——它由宿主 AMS
@@ -108,8 +111,10 @@ object WallpaperSampler {
     }
 
     private fun refreshAsync(appCtx: Context) {
+        if (!inFlight.compareAndSet(false, true)) return
         Thread {
-            runCatching {
+            try {
+                runCatching {
                 val drawable = WallpaperManager.getInstance(appCtx).drawable ?: return@Thread
                 val full = drawable.toFullBitmap()
                 val bounds = appCtx.resources.displayMetrics
@@ -140,7 +145,10 @@ object WallpaperSampler {
                 if (cropped !== full && cropped !== scaled) cropped.recycle()
                 fetchedAt = System.currentTimeMillis()
                 HLog.i(TAG, "wallpaper cached ${targetW}x$targetH (crop ${cropW}x$cropH of ${full.width}x${full.height})")
-            }.onFailure { HLog.w(TAG, "wallpaper sample failed: ${it.message}") }
+                }.onFailure { HLog.w(TAG, "wallpaper sample failed: ${it.message}") }
+            } finally {
+                inFlight.set(false)
+            }
         }.apply { isDaemon = true; name = "WallpaperSampler" }.start()
     }
 

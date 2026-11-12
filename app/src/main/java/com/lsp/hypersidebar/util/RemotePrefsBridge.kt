@@ -77,6 +77,13 @@ object RemotePrefsBridge : XposedServiceHelper.OnServiceListener {
     fun registerConfigSync(context: Context) {
         val p = prefs ?: return
         com.lsp.hypersidebar.util.ConfigSync.ensureModuleSide(context, p)
+        // 令牌镜像（2026-11-11）：绑定完成时 sync 已填 cached，此处回写本进程私有镜像；
+        // 冷启动 relay 不必等 bind（见 RelayToken.awaitAndVerify 的镜像快路径）
+        RelayToken.saveMirror(
+            context.getSharedPreferences(
+                com.lsp.hypersidebar.prefs.PrefsFiles.APP_LOCAL, Context.MODE_PRIVATE
+            )
+        )
     }
 
     /**
@@ -107,6 +114,9 @@ object RemotePrefsBridge : XposedServiceHelper.OnServiceListener {
                     runCatching { p.getStringSet(com.lsp.hypersidebar.prefs.PrefKeys.CUSTOM_APPS, emptySet()) }
                         .getOrNull()?.size)
                 listeners.forEach { runCatching { it(p) } }
+                // root 探测预热（2026-11-11）：首次 su --version 预算 10s，relay 接收器
+                // goAsync 只有 ~10s；在这里提前探一次（30s 缓存），冷启动点击不再叠加等待。
+                runCatching { ShortcutLauncher.isRootAvailable() }
             }
         }.start()
     }

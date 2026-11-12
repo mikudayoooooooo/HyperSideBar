@@ -449,6 +449,18 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         // ⚠ 必须先调 [imeFrame]（它内含 pull，会把"浮窗键盘/ROM 键盘标志/读数新鲜度"这些状态
         // 刷新），**再**判断护栏——否则同一根手势里护栏永远赶不上状态（2026-10-18 真机踩到）。
         val ime = imeFrame(context)
+        // 2026-11-12（OS4 实测“点键盘仍收起”）：SystemUI 自己窗口的 IME insets 会谎报 hidden，
+        // `imeKnownFresh` 可能被这类假读数刷新；当 ROM 的 mImeShowing 也拿不到（null=未知）时，
+        // 下部 45% 一律不动作——宁可少一个空白点，也不把键盘触摸吃掉。
+        if (verdict == true && ime == null && InsetProbe.romImeShowing() == null &&
+            Os4Marker.romIsOs4()
+        ) {
+            val dm0 = android.content.res.Resources.getSystem().displayMetrics
+            if (ev.y > dm0.heightPixels * 0.55f) {
+                HLog.i(TAG, "isBlank → false（IME 状态未知 + 下部45%安全阀）")
+                return false
+            }
+        }
         // 硬安全阀（2026-10-17，用户实测"下半区不能打字"后加；2026-10-31 改"读数须新鲜"）：
         // **只要没有足够新的键盘读数**，屏幕下部 45% 一律不算空白（既不动作也不抢流）——
         // 宁可少一个动作，也绝不把键盘的触摸吃掉。旧实现用一次性闸 `imeKnown`，历史上读到过
@@ -463,7 +475,7 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         // 软键盘（2026-10-17）：① IME 活动但拿不到高度 ⇒ 直接否决（方向安全）；
         // ② 拿得到高度 ⇒ 命中底部键盘带也否决。两者都与"点在小窗内"同向。
         if (verdict == true && InsetProbe.imeActive && InsetProbe.imeBottomPx <= 0) {
-            HLog.i(TAG, "isBlank → false（IME 活动，高度未知）")
+            HLog.i(TAG, "isBlank → false（IME active，高度未知/忽略 WMShell hidden）")
             return false
         }
         if (verdict == true) {
@@ -490,6 +502,7 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         HLog.i(TAG, "isBlank pred=$predBlank kernel=$kernelBlank -> $verdict " +
             "at (${"%.0f".format(ev.x)},${"%.0f".format(ev.y)}) " +
             "[ime floating=${InsetProbe.floatingIme} romUp=${InsetProbe.romImeShowing()} " +
+            "active=${InsetProbe.imeActive} fresh=${InsetProbe.imeKnownFresh()} " +
             "src=${InsetProbe.source}]")
         return verdict
     }
@@ -754,6 +767,9 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         // `ensure()` 装 WMShell 钩子 + overlay，`refresh()` 按 1 秒粒度读 metrics 兜底。
         if (context != null) InsetProbe.ensure(context)
         InsetProbe.refresh(context)
+        // 2026-11-11：先刷新 imeActive，再判 wmShellSaysHidden——OS4 上 SystemUI 自己的
+        // 窗口 insets 会谎报键盘隐藏；只要 InputMethodManager 说 active，就不能走“权威无键盘”早退。
+        InsetProbe.refreshActive(context)
         // IME insets 钩子现在装在 InsetProbe 里（那个类已被验证会加载）——见 InsetProbe.installInsetsHook
         // ⓿ WMShell 权威矩形优先（2026-10-18）：横屏**浮窗键盘**是一块位置任意的小窗，
         // 既不满宽也不贴底 ⇒ 下面那条"贴底满宽带"的拼法在那种模式下会把旁边的空白也判成键盘 ✗。
@@ -796,8 +812,7 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         }
         // 拿不到高度时的安全判据（2026-10-17）：IME 处于活动状态（有输入焦点）⇒ 由 `isBlank`
         // 直接否决本点按（见其 `InsetProbe.imeActive` 分支）。方向安全（打字时不会想关小窗），
-        // 且用的是公开 API `InputMethodManager.isActive()`。
-        InsetProbe.refreshActive(context)
+        // 且用的是公开 API `InputMethodManager.isActive()`（active 已在函数开头刷新）。
         if (InsetProbe.imeActive) {
             HLog.i(TAG, "IME active（拿不到高度）⇒ 本点按不触发动作")
             return null

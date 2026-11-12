@@ -46,7 +46,13 @@ object ConfigPullBridge {
     private val pulling = AtomicBoolean(false)
 
     /** 应答回调线程：Messenger 的 replyTo 需要 looper */
-    private val replyThread = HandlerThread("ConfigPullClient").apply { start() }
+    @Volatile private var replyThreadRef: HandlerThread? = null
+
+    /** 热重载会 quit 这条线程；下一次拉取必须能重建（否则死在死 looper 上）。 */
+    private fun replyThread(): HandlerThread = replyThreadRef ?: synchronized(this) {
+        replyThreadRef ?: HandlerThread("ConfigPullClient").apply { start() }
+            .also { replyThreadRef = it }
+    }
 
     /**
      * 廉价检查点入口（手势 DOWN / 呼出装配前调用）：配置新鲜则零开销返回；
@@ -72,6 +78,12 @@ object ConfigPullBridge {
         }, "ConfigPull").apply { isDaemon = true }.start()
     }
 
+    /** 令牌不匹配/宿主旧快照：绕过 60s 节流立刻拉一次（uid-ACL 通道会 adopt 新令牌）。 */
+    fun refreshNow(context: Context?) {
+        lastPullAt = 0L
+        refreshIfStale(context)
+    }
+
     /**
      * 热重载释放（2026-10-18）：旧代的常驻应答线程必须退出，否则它跨代存活
      * （HandlerThread 的 looper 持有本代 classloader ⇒ 旧代永远回收不掉）。
@@ -81,8 +93,12 @@ object ConfigPullBridge {
      * 没人兜底 ⇒ 不接住就是崩宿主。所以 [pullBlocking] 必须整体 runCatching。
      */
     fun releaseForReload() {
-        runCatching { replyThread.quitSafely() }
+        val t = replyThreadRef
+        replyThreadRef = null
+        runCatching { t?.quitSafely() }
             .onFailure { HLog.w(TAG, "replyThread quit failed: ${it.message}") }
+        // 释放后允许下一次拉取立即尝试（重挂后不必再等 60s 节流）
+        lastPullAt = 0L
     }
 
     /** 后台线程调用：bind 模块 App 拉全量配置，应答落 ConfigSync 缓存。 */
@@ -96,7 +112,7 @@ object ConfigPullBridge {
         val t0 = SystemClock.elapsedRealtime()
         val latch = CountDownLatch(1)
         var gotMap: Map<String, Any>? = null
-        val replyHandler = object : Handler(replyThread.looper) {
+        val replyHandler = object : Handler(replyThread().looper) {
             override fun handleMessage(msg: Message) {
                 @Suppress("UNCHECKED_CAST")
                 gotMap = msg.data?.getSerializable(PrefKeys.CONFIG_PULL_EXTRA_MAP) as? Map<String, Any>

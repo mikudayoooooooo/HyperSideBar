@@ -39,7 +39,9 @@ class ConfigPullService : Service() {
         /** 请求拉取全量配置；应答（replyTo）arg1=1 成功（data.map=Serializable Map）/ 0 配置不可用 */
         const val MSG_PULL_CONFIG = 1
 
-        private val HOST_PKGS = setOf(HostPackages.HOME, HostPackages.UI_HOST)
+        private val HOST_PKGS = setOf(
+            HostPackages.HOME, HostPackages.UI_HOST, HostPackages.SYSTEM_UI
+        )
     }
 
     private lateinit var messenger: Messenger
@@ -91,6 +93,10 @@ class ConfigPullService : Service() {
             HLog.i(TAG, "pull cold-provision: bound=$bound")
         }
         val prefs = RemotePrefsBridge.prefs ?: return null
+        // M03（2026-11-11 裁定不改）：回包包含 relayToken。调用方 ACL 是内核 uid
+        // （SYSTEM_UID / 三个宿主包），能拿到 uid 1000 的只有平台签名/系统应用；
+        // 同 uid 内再拆“只给 :ui 发令牌”需要按进程名区分（不可行），加密/派生只增复杂度。
+        // 边界=谁能 bind，保持现状。
         val map = HashMap<String, Any>()
         for ((k, v) in prefs.all) {
             if (k != null && v != null) map[k] = v

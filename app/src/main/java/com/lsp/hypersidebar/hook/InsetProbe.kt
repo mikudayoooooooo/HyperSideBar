@@ -118,7 +118,8 @@ object InsetProbe {
      * 要么返回陈旧矩形（那正是用户报过的"下半屏永久死"的成因）。
      */
     fun wmShellSaysHidden(): Boolean =
-        wmShellLive && imeBottomAt > 0L && imeRectRaw == null && !floatingIme && !imeServiceSaysVisible()
+        wmShellLive && imeBottomAt > 0L && imeRectRaw == null && !floatingIme &&
+            !imeServiceSaysVisible() && !imeActive
 
     /**
      * OS4 实锤（2026-10-19）：SystemUI 的 `PerDisplay` insets 事件只反映 **SystemUI 自己窗口**

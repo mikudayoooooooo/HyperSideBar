@@ -268,8 +268,12 @@ class SystemUiHook(private val prefs: SharedPreferences) : BaseHook() {
         // 服务端真值 true，spy 却整窗零转发；重启宿主自愈）。挂上 hook 侧接收器
         // 后门控值随设置页改动实时生效，快照陈旧自愈（:ui 同款机制）。
         // 热重载重挂顺带重发一次 ACTION_REQUEST（registerHookSide 内建）⇒ 立即拉一次最新配置。
-        runCatching { com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx) }
+        runCatching { com.lsp.hypersidebar.util.ConfigSync.registerHookSide(ctx, prefs) }
             .onFailure { HLog.w(TAG, "config sync register failed: ${it.message}") }
+        // 首次安装/宿主重启后的令牌空窗（M04）：主动 bind 模块 App 拉一次全量配置，
+        // RelayToken.adopt 拿到令牌；后台执行，不阻塞 SystemUI 启动。
+        runCatching { com.lsp.hypersidebar.util.ConfigPullBridge.refreshIfStale(ctx) }
+            .onFailure { HLog.w(TAG, "config pull warm-up failed: ${it.message}") }
         // B2-2：抢占指令接收端（:ui 底角 SHOW → 五要素匹配 → pilfer）。
         // 2026-10-13（用户 m03028）起只服务**底角线**：条上（竖屏触发带）那条是给
         // native 的冗余兜底、会打断 native 停顿判定链，已删除调用。

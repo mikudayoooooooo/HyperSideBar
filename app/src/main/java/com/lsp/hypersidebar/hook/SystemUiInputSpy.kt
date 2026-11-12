@@ -533,8 +533,8 @@ object SystemUiInputSpy {
 
     /** 交还后转入实时转发：每个后续事件到达即注入（解决"拖动被重放成一次点击"）。 */
     @Volatile private var takeoverForwarding = false
-    /** 本手势已注入的事件数（诊断）。 */
-    private var takeoverInjected = 0
+    /** 本手势已注入的事件数（诊断；输入线程在功能中途关闭时会清零）。 */
+    @Volatile private var takeoverInjected = 0
     /**
      * 注入被系统拒绝 ⇒ **临时**关掉接管 60 秒（不是永久）。
      *

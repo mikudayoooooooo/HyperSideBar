@@ -15,14 +15,14 @@ import io.github.kyuubiran.ezxhelper.xposed.dsl.HookFactory.`-Static`.createAfte
  * 小窗「点击空白处缩小/关闭」的**动作层**（ROM 耦合全集中在这里）。
  *
  * ## 分工
- * - 检测：`SystemUiInputSpy`（已有的全局 monitor 通道，无条件启动）判定"轻点"，
+ * - 检测：`SystemUiInputSpy`（按消费方启停的全局 monitor 通道）判定"轻点"，
  *   判定核是纯 JVM 的 `BlankTapDetector`；本类提供"这一下算不算空白"（[isBlank]）。
  * - 动作：本类按动作档调 ROM 的小窗控制器（[perform]）。
  *
  * ## 为什么不做成自己的 hook
  * ROM 自己已有一个全屏输入 spy（OS3/4 `MulWinSwitchEventHandler.onEvent`，OS2
- * `MiuiWindowDecorViewModel.handleReceivedMotionEvent`），但**我们已经有一个**常驻的
- * （spy 通道 `hypersidebar-spy`，带聋 monitor 重建自愈）。再挂一个 ROM 入口只多一份
+ * `MiuiWindowDecorViewModel.handleReceivedMotionEvent`），但**我们已经有一个**按消费方
+ * 启停的 monitor 通道（spy，带聋 monitor 重建自愈）。再挂一个 ROM 入口只多一份
  * 类名漂移面 ⇒ 检测复用既有 spy（设计文档 §4 路线 A 的落地取舍）。
  * 唯一例外是 OS2 的**实例捕获**（见下），它是只读的、且不参与判定。
  *
@@ -151,6 +151,11 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         taskOps = null
         predDiagLogged = false
         repoDiagLogged = false
+        // 系统表面闸：旧代 classloader 的 Dagger/状态引用必须丢（与其它反射缓存同理）。
+        shadeState = null
+        shadeFields = null
+        shadeFailedAtMs = -1L
+        shadeFailLogged = false
         synchronized(taskInfoByTask) { taskInfoByTask.clear() }
         primed = false
         available = false
@@ -393,6 +398,161 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         runCatching { repository?.let { it } }
     }
 
+    // ===== 系统表面闸（QS/通知栏/锁屏，2026-11-12）====================================
+    //
+    // 为什么：`isBlank` 只认小窗几何/IME，不认"系统表面在上" ⇒ 小窗在屏且接管开启时，
+    // 下拉 QS/通知栏点磁贴会被当"空白点击"抢流（用户实测，issue #12 同轮）。
+    // 数据源：SystemUI Dagger 单例 `NotificationShadeWindowControllerImpl.mCurrentState`
+    // （`NotificationShadeWindowState`，OS2/3/4 jadx 逐版本核对：7 个 boolean 同名字段）。
+    // 懒解析 + 10s 失败冷却；解析/读取任何一步失败 ⇒ null（调用方 fail-closed）。
+    private var shadeState: Any? = null
+    private var shadeFields: Array<java.lang.reflect.Field>? = null
+    @Volatile private var shadeFailedAtMs = -1L
+    @Volatile private var shadeFailLogged = false
+
+    private val SHADE_RETRY_COOLDOWN_MS = 10_000L
+
+    /** 解析/读取失败：清缓存、10s 冷却、W 只打一次（后续仅 verbose）。 */
+    private fun shadeFail(step: String, t: Throwable? = null): Boolean? {
+        shadeState = null
+        shadeFields = null
+        shadeFailedAtMs = android.os.SystemClock.elapsedRealtime()
+        val cause = t?.let { causeLine(it) } ?: "n/a"
+        if (!shadeFailLogged) {
+            shadeFailLogged = true
+            HLog.w(TAG, "shade state unavailable ($step) ⇒ blank-tap fail-closed: $cause")
+        } else if (HLog.verboseEnabled) {
+            HLog.w(TAG, "shade state still unavailable ($step): $cause")
+        }
+        return null
+    }
+
+    /**
+     * 系统表面（QS/通知栏/锁屏/bouncer）是否在最上层。
+     *
+     * @return true=在上（调用方不接管/不动作）；false=明确没有系统表面；
+     *         null=状态未知（解析/读取失败，调用方同样按 fail-closed 处理）。
+     *
+     * 只在首次点按时做 Dagger/反射解析，之后每次只读 7 个 boolean。`mCurrentState` 是
+     * public final（impl 内原地更新）⇒ 缓存状态对象与字段引用即可，不要每次重取。
+     */
+    fun systemSurfaceOnTop(context: Context? = null): Boolean? {
+        shadeState?.let { st ->
+            val fs = shadeFields ?: return shadeFail("fields missing")
+            return readShade(st, fs)
+        }
+        val failedAt = shadeFailedAtMs
+        if (failedAt >= 0 &&
+            android.os.SystemClock.elapsedRealtime() - failedAt < SHADE_RETRY_COOLDOWN_MS
+        ) return null
+        return runCatching { resolveShadeState(context) }.getOrElse { shadeFail("resolve", it) }
+    }
+
+    private fun resolveShadeState(context: Context?): Boolean? {
+        val loader = ClassLoaderProvider.safeClassLoader
+        val init = runCatching {
+            Class.forName("com.android.systemui.SystemUIAppComponentFactoryBase", false, loader)
+                .getField("systemUIInitializer").get(null)
+        }.getOrNull() ?: runCatching {
+            val app = context?.applicationContext ?: (
+                Class.forName("android.app.ActivityThread")
+                    .getMethod("currentApplication").invoke(null) as? Context
+                )
+            app?.javaClass?.getField("mInitializer")?.get(app)
+        }.getOrNull() ?: return shadeFail("no SystemUI initializer")
+        val comp = listOf("getSysUIComponent", "getRootComponent").firstNotNullOfOrNull { m ->
+            runCatching { init.javaClass.getMethod(m).invoke(init) }.getOrNull()
+        } ?: return shadeFail("no SysUI component (init=${init.javaClass.simpleName})")
+        val prov = findShadeControllerProvider(comp)
+            ?: return shadeFail(
+                "no notificationShadeWindowController provider (comp=${comp.javaClass.simpleName})"
+            )
+        val controller = runCatching { prov.javaClass.getMethod("get").invoke(prov) }
+            .getOrElse { return shadeFail("provider.get() failed: ${it.message}", it) }
+            ?: return shadeFail("provider.get()=null")
+        val state = runCatching {
+            controller.javaClass.getDeclaredField("mCurrentState")
+                .apply { isAccessible = true }.get(controller)
+        }.getOrElse {
+            return shadeFail("mCurrentState missing (controller=${controller.javaClass.simpleName})", it)
+        } ?: return shadeFail("mCurrentState=null")
+        val names = arrayOf(
+            "controlCenterExpanded", "panelVisible", "qsExpanded", "shadeOrQsExpanded",
+            "keyguardShowing", "keyguardOccluded", "bouncerShowing",
+        )
+        val fields = names.map { n ->
+            runCatching { fieldInHierarchy(state.javaClass, n) }.getOrElse {
+                return shadeFail("state field $n missing (${state.javaClass.simpleName})", it)
+            }
+        }.toTypedArray()
+        shadeState = state
+        shadeFields = fields
+        shadeFailedAtMs = -1L
+        shadeFailLogged = false
+        HLog.i(TAG, "shade probe ready: controller=${controller.javaClass.simpleName} " +
+            "state=${state.javaClass.simpleName}")
+        return readShade(state, fields)
+    }
+
+    /** 在组件（或其嵌套的 ReferenceSysUIComponentImpl）的字段里找 shade 控制器 Provider。 */
+    private fun findShadeControllerProvider(comp: Any): Any? {
+        val fs = comp.javaClass.declaredFields
+        fs.firstOrNull { f ->
+            val n = f.name.lowercase()
+            n.contains("notificationshadewindowcontroller") && n.contains("provider")
+        }?.let { f ->
+            val v = runCatching { f.isAccessible = true; f.get(comp) }.getOrNull()
+            if (v != null) return v
+        }
+        val nestedField = fs.firstOrNull { it.name.lowercase().contains("referencesysuicomponentimpl") }
+            ?: return null
+        val nested = runCatching {
+            nestedField.isAccessible = true
+            nestedField.get(comp)
+        }.getOrNull() ?: return null
+        return nested.javaClass.declaredFields.firstOrNull { f ->
+            val n = f.name.lowercase()
+            n.contains("notificationshadewindowcontroller") && n.contains("provider")
+        }?.let { f -> runCatching { f.isAccessible = true; f.get(nested) }.getOrNull() }
+    }
+
+    private fun fieldInHierarchy(cls: Class<*>, name: String): java.lang.reflect.Field {
+        var c: Class<*>? = cls
+        while (c != null) {
+            val f = runCatching { c.getDeclaredField(name) }.getOrNull()
+            if (f != null) {
+                f.isAccessible = true
+                return f
+            }
+            c = c.superclass
+        }
+        throw NoSuchFieldException("$name on ${cls.name}")
+    }
+
+    private fun readShade(state: Any, fs: Array<java.lang.reflect.Field>): Boolean? = runCatching {
+        val controlCenter = fs[0].getBoolean(state)
+        val panel = fs[1].getBoolean(state)
+        val qs = fs[2].getBoolean(state)
+        val shadeOrQs = fs[3].getBoolean(state)
+        val keyguard = fs[4].getBoolean(state)
+        val occluded = fs[5].getBoolean(state)
+        val bouncer = fs[6].getBoolean(state)
+        val blocked = SystemSurfacePolicy.blocksBlankTap(
+            controlCenterExpanded = controlCenter,
+            panelVisible = panel,
+            qsExpanded = qs,
+            shadeOrQsExpanded = shadeOrQs,
+            keyguardShowing = keyguard,
+            keyguardOccluded = occluded,
+            bouncerShowing = bouncer,
+        )
+        if (blocked && HLog.verboseEnabled) {
+            HLog.i(TAG, "blank-tap blocked: controlCenter=$controlCenter panel=$panel qs=$qs " +
+                "shadeOrQs=$shadeOrQs keyguard=$keyguard occluded=$occluded bouncer=$bouncer")
+        }
+        blocked
+    }.getOrElse { shadeFail("read", it) }
+
     // ===== 空白判定 =====
 
     /**
@@ -457,7 +617,9 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         ) {
             val dm0 = android.content.res.Resources.getSystem().displayMetrics
             if (ev.y > dm0.heightPixels * 0.55f) {
-                HLog.i(TAG, "isBlank → false（IME 状态未知 + 下部45%安全阀）")
+                if (HLog.verboseEnabled) {
+                    HLog.i(TAG, "isBlank → false（IME 状态未知 + 下部45%安全阀）")
+                }
                 return false
             }
         }
@@ -468,14 +630,18 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         if (verdict == true && !InsetProbe.imeKnownFresh()) {
             val dm0 = android.content.res.Resources.getSystem().displayMetrics
             if (ev.y > dm0.heightPixels * 0.55f) {
-                HLog.i(TAG, "isBlank → false（无新鲜键盘读数 + 下部45%安全阀）")
+                if (HLog.verboseEnabled) {
+                    HLog.i(TAG, "isBlank → false（无新鲜键盘读数 + 下部45%安全阀）")
+                }
                 return false
             }
         }
         // 软键盘（2026-10-17）：① IME 活动但拿不到高度 ⇒ 直接否决（方向安全）；
         // ② 拿得到高度 ⇒ 命中底部键盘带也否决。两者都与"点在小窗内"同向。
         if (verdict == true && InsetProbe.imeActive && InsetProbe.imeBottomPx <= 0) {
-            HLog.i(TAG, "isBlank → false（IME active，高度未知/忽略 WMShell hidden）")
+            if (HLog.verboseEnabled) {
+                HLog.i(TAG, "isBlank → false（IME active，高度未知/忽略 WMShell hidden）")
+            }
             return false
         }
         if (verdict == true) {
@@ -484,26 +650,32 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
             //  ② ROM 的 `mImeShowing=true` 且我们连矩形都没有——宁可漏一个动作，也不能点键盘时关窗口。
             val romUp = InsetProbe.romImeShowing()
             if (InsetProbe.floatingIme || (romUp == true && ime == null)) {
-                HLog.i(
-                    TAG,
-                    "isBlank → false（键盘起着但区域不可知：floating=${InsetProbe.floatingIme} " +
-                        "romImeShowing=$romUp rect=$ime ⇒ 不动作）"
-                )
+                if (HLog.verboseEnabled) {
+                    HLog.i(
+                        TAG,
+                        "isBlank → false（键盘起着但区域不可知：floating=${InsetProbe.floatingIme} " +
+                            "romImeShowing=$romUp rect=$ime ⇒ 不动作）"
+                    )
+                }
                 return false
             }
             if (ime != null && ime.contains(ev.x.toInt(), ev.y.toInt())) {
-                HLog.i(TAG, "isBlank → false（点在软键盘区域 $ime）")
+                if (HLog.verboseEnabled) {
+                    HLog.i(TAG, "isBlank → false（点在软键盘区域 $ime）")
+                }
                 return false
             }
         }
         // 探针状态一起打出来（自诊断：键盘起着时这两个值决定护栏是否生效——
         // `floating`=insets 帧退化（浮层键盘），`romUp`=ROM 的 mImeShowing；都为 null/false
         // 就说明事件源没装上，那种情况下护栏不可能生效）。
-        HLog.i(TAG, "isBlank pred=$predBlank kernel=$kernelBlank -> $verdict " +
-            "at (${"%.0f".format(ev.x)},${"%.0f".format(ev.y)}) " +
-            "[ime floating=${InsetProbe.floatingIme} romUp=${InsetProbe.romImeShowing()} " +
-            "active=${InsetProbe.imeActive} fresh=${InsetProbe.imeKnownFresh()} " +
-            "src=${InsetProbe.source}]")
+        if (verdict == true || HLog.verboseEnabled) {
+            HLog.i(TAG, "isBlank pred=$predBlank kernel=$kernelBlank -> $verdict " +
+                "at (${"%.0f".format(ev.x)},${"%.0f".format(ev.y)}) " +
+                "[ime floating=${InsetProbe.floatingIme} romUp=${InsetProbe.romImeShowing()} " +
+                "active=${InsetProbe.imeActive} fresh=${InsetProbe.imeKnownFresh()} " +
+                "src=${InsetProbe.source}]")
+        }
         return verdict
     }
 
@@ -776,7 +948,7 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         val rect = InsetProbe.imeRect
         if (rect != null) {
             imeRectCache = rect
-            HLog.i(TAG, "IME 区域=$rect（via ${InsetProbe.source} rect）")
+            if (HLog.verboseEnabled) HLog.i(TAG, "IME 区域=$rect（via ${InsetProbe.source} rect）")
             return imeRectCache
         }
         // 冷启动兜底：键盘在模块初始化**之前**就起着 ⇒ `insetsChanged` 不会来 ⇒ 主动拉一次
@@ -784,20 +956,22 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         val pulled = if (rect == null) InsetProbe.imeRect else null
         if (pulled != null) {
             imeRectCache = pulled
-            HLog.i(TAG, "IME 区域=$pulled（via ${InsetProbe.source} pull）")
+            if (HLog.verboseEnabled) HLog.i(TAG, "IME 区域=$pulled（via ${InsetProbe.source} pull）")
             return imeRectCache
         }
         // 权威"键盘没起" ⇒ 直接判定无可排除区（不再走老路，避免陈旧矩形复活）
         if (InsetProbe.wmShellSaysHidden()) {
             imeRectCache = null
-            HLog.i(TAG, "IME 区域=无（via ${InsetProbe.source} 权威：键盘未显示）")
+            if (HLog.verboseEnabled) {
+                HLog.i(TAG, "IME 区域=无（via ${InsetProbe.source} 权威：键盘未显示）")
+            }
             return null
         }
         val probe = InsetProbe.imeBottomPx
         if (probe > 0) {
             val dm = android.content.res.Resources.getSystem().displayMetrics
             imeRectCache = Rect(0, dm.heightPixels - probe, dm.widthPixels, dm.heightPixels)
-            HLog.i(TAG, "IME 区域=$imeRectCache（via ${InsetProbe.source} band）")
+            if (HLog.verboseEnabled) HLog.i(TAG, "IME 区域=$imeRectCache（via ${InsetProbe.source} band）")
             return imeRectCache
         }
         // 探针诊断（2026-10-17）：`InsetProbe` 内部用的是 android.util.Log，而 OS4 上那些行会被
@@ -805,16 +979,18 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         if (probe != lastProbeLogged || InsetProbe.imeActive != lastActiveLogged) {
             lastProbeLogged = probe
             lastActiveLogged = InsetProbe.imeActive
-            HLog.i(
-                TAG,
-                "imeProbe: band=$probe src=${InsetProbe.source} active=${InsetProbe.imeActive}"
-            )
+            if (HLog.verboseEnabled) {
+                HLog.i(
+                    TAG,
+                    "imeProbe: band=$probe src=${InsetProbe.source} active=${InsetProbe.imeActive}"
+                )
+            }
         }
         // 拿不到高度时的安全判据（2026-10-17）：IME 处于活动状态（有输入焦点）⇒ 由 `isBlank`
         // 直接否决本点按（见其 `InsetProbe.imeActive` 分支）。方向安全（打字时不会想关小窗），
         // 且用的是公开 API `InputMethodManager.isActive()`（active 已在函数开头刷新）。
         if (InsetProbe.imeActive) {
-            HLog.i(TAG, "IME active（拿不到高度）⇒ 本点按不触发动作")
+            if (HLog.verboseEnabled) HLog.i(TAG, "IME active（拿不到高度）⇒ 本点按不触发动作")
             return null
         }
         // 路径 ①：窗口清单（精确矩形；权限/方法缺失时返回 null）
@@ -878,11 +1054,13 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
                 val dm = android.content.res.Resources.getSystem().displayMetrics
                 Rect(0, dm.heightPixels - h, dm.widthPixels, dm.heightPixels)
             }.getOrNull()
-            HLog.i(
-                TAG,
-                "IME 区域=" + (imeRectCache?.toString()
-                    ?: "不可用（①${imeProbeErr ?: "null"} ②getInputMethodWindowVisibleHeight 失败）")
-            )
+            if (HLog.verboseEnabled) {
+                HLog.i(
+                    TAG,
+                    "IME 区域=" + (imeRectCache?.toString()
+                        ?: "不可用（①${imeProbeErr ?: "null"} ②getInputMethodWindowVisibleHeight 失败）")
+                )
+            }
         }
         return imeRectCache
     }

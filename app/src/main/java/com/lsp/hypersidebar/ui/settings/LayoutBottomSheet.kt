@@ -350,9 +350,10 @@ private fun LayoutSheetContent(
                 // 推 persist.hsb.corner.supp，native 1 秒缓存读。
                 // 「导航栏隐藏时也能滑」= 兜底：导航栏隐藏（全屏/游戏）时 launcher 的
                 // NavStubView 不在，改由 SystemUI 输入面识别底角斜滑再转发 :ui。
-                // OS4 上隐藏的真正理由（2026-11-10 更正，勿再写成"空操作"）：
-                //  ① cornerPilferHost 早退在本机**不会触发**——AIDL 类只定义在 securitycenter
-                //     的 dex，SystemUI 进程解析不到（真机实证：没有任何 judge= 日志）；
+                // OS4 上隐藏的真正理由（2026-11-10 取证，2026-11-12 更正）：
+                //  ① spy 现在用 Os4Marker.romIsOs4() 判定 OS4，并让兜底门在 OS4 **真的早退**
+                //     （旧实现用 AIDL 类存在性，该类只在 securitycenter dex ⇒ 早退从不触发）；
+                //     所以隐藏该开关在 OS4 是真正的空操作，不会再出现"打开=武装 2a"；
                 //  ② 打开该开关会真的武装 2a 抢流，而 8602 起 2a pilfer 会触发
                 //     request_redirect 收回流（CornerPilferPolicy 已按版本禁掉）⇒ 打开即坏；
                 //  ③ 预 8602 的 OS4 上开它只是与 b2 转发路径重复（双触发风险，2026-10-17）。

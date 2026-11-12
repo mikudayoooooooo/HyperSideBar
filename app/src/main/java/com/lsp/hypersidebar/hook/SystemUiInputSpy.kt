@@ -9,17 +9,18 @@ import com.lsp.hypersidebar.hook.CornerTrigger
 import com.lsp.hypersidebar.prefs.PropNames
 import com.lsp.hypersidebar.util.HLog
 import com.lsp.hypersidebar.util.SysProps
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
- * B1 spy 骨架（os4-trigger-final-plan §6，log-only 零抢占）：
+ * B2 输入观察/转发通道（os4-trigger-final-plan §6）：
  *
  * B 路线的输入侧地基。OS4 桌面 Rust 手势区持有边缘输入所有权，:ui 把手窗口被饿死
  * （os4-trigger-input-ownership-report §2.3：4 份导出零 `touch:`）——恢复 OS3 触发
  * 必须在能拿到全屏输入的进程里自建观察点。SystemUI uid=1000 且自家
  * EdgeBackGestureHandler 就用同族 API（monitorInput spy + 命中后 pilfer），机制有
- * 平台级先例。本阶段**只观测**：
+ * 平台级先例。monitor 本身只观察（原始目标照常收事件）；pilfer 只由 2a/空白接管显式发起：
  *
- *  - monitorInput spy = 观察副本，原始目标照常收事件，系统行为零变化（机制保证）；
  *  - 每事件打点走 [HLog.verboseEnabled] 门控（60~120Hz MOVE 会刷爆环形缓冲）；
  *  - 计数器恒开：带内 DOWN / 底部手势带 DOWN（B2 排除清单的前置证据）。
  *
@@ -30,7 +31,18 @@ import com.lsp.hypersidebar.util.SysProps
  * monitor 注册进 dispatcher 但**永久聋**（dumpsys 可见、零事件）；SystemUI 完全初始化后
  * 建的 monitor 事件正常。⇒ 不在 attach 时刻建：+5s 首建 + 15s 观察窗自愈（窗口内零 DOWN
  * =dispose 重建，直到 armed）。dispose 必须在 owner Looper 执行（Android 17 强制）——
- * 本对象全部活动都在主线程 Handler 上。
+ * 本对象的 monitor 活动全部在 [inputHandler] 的 Looper 上。
+ *
+ * **线程模型（2026-11-12，issue #12）**：
+ *  - `hsb-spy-input`：InputEventReceiver 回调 + 流状态机（tracks/2a/合流/广播入队）；
+ *  - SystemUI 主线程：空白点击/接管判定（[blankTapDispatch] → [maybeBlankTap]），
+ *    `GestureTakeover`/`BlankTapDetector`/`blankAtDown` 只在这一条线程访问；
+ *  - `hsb-spy-send`：把 [pendingStreams] 排空成 `sendBroadcast`（输入回调稳态零 binder）。
+ *  消费方门控：[ensureConsumer] 每 2s 在主线程求值一次（`SpyInputPolicy.needed`），
+ *  没有消费方就 dispose monitor——OS2/3 全默认时本进程**不存在**任何 spy monitor。
+ *
+ * **归属**：[inputThread]/[sendThread]、pilfer 接收器、monitor/receiver 均由本对象创建；
+ * [disposeForIdle]（无消费方）与 [releaseForReload]（热重载）负责释放。
  */
 object SystemUiInputSpy {
 
@@ -47,6 +59,33 @@ object SystemUiInputSpy {
     private var appContext: android.content.Context? = null
     private val mainHandler = android.os.Handler(Looper.getMainLooper())
 
+    /** 热重载/空闲释放后为 true；所有自续排的循环看到它就停。 */
+    @Volatile private var released = false
+    /** 已打过 "spy idle" 日志（每段空闲只打一次）。 */
+    @Volatile private var idleLogged = false
+    /** 有一次 build 在排队/重试中（防止 ensureConsumer 重复投递）。 */
+    @Volatile private var buildInFlight = false
+    /** 消费方轮询循环已启动。 */
+    @Volatile private var consumerLoop = false
+
+    /** 专用输入线程：receiver + 流状态机（主线程繁忙不再阻塞 monitor ack）。 */
+    @Volatile private var inputThread: android.os.HandlerThread? = null
+    @Volatile private var inputHandler: android.os.Handler? = null
+    /** 专用广播线程：sendBroadcast 不再占输入回调/主线程。 */
+    @Volatile private var sendThread: android.os.HandlerThread? = null
+    @Volatile private var sendHandler: android.os.Handler? = null
+    /**
+     * 兜底：个别 ROM 上 `InputEventReceiver(channel, 非主 Looper)` 抛异常（计划 §Assumptions）。
+     * 置 true 后 receiver 回到主线程；这将重新引入"主线程繁忙 → monitor ack 超时"的部分风险，
+     * 日志会明确标注（`receiver thread=main (fallback)`）。
+     */
+    @Volatile private var receiverOnMain = false
+    /** pilferPointers 与 dispose 互斥（2a 输入线程 / 空白接管主线程 / dispose 输入线程）。 */
+    private val pilferLock = Any()
+
+    /** 消费方重查间隔（设置页改动/前台形态变化 ≤2s 内反映到 monitor 启停）。 */
+    private const val CONSUMER_RECHECK_MS = 2_000L
+
     /**
      * pilfer 指令接收器 + 注册用的原始 ctx。
      *
@@ -57,6 +96,8 @@ object SystemUiInputSpy {
      */
     @Volatile private var pilferReceiver: android.content.BroadcastReceiver? = null
     @Volatile private var pilferCtx: android.content.Context? = null
+    /** 兜底路径：ROM 拒绝带 Handler 的注册，receiver 落在主线程 ⇒ tracks 访问加锁。 */
+    @Volatile private var pilferReceiverOnMain = false
 
     /** 构建失败重试（构造抛异常时；1004 教训：attach 极早期 context/display 未就绪） */
     private const val MAX_ATTEMPTS = 12
@@ -117,57 +158,181 @@ object SystemUiInputSpy {
         modulePrefs: android.content.SharedPreferences? = null,
     ) {
         if (started || gaveUp) return
+        released = false
         if (prefs == null) prefs = modulePrefs
         // 存原始 context（attach 传的是 base ContextImpl）：1004 实测 applicationContext
         // 在 Application.attach 时刻仍为 null（LoadedApk 未挂完），存它导致 ctx 路径全程失联
         if (appContext == null) appContext = context
-        // 1005 定案：attach 时刻（+0.3s）建的 monitor 永久聋 ⇒ 延迟首建（自愈循环起点）
-        mainHandler.postDelayed({ attemptStart() }, FIRST_BUILD_DELAY_MS)
+        // 1005 定案：attach 时刻（+0.3s）建的 monitor 永久聋 ⇒ 延迟首建（自愈循环起点）。
+        // 2026-11-12：首建前先过消费方门（OS2/3 全默认 ⇒ 连 monitor 都不存在，issue #12）。
+        if (!consumerLoop) {
+            consumerLoop = true
+            mainHandler.postDelayed({ ensureConsumer() }, FIRST_BUILD_DELAY_MS)
+        }
+    }
+
+    /** 模块总闸（同 `LayoutDefaults.ENABLED` 语义；读失败按开）。 */
+    private fun moduleEnabled(): Boolean =
+        runCatching { prefs?.getBoolean(com.lsp.hypersidebar.prefs.PrefKeys.ENABLED, true) ?: true }
+            .getOrDefault(true)
+
+    /** 空白点击是否需要 monitor：动作层已装入 + 设置开启（与 [maybeBlankTap] 同键）。 */
+    private fun blankTapActive(): Boolean =
+        FreeformBlankTapHook.current != null && runCatching {
+            prefs?.getBoolean(
+                com.lsp.hypersidebar.prefs.PrefKeys.FREEFORM_BLANK_TAP_ENABLED,
+                com.lsp.hypersidebar.prefs.LayoutDefaults.FREEFORM_BLANK_TAP_ENABLED,
+            ) ?: false
+        }.getOrDefault(false)
+
+    /**
+     * 消费方轮询（主线程，2s 一次，自续排）：
+     * 没有消费方 ⇒ dispose 现有 monitor（OS2/3 全默认时完全不建）；
+     * 有消费方且未建 ⇒ 投递一次 build（线程首次懒建）。
+     */
+    private fun ensureConsumer() {
+        if (released || gaveUp) {
+            consumerLoop = false
+            return
+        }
+        val m = moduleEnabled()
+        val os4 = Os4Marker.romIsOs4()
+        val cs = cornerSwipeEnabled()
+        val fb = cornerFallbackActive()
+        val bt = blankTapActive()
+        val need = SpyInputPolicy.needed(m, os4, cs, fb, bt)
+        if (!need && started) {
+            inputHandler?.post { disposeForIdle() }
+        } else if (need && !started) {
+            if (!buildInFlight) {
+                idleLogged = false
+                buildInFlight = true
+                HLog.i(TAG, "spy consumer present ⇒ build (os4=$os4 module=$m " +
+                    "cornerSwipe=$cs fallback=$fb blankTap=$bt)")
+                ensureThreads()
+                val hIn = inputHandler
+                if (hIn == null) {
+                    buildInFlight = false
+                    HLog.w(TAG, "spy build skipped: input thread failed to start")
+                } else {
+                    hIn.post { attemptStart() }
+                }
+            }
+        } else if (!need && !idleLogged) {
+            idleLogged = true
+            HLog.i(TAG, "spy idle: no consumer (os4=$os4 module=$m cornerSwipe=$cs " +
+                "fallback=$fb blankTap=$bt)")
+        }
+        mainHandler.postDelayed({ ensureConsumer() }, CONSUMER_RECHECK_MS)
+    }
+
+    /** 建输入线程（幂等；只由 ensureConsumer 在需要 monitor 时调用）。 */
+    @Synchronized
+    private fun ensureThreads() {
+        if (inputThread?.isAlive == true) return
+        val t = android.os.HandlerThread("hsb-spy-input").apply { start() }
+        inputThread = t
+        // looper 访问会等 looper 就绪（HandlerThread 契约），此后可安全 post。
+        inputHandler = android.os.Handler(t.looper)
+    }
+
+    /** 建发送线程（只在 attemptStart 里调；幂等）。 */
+    @Synchronized
+    private fun ensureSendThread() {
+        if (sendThread?.isAlive == true) return
+        val t = android.os.HandlerThread("hsb-spy-send").apply { start() }
+        sendThread = t
+        sendHandler = android.os.Handler(t.looper)
+    }
+
+    /** 无消费方：在输入线程上释放 monitor，并顺手关掉仅它需要的发送线程。 */
+    private fun disposeForIdle() {
+        if (!started) return
+        inputHandler?.removeCallbacksAndMessages(null)
+        disposeSpy()
+        started = false
+        armed = false
+        buildInFlight = false
+        disposeSender()
+        HLog.i(TAG, "spy disposed: no consumer")
     }
 
     private fun attemptStart() {
-        if (started || gaveUp) return
+        if (released || started || gaveUp) return
+        // 排队期间消费方可能又被关掉（2s 轮询先看到 need=true，设置页随后关闭功能）。
+        val need = SpyInputPolicy.needed(
+            moduleEnabled(),
+            Os4Marker.romIsOs4(),
+            cornerSwipeEnabled(),
+            cornerFallbackActive(),
+            blankTapActive(),
+        )
+        if (!need) {
+            buildInFlight = false
+            return
+        }
         attempts++
         runCatching {
+            ensureSendThread()
+            ensurePilferReceiver()
             // 2026-10-18 OS3 真机实锤：dispose 后**同名**重建的 monitor 收不到任何事件
             // （dispatcher 侧同名重注册不重新挂接；OS4 无此问题）⇒ 聋循环永远聋。
             // 改为每次 build 用唯一名，绕开重注册冲突。
             val channel = openSpyChannel(appContext, "hypersidebar-spy-$attempts")
                 ?: error("no usable monitorInput candidate")
             channelRef = channel
-            receiverRef = object : InputEventReceiver(channel, Looper.getMainLooper()) {
-                override fun onInputEvent(event: InputEvent) {
-                    try {
-                        if (event is MotionEvent) {
-                            // 尺寸逐事件现读（构建时捕获在旋转后全部失效——1005 16:41 导出
-                            // 实锤：横屏 x=2306 用竖屏 w=1080 判带恒拒 ⇒ 横屏无法唤出）
-                            val dm = android.content.res.Resources.getSystem().displayMetrics
-                            onMotion(event, dm.widthPixels, dm.heightPixels)
+            val h = inputHandler ?: error("no input handler")
+            receiverRef = runCatching {
+                object : InputEventReceiver(
+                    channel,
+                    if (receiverOnMain) Looper.getMainLooper() else h.looper
+                ) {
+                    override fun onInputEvent(event: InputEvent) {
+                        try {
+                            if (event is MotionEvent) {
+                                // 尺寸逐事件现读（构建时捕获在旋转后全部失效——1005 16:41 导出
+                                // 实锤：横屏 x=2306 用竖屏 w=1080 判带恒拒 ⇒ 横屏无法唤出）
+                                val dm = android.content.res.Resources.getSystem().displayMetrics
+                                onMotion(event, dm.widthPixels, dm.heightPixels)
+                            }
+                        } finally {
+                            finishInputEvent(event, false)
                         }
-                    } finally {
-                        finishInputEvent(event, false)
                     }
                 }
+            }.getOrElse { e ->
+                if (!receiverOnMain) {
+                    receiverOnMain = true
+                    HLog.w(TAG, "receiver on input looper failed (${e.message}) ⇒ fallback main looper")
+                }
+                throw e
             }
             started = true
+            buildInFlight = false
             val dm0 = android.content.res.Resources.getSystem().displayMetrics
-            HLog.i(TAG, "spy built: display ${dm0.widthPixels}x${dm0.heightPixels} (observe-only, build #$attempts" +
-                "${if (deafRebuilds > 0) ", deaf rebuild #$deafRebuilds" else ""})")
+            HLog.i(TAG, "spy built: display ${dm0.widthPixels}x${dm0.heightPixels} (build #$attempts" +
+                "${if (deafRebuilds > 0) ", deaf rebuild #$deafRebuilds" else ""}" +
+                ", receiver thread=${if (receiverOnMain) "main (fallback)" else Thread.currentThread().name})")
             // 门控快照（1007 导出 162021 教训：角落 DOWN 被门静默拒=导出无法判读是哪个门关了）。
             // sys prefs=启动快照，本行即本进程全部转发决策的依据
             HLog.i(TAG, "forward gates: cornerSwipe=${cornerSwipeEnabled()} " +
                 "corner=${com.lsp.hypersidebar.hook.GestureThresholds.CORNER_BAND_DP}dp/" +
                 "${(com.lsp.hypersidebar.hook.GestureThresholds.CORNER_WIDTH_RATIO * 100).toInt()}% " +
                 "band=${bandWidthDp()}dp/${bandHeightPercent()}%+${bandPositionPercent()}%")
+            // 2a 判据快照（2026-11-12）：OS4 上用 romIsOs4 代理；无需做角手势即可确认分档生效。
+            val prop = runCatching { SysProps.get(PropNames.CORNER_SYSJUDGE).trim() }.getOrDefault("")
+            HLog.i(TAG, "2a judge: os4=$os4Host " +
+                "policy=${if (os4Host) "decideSysJudge" else "fallback"} sysjudgeProp=$prop")
             // 聋 monitor 观察窗：窗口内零 DOWN ⇒ dispose 重建（时序根因的自愈收口）
-            mainHandler.postDelayed({ deafCheck() }, DEAF_CHECK_WINDOW_MS)
+            h.postDelayed({ deafCheck() }, DEAF_CHECK_WINDOW_MS)
         }.onFailure {
             if (attempts >= MAX_ATTEMPTS) {
                 gaveUp = true
+                buildInFlight = false
                 HLog.w(TAG, "spy gave up after $attempts attempts (inert): ${it.message}")
             } else {
                 HLog.i(TAG, "spy attempt #$attempts failed: ${it.message} — retry in ${RETRY_MS}ms")
-                mainHandler.postDelayed({ attemptStart() }, RETRY_MS)
+                inputHandler?.postDelayed({ attemptStart() }, RETRY_MS)
             }
         }
     }
@@ -200,21 +365,45 @@ object SystemUiInputSpy {
         }
         disposeSpy()
         started = false
+        buildInFlight = true
         attemptStart()
     }
 
     /** dispose 全套（重建/放弃前调用，防 monitor 泄漏——0501~0505 期间 dumpsys 已漏数个）。
-     *  InputMonitor.dispose 经反射（@hide）；receiver.dispose 在 owner Looper（本对象全部
-     *  活动都在主线程 Handler 上=合规）。任一步失败只记日志继续。 */
+     *  InputMonitor.dispose 经反射（@hide）；receiver.dispose 必须在 owner Looper（本对象
+     *  = [inputHandler] 的线程）执行。与 [pilferPointersNow] 共用 [pilferLock]：2a 在输入
+     *  线程、空白接管在主线程、dispose 在输入线程，碰同一个 monitor 必须串行。
+     *  任一步失败只记日志继续。 */
     private fun disposeSpy() {
-        runCatching { receiverRef?.dispose() }
-            .onFailure { HLog.w(TAG, "receiver dispose failed: ${it.message}") }
-        runCatching {
-            monitorRef?.let { m -> m.javaClass.getMethod("dispose").invoke(m) }
-        }.onFailure { HLog.w(TAG, "monitor dispose failed: ${it.message}") }
-        receiverRef = null
-        channelRef = null
-        monitorRef = null
+        synchronized(pilferLock) {
+            val r = receiverRef
+            if (r != null) {
+                if (receiverOnMain && Looper.myLooper() !== Looper.getMainLooper()) {
+                    // fallback 路径：receiver 的 owner looper 是主线程，dispose 必须在那里执行。
+                    val latch = CountDownLatch(1)
+                    val posted = mainHandler.post {
+                        try {
+                            runCatching { r.dispose() }
+                                .onFailure { HLog.w(TAG, "receiver dispose failed: ${it.message}") }
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+                    if (!posted || !runCatching { latch.await(1, TimeUnit.SECONDS) }.getOrDefault(false)) {
+                        HLog.w(TAG, "receiver dispose on main timed out/not posted")
+                    }
+                } else {
+                    runCatching { r.dispose() }
+                        .onFailure { HLog.w(TAG, "receiver dispose failed: ${it.message}") }
+                }
+            }
+            runCatching {
+                monitorRef?.let { m -> m.javaClass.getMethod("dispose").invoke(m) }
+            }.onFailure { HLog.w(TAG, "monitor dispose failed: ${it.message}") }
+            receiverRef = null
+            channelRef = null
+            monitorRef = null
+        }
     }
 
     /**
@@ -339,11 +528,11 @@ object SystemUiInputSpy {
     // 为什么必须有它：monitor 通道只观察不消费 ⇒ 空白点必然穿到背后 app。要吞掉就必须在 DOWN
     // 抢流，而抢流不可回滚 ⇒ 抬手时**必然二选一**：动作命中=消费（丢弃记录）；否则=重放
     // （把整条手势 injectInputEvent 还给系统）。只在"小窗外 ≤ TAKEOVER_RING_DP 那一圈"抢。
-    /** 本手势是否已为"点空白"抢过流（独立于角区的 sysPilfered，互不干扰） */
-    private var takeoverPilfered = false
+    /** 本手势是否已为"点空白"抢过流（独立于角区的 sysPilfered，互不干扰；主线程状态）。 */
+    @Volatile private var takeoverPilfered = false
 
     /** 交还后转入实时转发：每个后续事件到达即注入（解决"拖动被重放成一次点击"）。 */
-    private var takeoverForwarding = false
+    @Volatile private var takeoverForwarding = false
     /** 本手势已注入的事件数（诊断）。 */
     private var takeoverInjected = 0
     /**
@@ -381,6 +570,13 @@ object SystemUiInputSpy {
             injectedFingerprints.put(fingerprint(dt, et), true)
         }
     }
+
+    /** 注入失败时撤销预登记（否则这条真实事件会被当成回声吞掉）。 */
+    private fun forgetInjected(dt: Long, et: Long) {
+        synchronized(injectedFingerprints) {
+            injectedFingerprints.remove(fingerprint(dt, et))
+        }
+    }
     /** 重放失败计数（自检导出用） */
     @Volatile var takeoverReplayFail = 0L; private set
     private val takeover = GestureTakeover()
@@ -390,6 +586,21 @@ object SystemUiInputSpy {
     /** 合流窗内被扣下的最新 MOVE（框架回收 ev 前的副本；UP/CANCEL 前冲刷保序） */
     private var pendingMove: MotionEvent? = null
     private var lastMoveFwdEventTime = 0L
+
+    // ===== 异步广播（2026-11-12，issue #12）============================================
+    // 输入回调里绝不能 sendBroadcast（SystemUI 主线程繁忙时 monitor 无法 ack DOWN ⇒ ANR）。
+    // 输入线程只入队，hsb-spy-send 线程排空；MOVE 在积压超过上限时丢弃（DOWN/UP/CANCEL 永远入队）。
+    private const val MAX_PENDING_STREAMS = 32
+    private class PendingStream(
+        val ev: MotionEvent,
+        val landscape: Boolean,
+        val zone: Int,
+        val sysPilfered: Boolean,
+    )
+    private val pendingStreams = java.util.ArrayDeque<PendingStream>()
+    /** 本流入队/丢弃计数（verbose 诊断）。 */
+    private var streamSent = 0
+    private var streamDropped = 0
 
     // ===== 2a：底角判定搬进 SystemUI（与 InputMonitor 同进程）========================
     //
@@ -422,24 +633,18 @@ object SystemUiInputSpy {
      * OS2 的扇形是 **launcher 自己**（`EdgeGestureHook` 走 ROM 的 NavStubView 流）起的，
      * 而 `RelayGestureSink` 的 `b2Enabled()` 在 OS2 为 false（转发被丢弃）⇒ 一旦 spy 抢流，
      * launcher 收不到 MOVE（实测 `EdgeGesture: c#3 UP/CANCEL … shown=false`）、转发侧又
-     * 无人消费 ⇒ **底角彻底不出**。判据与 `TurboLayout.isOs4Sidebar` 同源：AIDL 稳定名
-     * `com.miui.sidebar.ISidebarOverlay` 存在即 OS4 系（OS2/OS3 没有此类）。
+     * 无人消费 ⇒ **底角彻底不出**。
      *
-     * 【2026-11-10 真机实证·重要】该类只定义在 MIUISecurityCenter.apk（classes3.dex），
-     * **SystemUI 的类加载器解析不到**（boot jar / MiuiSystemUI.apk / MiuiHome.apk 全量按
-     * dex 内容扫描均无命中）⇒ 在本进程里 cornerPilferHost 实际恒为 false，
-     * 日志佐证：8602 两轮抓流、十几次角手势全程没有一条 `sys-corner DOWN … judge=` 行。
-     * 所以**不要指望本早退保护 OS4**；OS4 上"兜底开关不能开"的保护实际来自：
-     * ① 设置页在 OS4 隐藏该开关（LayoutBottomSheet）；② 2a 分档
-     * （`CornerPilferPolicy.decideSysJudge`：8602 起未显式置非 "0" 即关）。
+     * 【2026-11-12 修正】原判据是 AIDL `com.miui.sidebar.ISidebarOverlay` 存在性，但该类
+     * 只定义在 MIUISecurityCenter.apk（classes3.dex，2026-11-10 全 dex 扫描实锤），
+     * **SystemUI 的类加载器解析不到** ⇒ 在本进程恒 false，三处 OS4 行为（2a 分档 /
+     * FAST 确认帧 / 兜底早退）全部误走 OS2/3 分支。改用 [Os4Marker.romIsOs4()]
+     * （`Build.VERSION.INCREMENTAL` 前缀 `OS4.`，与设置页/`FreeformBlankTapHook` 同源）。
+     *
+     * 注意这不是"底角功能本身"：8602+ 的正解仍是**不 pilfer**（native
+     * `should_handle_event` 抑制保证独占），2a 分档默认仍关；见 [CornerPilferPolicy]。
      */
-    private val cornerPilferHost: Boolean = runCatching {
-        Class.forName(
-            Os4Marker.SIDEBAR_ITF, false,
-            io.github.kyuubiran.ezxhelper.core.ClassLoaderProvider.safeClassLoader
-        )
-        true
-    }.getOrDefault(false)
+    private val os4Host: Boolean = Os4Marker.romIsOs4()
 
     /** 2a 开关 1s TTL 缓存：角区流每个 MOVE 都要过这里，反射+属性读不能逐事件做。 */
     @Volatile private var sysJudgeCacheAt = 0L
@@ -453,15 +658,13 @@ object SystemUiInputSpy {
      * 这种时刻准备的；底栏在屏时**不接管**（那时 launcher/系统手势链路本来就在）。
      * 可见性来自 `InsetProbe` 的 SystemUI 视图 insets（显示级）；未知 ⇒ 不接管。
      *
-     * 【2026-11-10 更正】原文写"OS4（cornerPilferHost）……本开关在 OS4 上是空操作"——
-     * 该早退在本进程实际**从不触发**（见 cornerPilferHost 的真机实证：AIDL 类只在
-     * securitycenter dex）。也就是说 OS4 上打开这个开关**不是空操作**：它会真的在
-     * SystemUI 侧武装 2a 抢流，而 8602 起 2a pilfer 会触发 `request_redirect` 收回流
-     * （CornerPilferPolicy 已按版本禁掉）⇒ 打开即把角滑弄坏。保护改由设置页在 OS4
-     * 隐藏该开关 + 2a 分档承担；此处保留原语义（OS2/OS3 的兜底仍要给三键用户用）。
+     * 【2026-11-12 更正】OS4 用 [os4Host] 早退：兜底开关在 OS4 是**真正的空操作**
+     * （设置页本就隐藏它；早退再兜一层，防止历史遗留 pref + 底栏隐藏误武装 2a，
+     * 而 8602 起 2a pilfer 会触发 `request_redirect` 收回流 ⇒ 角滑"闪一下消失"）。
+     * OS2/OS3 语义不变：用户显式开启 + 底栏收起才武装兜底，给三键/全屏用户用。
      */
     private fun cornerFallbackActive(): Boolean {
-        if (cornerPilferHost) return false
+        if (os4Host) return false
         val p = prefs ?: return false
         return runCatching {
             com.lsp.hypersidebar.prefs.SettingsRepository(p).cornerSpyFallbackEnabled() &&
@@ -494,9 +697,9 @@ object SystemUiInputSpy {
     private fun sysJudgeEnabled(): Boolean {
         val now = android.os.SystemClock.uptimeMillis()
         if (now - sysJudgeCacheAt > 1_000L) {
-            // OS4：显式 '0' 才关；空/异常 = 开（2a 是当前要验证的路径）。
+            // OS4：走 decideSysJudge 分档（8602+ 默认关、<8602/读不到开；显式 prop 覆盖）。
             // OS2/3：只认"底角斜滑兜底"开关（读 prefs + Secure.navigation_mode，1s 一次足够）
-            sysJudgeCacheVal = if (cornerPilferHost) {
+            sysJudgeCacheVal = if (os4Host) {
                 // 2a 分档与①同源（CornerPilferPolicy）：8602 起 2a 的 pilfer 同样会被
                 // launcher request_redirect 收回；显式属性非 "0" 仍可排障开启。
                 CornerPilferPolicy.decideSysJudge(
@@ -529,7 +732,7 @@ object SystemUiInputSpy {
             abandonExtraDeg = gt.CORNER_ABANDON_EXTRA_DEG,
             // OS4（有竞争、Rust 侧 10-30ms 就认领）= 单帧；OS2/3 兜底路径没有竞争方，
             // 仍用多帧一致性防误触（见 CORNER_CONFIRM_FRAMES 注释）
-            confirmFrames = if (cornerPilferHost) gt.CORNER_CONFIRM_FRAMES_FAST else gt.CORNER_CONFIRM_FRAMES,
+            confirmFrames = if (os4Host) gt.CORNER_CONFIRM_FRAMES_FAST else gt.CORNER_CONFIRM_FRAMES,
         )
     }
 
@@ -554,12 +757,12 @@ object SystemUiInputSpy {
      * candidate ctx 与 global 两条挂接路径，绑定任一赋值点都会漏掉另一条）。
      * `monitorRef` 为 null（dispose 后）⇒ false，与现状一致。
      */
-    private fun pilferPointersNow(): Boolean {
+    private fun pilferPointersNow(): Boolean = synchronized(pilferLock) {
         val m = pilferMethod ?: monitorRef?.let { r ->
             runCatching { r.javaClass.getMethod("pilferPointers") }.getOrNull()
                 ?.also { pilferMethod = it }
-        } ?: return false
-        return runCatching { m.invoke(monitorRef) }.isSuccess
+        } ?: return@synchronized false
+        runCatching { m.invoke(monitorRef) }.isSuccess
     }
 
     /** `injectInputEvent(InputEvent, int)` 的 Method（懒解析一次；live-forward 每事件都要用）。 */
@@ -723,10 +926,15 @@ object SystemUiInputSpy {
         for (s in samples) {
             val e = MotionEvent.obtain(snap.downTime, s.eventTime, s.action, s.x, s.y, s.metaState)
             e.source = s.source
+            // 2026-11-12：接收器已移到 hsb-spy-input 线程，注入回显可能先于 invoke 返回
+            // 到达 monitor ⇒ 必须先登记指纹，失败再撤销（否则回声成环，见字段注释）。
+            rememberInjected(snap.downTime, s.eventTime)
             val r = runCatching { inject.invoke(im, e, mode) as? Boolean }
             e.recycle()
-            if (r.isFailure || r.getOrNull() != true) break
-            rememberInjected(snap.downTime, s.eventTime)
+            if (r.isFailure || r.getOrNull() != true) {
+                forgetInjected(snap.downTime, s.eventTime)
+                break
+            }
             n++
         }
         return n
@@ -761,7 +969,9 @@ object SystemUiInputSpy {
             return
         }
         val plan = takeover.plan(snap)
-        val n = injectSamples(snap, plan, wait = true)
+        // 2026-11-12：WAIT_FOR_FINISH 会在调用线程上等输入分发完成；这段现在跑在主线程，
+        // 正是要消除的阻塞。顺序由同一 InputManager 的调用序列保证（ASYNC 仍按序入队）。
+        val n = injectSamples(snap, plan, wait = false)
         takeover.clear()
         if (n == 0 && plan.isNotEmpty()) {
             takeoverFailStreak++
@@ -796,12 +1006,14 @@ object SystemUiInputSpy {
             val m = injectMethodOf(im) ?: return
             val copy = MotionEvent.obtain(ev)
             copy.source = ev.source
+            // 同上：先登记再注入，失败撤销（回显可能先到 hsb-spy-input 线程）。
+            rememberInjected(ev.downTime, ev.eventTime)
             val ok = m.invoke(im, copy, 0) as? Boolean == true
             copy.recycle()
             if (ok) {
-                rememberInjected(ev.downTime, ev.eventTime)
                 takeoverInjected++
             } else {
+                forgetInjected(ev.downTime, ev.eventTime)
                 HLog.w(TAG, "takeover live inject rejected (a=${ev.actionMasked})")
             }
         }.onFailure { HLog.w(TAG, "takeover live inject failed: ${it.message}") }
@@ -832,68 +1044,114 @@ object SystemUiInputSpy {
         // 旧代注册重叠时，**不允许**出现第二个接收器（pilfer 会执行两遍）。
         if (pilferReceiver != null) return
         pilferCtx = ctx
-        runCatching {
-            // 直接用传入的原始 ctx 注册：attach 时刻 applicationContext=null
-            //（1005 三犯——start/sink 同款教训，全部收敛为原始 ctx）
-            val recv = object : android.content.BroadcastReceiver() {
-                override fun onReceive(c: android.content.Context, intent: android.content.Intent) {
-                    // 全链留痕（低频，不会被 MOVE 刷掉）：token/身份/pilfer 结果都可判读
-                    if (!com.lsp.hypersidebar.util.RelayToken.verifyFan(
-                            intent, com.lsp.hypersidebar.util.RelayToken.read(modulePrefs)
-                        )
-                    ) {
-                        HLog.w(TAG, "pilfer command rejected: token mismatch")
-                        return
-                    }
-                    val dt = intent.getLongExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_DOWN_TIME, 0L)
-                    val dev = intent.getIntExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_DEVICE_ID, -1)
-                    val src = intent.getIntExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_SOURCE, 0)
-                    val ef = intent.getIntExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_EDGE_FLAGS, 0)
-                    val pid = intent.getIntExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_POINTER_ID, 0)
-                    // 五要素全匹配才碰流（MiuiBackGestureHook accepted-DOWN 令牌模型；
-                    // 不匹配=完全不碰——pilfer 不可回滚）。2026-10-17：身份按 downTime 归并。
-                    val tr = tracks[dt]
-                    val matched = tr != null && tr.deviceId == dev &&
-                        tr.source == src && tr.edgeFlags == ef && tr.pointerId == pid
-                    if (!matched) {
-                        HLog.w(TAG, "pilfer identity mismatch: req(dt=$dt,dev=$dev,src=$src,ef=$ef,pid=$pid) " +
-                            "cur(track=${if (tr == null) "gone" else "dev=${tr.deviceId},src=${tr.source},ef=${tr.edgeFlags},pid=${tr.pointerId}"})")
-                        return
-                    }
-                    runCatching {
-                        if (pilferPointersNow()) {
-                            HLog.i(TAG, "pilfered stream dt=$dt")
-                        }
-                    }.onFailure { HLog.w(TAG, "pilferPointers failed: ${it.message}") }
+        // 2026-11-12：注册也挪到输入线程（receiver 与 tracks/pilferPointersNow 同线程，
+        // 不再需要锁）。此刻线程可能还没建（attach 早于首建）⇒ 留待 attemptStart。
+        val h = inputHandler
+        if (h != null) h.post { ensurePilferReceiver() }
+    }
+
+    /**
+     * 在输入线程注册 pilfer 接收器（幂等；只在确实需要 monitor 时调用）。
+     * receiver 与 `tracks`/`pilferPointersNow` 同线程 ⇒ 正常路径无锁。
+     *
+     * 兜底：ROM 若拒绝 `registerReceiver(..., handler, RECEIVER_NOT_EXPORTED)` 重载，
+     * 退回主线程注册（receiver 会在主线程回调）⇒ 置 [pilferReceiverOnMain]，
+     * 所有 `tracks` 访问改走 synchronized 包装（见 [tracksGet]/[tracksPut]）。
+     */
+    private fun ensurePilferReceiver() {
+        if (pilferReceiver != null) return
+        val ctx = pilferCtx ?: return
+        val h = inputHandler ?: return
+        // 直接用传入的原始 ctx 注册：attach 时刻 applicationContext=null
+        //（1005 三犯——start/sink 同款教训，全部收敛为原始 ctx）
+        val recv = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context, intent: android.content.Intent) {
+                // 全链留痕（低频，不会被 MOVE 刷掉）：token/身份/pilfer 结果都可判读
+                if (!com.lsp.hypersidebar.util.RelayToken.verifyFan(
+                        intent, prefs?.let { com.lsp.hypersidebar.util.RelayToken.read(it) }
+                    )
+                ) {
+                    HLog.w(TAG, "pilfer command rejected: token mismatch")
+                    return
                 }
+                val dt = intent.getLongExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_DOWN_TIME, 0L)
+                val dev = intent.getIntExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_DEVICE_ID, -1)
+                val src = intent.getIntExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_SOURCE, 0)
+                val ef = intent.getIntExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_EDGE_FLAGS, 0)
+                val pid = intent.getIntExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_POINTER_ID, 0)
+                // 五要素全匹配才碰流（MiuiBackGestureHook accepted-DOWN 令牌模型；
+                // 不匹配=完全不碰——pilfer 不可回滚）。2026-10-17：身份按 downTime 归并。
+                val tr = tracksGet(dt)
+                val matched = tr != null && tr.deviceId == dev &&
+                    tr.source == src && tr.edgeFlags == ef && tr.pointerId == pid
+                if (!matched) {
+                    HLog.w(TAG, "pilfer identity mismatch: req(dt=$dt,dev=$dev,src=$src,ef=$ef,pid=$pid) " +
+                        "cur(track=${if (tr == null) "gone" else "dev=${tr.deviceId},src=${tr.source},ef=${tr.edgeFlags},pid=${tr.pointerId}"})")
+                    return
+                }
+                runCatching {
+                    if (pilferPointersNow()) {
+                        HLog.i(TAG, "pilfered stream dt=$dt")
+                    }
+                }.onFailure { HLog.w(TAG, "pilferPointers failed: ${it.message}") }
             }
-            ctx.registerReceiver(
-                recv,
-                android.content.IntentFilter(com.lsp.hypersidebar.prefs.PrefKeys.SPY_PILFER_ACTION),
-                // 2026-11-11：:ui → SystemUI 同为 uid 1000，内核 uid 收口（零成本）。
-                // ROM 若不放行同 uid 跨进程，回退 EXPORTED（见计划 §4a）。
-                android.content.Context.RECEIVER_NOT_EXPORTED
-            )
-            pilferReceiver = recv
-            HLog.i(TAG, "pilfer receiver registered (底角线)")
-        }.onFailure {
-            HLog.w(TAG, "pilfer register failed: ${it.message}")
-            pilferCtx = null
         }
+        val filter = android.content.IntentFilter(com.lsp.hypersidebar.prefs.PrefKeys.SPY_PILFER_ACTION)
+        val onInput = runCatching {
+            // 2026-11-11：:ui → SystemUI 同为 uid 1000，内核 uid 收口（零成本）。
+            // permission 必须为 null（RECEIVER_NOT_EXPORTED 与 permission 互斥）。
+            ctx.registerReceiver(recv, filter, null, h, android.content.Context.RECEIVER_NOT_EXPORTED)
+            true
+        }.getOrElse {
+            HLog.w(TAG, "pilfer register with input handler failed: ${it.message} — fallback main")
+            false
+        }
+        if (!onInput) {
+            val ok = runCatching {
+                ctx.registerReceiver(recv, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+                pilferReceiverOnMain = true
+                true
+            }.getOrElse {
+                HLog.w(TAG, "pilfer register failed: ${it.message}")
+                false
+            }
+            if (!ok) {
+                pilferCtx = null
+                return
+            }
+        }
+        pilferReceiver = recv
+        HLog.i(TAG, "pilfer receiver registered (底角线, thread=" +
+            "${if (pilferReceiverOnMain) "main" else Thread.currentThread().name})")
+    }
+
+    /** `tracks` 访问包装：正常路径同线程无锁；兜底注册在主线程时才加锁。 */
+    private fun tracksGet(dt: Long): Track? =
+        if (pilferReceiverOnMain) synchronized(tracks) { tracks[dt] } else tracks[dt]
+
+    private fun tracksContains(dt: Long): Boolean =
+        if (pilferReceiverOnMain) synchronized(tracks) { tracks.containsKey(dt) }
+        else tracks.containsKey(dt)
+
+    private fun tracksPut(dt: Long, tr: Track) {
+        if (pilferReceiverOnMain) synchronized(tracks) { tracks[dt] = tr } else tracks[dt] = tr
+    }
+
+    private fun tracksRemove(dt: Long) {
+        if (pilferReceiverOnMain) synchronized(tracks) { tracks.remove(dt) } else tracks.remove(dt)
     }
 
     /**
      * API 102 热重载释放（由 [SystemUiHook.releaseForReload] 转发；幂等）。
      *
      * 为什么必须：本 object 在 SystemUI 进程持有三样**宿主进程**资源，全都不会随旧代消失：
-     *  ① monitorInput spy 的 InputMonitor/InputChannel/receiver——native 侧注册在主 looper 上，
-     *     不 dispose 就等于 dispatcher 里多留一份 spy 窗口（dumpsys input 里两份
-     *     `hypersidebar-spy`），新代再建一份就是双份观察、双份转发广播；
+     *  ① monitorInput spy 的 InputMonitor/InputChannel/receiver——native 侧注册在 owner looper
+     *     （现 `hsb-spy-input`）上，不 dispose 就等于 dispatcher 里多留一份 spy 窗口（dumpsys
+     *     input 里两份 `hypersidebar-spy`），新代再建一份就是双份观察、双份转发广播；
      *  ② pilfer 广播接收器——AMS 持有的 receiver 钉住旧 classloader（见字段注释）；
-     *  ③ mainHandler 上排队的一次性/自愈回调（FIRST_BUILD_DELAY_MS / RETRY_MS /
-     *     DEAF_CHECK_WINDOW_MS）——被排队的 Runnable 是**旧代闭包**，不清队列则旧代要等
-     *     自愈循环跑完（最长 12 轮 × 15s）才可能被回收，且新代启动期间还会被旧代的
-     *     重建逻辑搅一次。
+     *  ③ mainHandler / inputHandler 上排队的回调（FIRST_BUILD_DELAY_MS / RETRY_MS /
+     *     DEAF_CHECK_WINDOW_MS / 消费方轮询）——被排队的 Runnable 是**旧代闭包**，不清
+     *     队列则旧代要等自愈循环跑完才可能被回收，且新代启动期间还会被旧代的逻辑搅一次。
      *
      * 复位启动状态（started/gaveUp/armed/attempts/deafRebuilds/totalDown…）使**同代内**再
      * `start()` 能重新走一遍延迟首建+自愈（热重载后框架不会重放 onPackageReady，
@@ -903,10 +1161,40 @@ object SystemUiInputSpy {
      * 任一步失败只记日志（释放失败不等于功能失败）。
      */
     fun releaseForReload() {
+        released = true
+        consumerLoop = false
         runCatching { mainHandler.removeCallbacksAndMessages(null) }
-            .onFailure { HLog.w(TAG, "handler queue cleanup failed: ${it.message}") }
-        runCatching { disposeSpy() }
-            .onFailure { HLog.w(TAG, "disposeSpy failed: ${it.message}") }
+            .onFailure { HLog.w(TAG, "main queue cleanup failed: ${it.message}") }
+        // monitor/receiver 必须在 owner Looper 上释放（Android 17 强制）。清理任务排到
+        // hsb-spy-input，等它跑完（2s 上限）再注销接收器/关线程；超时只 W，不阻塞热重载。
+        val h = inputHandler
+        val t = inputThread
+        if (h != null && t != null) {
+            if (android.os.Looper.myLooper() === t.looper) {
+                cleanupOnInput()
+            } else {
+                val latch = CountDownLatch(1)
+                val posted = runCatching {
+                    h.post {
+                        try {
+                            cleanupOnInput()
+                        } catch (e: Throwable) {
+                            HLog.w(TAG, "cleanupOnInput failed: ${e.message}")
+                        } finally {
+                            latch.countDown()
+                        }
+                    }
+                    true
+                }.getOrDefault(false)
+                if (!posted) {
+                    cleanupOnInput()
+                } else if (!runCatching { latch.await(2, TimeUnit.SECONDS) }.getOrDefault(false)) {
+                    HLog.w(TAG, "releaseForReload: input thread cleanup timed out (2s)")
+                }
+            }
+        } else {
+            cleanupOnInput()
+        }
         runCatching {
             val r = pilferReceiver
             val c = pilferCtx
@@ -914,28 +1202,90 @@ object SystemUiInputSpy {
         }.onFailure { HLog.w(TAG, "pilfer unregister failed: ${it.message}") }
         pilferReceiver = null
         pilferCtx = null
+        pilferReceiverOnMain = false
+        receiverOnMain = false
+        pilferMethod = null
+        // 线程退出（cleanup 已摘掉自有队列；quitSafely 只收尾已投递的清理任务）
+        runCatching { inputThread?.quitSafely() }
+            .onFailure { HLog.w(TAG, "input thread quit failed: ${it.message}") }
+        runCatching { sendThread?.quitSafely() }
+            .onFailure { HLog.w(TAG, "send thread quit failed: ${it.message}") }
+        inputThread = null
+        inputHandler = null
+        sendThread = null
+        sendHandler = null
         // 启动状态复位
         started = false
         armed = false
         gaveUp = false
         attempts = 0
         deafRebuilds = 0
+        buildInFlight = false
+        idleLogged = false
         totalDown = 0L
         bottomBandDown = 0L
         edgeBandDown = 0L
-        // 转发中的流状态：旧代闭包持有的 MotionEvent 副本一并回收（假流已不可能收尾）
+        streamSent = 0
+        streamDropped = 0
+        // 主线程侧的手势状态（takeover 只允许主线程碰）：与输入线程清理分开做。
+        runOnMainBlocking { cleanupMainState() }
+        HLog.i(TAG, "releaseForReload: spy disposed, pilfer receiver released, " +
+            "threads quit, startup state reset")
+    }
+
+    /** 输入线程上的资源清理（monitor/receiver/发送线程/流状态）。 */
+    private fun cleanupOnInput() {
+        inputHandler?.removeCallbacksAndMessages(null)
+        disposeSpy()
+        disposeSender()
         pendingMove?.recycle()
         pendingMove = null
         lastMoveFwdEventTime = 0L
         // 身份改按 downTime 归并（2026-10-17）：清空全部轨；接管记录一并丢（旧代不再结算）
-        tracks.clear()
+        synchronized(tracks) { tracks.clear() }
         lastDownTime = 0L
-        takeover.clear()
-        takeoverPilfered = false
         sysPilfered = false
         runCatching { sysCorner.reset() }
             .onFailure { HLog.w(TAG, "corner reset failed: ${it.message}") }
-        HLog.i(TAG, "releaseForReload: spy disposed, pilfer receiver released, startup state reset")
+        diagMoves = 0
+        diagFwdMoves = 0
+        diagHist = 0
+        streamSent = 0
+        streamDropped = 0
+    }
+
+    /** 主线程状态复位（release 时在主线程执行；[released] 生效后不会再有新的手势进入）。 */
+    private fun cleanupMainState() {
+        takeover.clear()
+        takeoverForwarding = false
+        takeoverPilfered = false
+        takeoverInjected = 0
+        blankAtDown = null
+        systemSurfaceGesture = false
+        BlankTapDetector.reset()
+    }
+
+    /** 在主线程同步执行（release 可能从 hook 线程被调用）；2s 超时只 W。 */
+    private fun runOnMainBlocking(block: () -> Unit) {
+        if (Looper.myLooper() === Looper.getMainLooper()) {
+            block()
+            return
+        }
+        val latch = CountDownLatch(1)
+        val posted = mainHandler.post {
+            try {
+                block()
+            } finally {
+                latch.countDown()
+            }
+        }
+        if (!posted) {
+            HLog.w(TAG, "main cleanup skipped: handler rejected the runnable")
+            return
+        }
+        if (!runCatching { latch.await(2, TimeUnit.SECONDS) }.getOrDefault(false)) {
+            HLog.w(TAG, "main state cleanup timed out (2s)")
+        }
     }
 
     /** 触发带判定（转发前置粗筛；精判定在 ：ui 状态机）：**仅竖屏**——侧带 × 百分比
@@ -996,21 +1346,43 @@ object SystemUiInputSpy {
     private var blankDownX = 0f
     private var blankDownY = 0f
     private var blankDownT = 0L
+    /** 本手势 DOWN 时已被系统表面闸拦下（UP 不再判定/动作）。 */
+    private var systemSurfaceGesture = false
 
     /**
-     * 轻点判定 → 动作。**只读配置 + 判坐标**，动作委派给 `FreeformBlankTapHook.current`
-     * （ROM 耦合全在那边；它未装入=该 ROM 不支持或锚点 NOT_FOUND ⇒ 这里自然什么都不做，
-     * 即"功能静默关闭"）。
+     * 轻点判定 → 动作。**只在 SystemUI 主线程执行**（由 [blankTapDispatch] 投递）：
+     * `GestureTakeover`/`BlankTapDetector`/`blankAtDown`/`takeoverDown*` 都只在这一条线程访问。
      *
-     * 为什么判定放这里而不是新挂一个 ROM 入口：本 spy 已是常驻全局 monitor 通道（带聋
+     * **只读配置 + 判坐标**，动作委派给 `FreeformBlankTapHook.current`（ROM 耦合全在那边；
+     * 它未装入=该 ROM 不支持或锚点 NOT_FOUND ⇒ 这里自然什么都不做，即"功能静默关闭"）。
+     *
+     * 为什么判定放这里而不是新挂一个 ROM 入口：本 spy 已是全局 monitor 通道（带聋
      * monitor 重建自愈），看得到全部触摸；再挂 `MulWinSwitchEventHandler.onEvent` 只多一份
      * 类名漂移面（见 docs/adaptation/freeform-blank-tap-scheme.md §4 的取舍）。
      */
     private fun maybeBlankTap(ev: MotionEvent) {
         val p = prefs ?: return
         val ctx = appContext ?: return
-        when (ev.actionMasked) {
+        val a = ev.actionMasked
+        // 总开关：关闭时整条路径不跑（原实现只在 DOWN 查，UP 仍跑 isBlank = 纯浪费 + 日志噪音）。
+        if (a != MotionEvent.ACTION_CANCEL && !p.getBoolean(
+                com.lsp.hypersidebar.prefs.PrefKeys.FREEFORM_BLANK_TAP_ENABLED,
+                com.lsp.hypersidebar.prefs.LayoutDefaults.FREEFORM_BLANK_TAP_ENABLED
+            )
+        ) {
+            BlankTapDetector.reset()
+            blankAtDown = null
+            systemSurfaceGesture = false
+            return
+        }
+        when (a) {
             MotionEvent.ACTION_DOWN -> {
+                // 新鲜 DOWN = 上一条手势已结束：清掉没收到 UP/CANCEL 的残留记录，
+                // 否则 MOVE 会追加进旧快照、UP 按旧 downTime 重放一条拼接手势。
+                if (takeover.active) {
+                    takeover.clear()
+                    takeoverPilfered = false
+                }
                 if (!blankTapArmedLogged) {
                     blankTapArmedLogged = true
                     HLog.i(TAG, "blank-tap armed=" + p.getBoolean(
@@ -1021,14 +1393,21 @@ object SystemUiInputSpy {
                         com.lsp.hypersidebar.prefs.LayoutDefaults.FREEFORM_BLANK_TAP_MODE_DEFAULT
                     ) ?: "-") + " action=${FreeformBlankTapHook.current != null}")
                 }
-                if (!p.getBoolean(
-                        com.lsp.hypersidebar.prefs.PrefKeys.FREEFORM_BLANK_TAP_ENABLED,
-                        com.lsp.hypersidebar.prefs.LayoutDefaults.FREEFORM_BLANK_TAP_ENABLED
-                    )
-                ) {
+                val h = FreeformBlankTapHook.current ?: run {
+                    systemSurfaceGesture = false
+                    return
+                }
+                // 系统表面闸（QS/通知栏/锁屏/bouncer，2026-11-12）：只有**明确没有**系统
+                // 表面时才继续；true 与 null（状态未知）都拦——fail-closed。必须放在
+                // BlankTapDetector.onDown / takeoverArmed 之前：一旦抢流，磁贴点击就被吃掉。
+                val sys = h.systemSurfaceOnTop(ctx)
+                if (sys != false) {
+                    systemSurfaceGesture = true
+                    blankAtDown = null
                     BlankTapDetector.reset()
                     return
                 }
+                systemSurfaceGesture = false
                 if (!blankTapConfigured) {
                     val dm = android.content.res.Resources.getSystem().displayMetrics
                     BlankTapDetector.configure(
@@ -1037,10 +1416,9 @@ object SystemUiInputSpy {
                     )
                     blankTapConfigured = true
                 }
-                val h = FreeformBlankTapHook.current
                 blankDownX = ev.x; blankDownY = ev.y; blankDownT = ev.eventTime
                 BlankTapDetector.onDown(ev.x, ev.y, ev.eventTime, ev.pointerCount)
-                blankAtDown = h?.isBlank(ctx, ev)
+                blankAtDown = h.isBlank(ctx, ev)
                 // ===== 防穿透：输入接管（2026-10-17）=========================================
                 // monitor 通道只观察不消费 ⇒ 空白点必然穿到背后 app。要吞掉就必须在 DOWN
                 // 抢流（pilfer 不可回滚），所以只在**小窗外 ≤ TAKEOVER_RING_DP 的那一圈**抢
@@ -1049,7 +1427,7 @@ object SystemUiInputSpy {
                 // 上一轮血案的教训（抢了不消费 ⇒ 背后 UI 失联 ⇒ 整机像卡死）就靠"必二选一"
                 // 与"只在圈内抢"两条约束排除。
                 val dmB = android.content.res.Resources.getSystem().displayMetrics
-                if (h != null && blankAtDown == true && takeoverEnabled() &&
+                if (blankAtDown == true && takeoverEnabled() &&
                     !GestureThresholds.inSystemGestureBand(ev.x, ev.y, dmB.widthPixels, dmB.heightPixels, dmB.density) &&
                     takeoverArmed(h, ev.x, ev.y)
                 ) {
@@ -1057,8 +1435,11 @@ object SystemUiInputSpy {
                         // 已有接管中的手势（多指/两区同起）⇒ 本条不抢（回到穿透），别把前一条
                         // 的记录冲掉——重放需要它完整。
                         HLog.i(TAG, "takeover busy at DOWN — 不抢流")
+                    } else if (!takeoverPilferNow()) {
+                        // 2026-11-12：抢流失败就不要 begin——否则 UP 会按"已接管"重放，
+                        // 给背后 app 造出重复事件（点击既没被吞也没被原样放过）。
+                        HLog.w(TAG, "takeover pilfer failed ⇒ 本手势不接管（点击照常穿透）")
                     } else {
-                        takeoverPilfered = takeoverPilferNow()
                         takeover.begin(ev.downTime, ev.deviceId, ev.source)
                         takeoverDownX = ev.x
                         takeoverDownY = ev.y
@@ -1073,7 +1454,23 @@ object SystemUiInputSpy {
             }
             MotionEvent.ACTION_UP -> {
                 val h = FreeformBlankTapHook.current
-                val blankUp = h?.isBlank(ctx, ev)
+                if (h == null) {
+                    settleTakeoverOnAbort("hook gone before UP")
+                    BlankTapDetector.reset()
+                    blankAtDown = null
+                    systemSurfaceGesture = false
+                    return
+                }
+                if (systemSurfaceGesture || h.systemSurfaceOnTop(ctx) != false) {
+                    // DOWN 已被拦（或 UP 时系统表面才出现）：不动作、不接管；
+                    // 若已抢流则按"未命中"还回去（不能吞掉一次系统表面上的点击）。
+                    settleTakeoverOnAbort("system-surface")
+                    BlankTapDetector.reset()
+                    blankAtDown = null
+                    systemSurfaceGesture = false
+                    return
+                }
+                val blankUp = h.isBlank(ctx, ev)
                 // tri-state 语义：DOWN 端"不知道"不否决（OS2 首个手势常还没捕到实例）；
                 // UP 端必须**明确**空白才动作（拿不到数据 ⇒ 不动作，fail-closed 落这端）。
                 val hit = BlankTapDetector.onUp(
@@ -1081,11 +1478,14 @@ object SystemUiInputSpy {
                     blankAtDown = blankAtDown ?: true,
                     blankAtUp = blankUp == true
                 )
-                // 诊断：一次轻点判定的全部输入（自检判"为什么没动"的第一手证据）
-                HLog.i(TAG, "blank-tap up dx=${"%.0f".format(ev.x - blankDownX)} " +
-                    "dy=${"%.0f".format(ev.y - blankDownY)} " +
-                    "dur=${ev.eventTime - blankDownT}ms blankDown=$blankAtDown blankUp=$blankUp " +
-                    "hit=$hit action=${FreeformBlankTapHook.current != null}")
+                // 诊断：一次轻点判定的全部输入（自检判"为什么没动"的第一手证据）。
+                // 2026-11-12：普通点击（未命中）只在 verbose 打，避免日常点击刷光环形缓冲。
+                if (hit || HLog.verboseEnabled) {
+                    HLog.i(TAG, "blank-tap up dx=${"%.0f".format(ev.x - blankDownX)} " +
+                        "dy=${"%.0f".format(ev.y - blankDownY)} " +
+                        "dur=${ev.eventTime - blankDownT}ms blankDown=$blankAtDown blankUp=$blankUp " +
+                        "hit=$hit action=${FreeformBlankTapHook.current != null}")
+                }
                 blankAtDown = null
                 // ===== 接管结算：必二选一（消费 / 重放）====================================
                 // 消费：动作命中 ⇒ 丢弃记录（这次点击不进背后 app，这就是"防穿透"）。
@@ -1111,12 +1511,19 @@ object SystemUiInputSpy {
                     com.lsp.hypersidebar.prefs.LayoutDefaults.FREEFORM_BLANK_TAP_MODE_DEFAULT
                 ) ?: com.lsp.hypersidebar.prefs.LayoutDefaults.FREEFORM_BLANK_TAP_MODE_DEFAULT
                 HLog.i(TAG, "blank tap hit at (${"%.0f".format(ev.x)},${"%.0f".format(ev.y)}) mode=$mode")
-                runCatching { h?.perform(ctx, mode) }
+                runCatching { h.perform(ctx, mode) }
                     .onFailure { HLog.w(TAG, "freeform action failed: ${it.message}") }
             }
             MotionEvent.ACTION_CANCEL -> {
                 BlankTapDetector.reset()
                 blankAtDown = null
+                systemSurfaceGesture = false
+                if (takeoverForwarding) {
+                    HLog.i(TAG, "takeover live-forward end dt=${ev.downTime} injected=$takeoverInjected")
+                    takeoverForwarding = false
+                    takeoverInjected = 0
+                    takeoverPilfered = false
+                }
                 // 系统取消（被别的窗口/系统手势接管）：**不重放**——系统已经判过这条手势，
                 // 还回去会凭空造出一次动作（比丢失更糟）。只丢记录并留痕。
                 if (takeover.active) {
@@ -1130,18 +1537,92 @@ object SystemUiInputSpy {
         }
     }
 
+    /**
+     * 主线程：空白/接管状态机的唯一入口（输入线程只投递事件副本）。
+     * 交还转发期间后续事件实时注入，且不再参与 blank-tap 判定（否则拖动末尾的 UP
+     * 可能又触发动作）；接管中的事件在这里追加，并在"不再是轻点候选"时立即交还。
+     */
+    private fun blankTapDispatch(ev: MotionEvent) {
+        try {
+            if (released) return
+            val a = ev.actionMasked
+            // 上一条手势的终态没到（流被掐/被系统取消）：新手势 DOWN 就地清掉，
+            // 否则之后每个触摸都会被注入一遍（重复触摸、整机手感错乱）。
+            if (a == MotionEvent.ACTION_DOWN && takeoverForwarding) {
+                HLog.w(TAG, "takeover live-forward 残留 ⇒ 新手势重置")
+                takeoverForwarding = false
+                takeoverInjected = 0
+                takeoverPilfered = false
+            }
+            if (takeoverForwarding) {
+                injectLive(ev)
+                if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
+                    HLog.i(TAG, "takeover live-forward end dt=${ev.downTime} injected=$takeoverInjected")
+                    takeoverForwarding = false
+                    takeoverInjected = 0
+                    takeoverPilfered = false
+                    blankAtDown = null
+                }
+                return
+            }
+            if (takeover.active && a != MotionEvent.ACTION_DOWN) {
+                takeover.append(ev.actionMasked, ev.eventTime, ev.x, ev.y, ev.metaState, ev.source)
+                for (i in 0 until ev.historySize) {
+                    takeover.append(
+                        MotionEvent.ACTION_MOVE, ev.getHistoricalEventTime(i),
+                        ev.getHistoricalX(i), ev.getHistoricalY(i), ev.metaState, ev.source
+                    )
+                }
+                if (!takeoverStillTap(ev)) releaseTakeover()
+            }
+            runCatching { maybeBlankTap(ev) }
+                .onFailure { HLog.w(TAG, "blank tap path failed: ${it.message}") }
+        } finally {
+            ev.recycle()
+        }
+    }
+
+    /** 抬手时发现系统表面在上/动作层消失：把已抢的流按原样还回去（未命中语义）。 */
+    private fun settleTakeoverOnAbort(why: String) {
+        if (!takeover.active) {
+            takeoverPilfered = false
+            return
+        }
+        val snap = takeover.end()
+        if (snap != null) replayTakeover(snap, why)
+        takeover.clear()
+        takeoverPilfered = false
+    }
+
     private fun forwardIfNeeded(ev: MotionEvent, w: Int, h: Int) {
-        val p = prefs ?: return
-        val ctx = appContext ?: return
         val a = ev.actionMasked
         if (a == MotionEvent.ACTION_DOWN) {
+            // 消费方预筛（2026-11-12，issue #12）：OS2/3 的 strip 流在 :ui 侧 100% 被丢弃，
+            // 但原实现仍按 ~60 次/秒广播 ⇒ 主线程 monitor ack 超时。这里先按可跨进程观测的
+            // 代理门（moduleEnabled && os4）拦；收端仍保留精确门（breaker/DataDead/兜底）。
+            val os4 = Os4Marker.romIsOs4()
+            val m = moduleEnabled()
             // zone 判定单源（§14.6）：底角三角优先（条带与三角不相交，顺序无歧义）；
             // 底角另有独立开关门控（关=角落流不转发，OS3 同键语义）
             val corner = inCornerTriangle(ev.x, ev.y, w, h)
             if (corner) {
-                if (!cornerSwipeEnabled()) return
-            } else if (!inTriggerBand(ev.x, ev.y, w, h)) {
-                return
+                val cs = cornerSwipeEnabled()
+                val fb = cornerFallbackActive() // 只在角区路径求值（strip 不用）
+                if (!SpyInputPolicy.forwardCorner(m, os4, cs, fb)) {
+                    if (HLog.verboseEnabled) {
+                        HLog.i(TAG, "skip stream: corner=true os4=$os4 module=$m " +
+                            "cornerSwipe=$cs fallback=$fb")
+                    }
+                    return
+                }
+            } else {
+                if (!inTriggerBand(ev.x, ev.y, w, h)) return
+                if (!SpyInputPolicy.forwardStrip(m, os4)) {
+                    if (HLog.verboseEnabled) {
+                        HLog.i(TAG, "skip stream: corner=false os4=$os4 module=$m")
+                    }
+                    return
+                }
             }
             val zone = if (corner) {
                 com.lsp.hypersidebar.prefs.PrefKeys.SPY_ZONE_CORNER
@@ -1149,17 +1630,22 @@ object SystemUiInputSpy {
                 com.lsp.hypersidebar.prefs.PrefKeys.SPY_ZONE_STRIP
             }
             // 身份按 downTime 归并（2026-10-17）：两区同时起手不再互相覆盖
-            tracks[ev.downTime] = Track(
-                deviceId = ev.deviceId,
-                source = ev.source,
-                edgeFlags = ev.edgeFlags,
-                pointerId = ev.getPointerId(0),
-                zone = zone,
+            tracksPut(
+                ev.downTime,
+                Track(
+                    deviceId = ev.deviceId,
+                    source = ev.source,
+                    edgeFlags = ev.edgeFlags,
+                    pointerId = ev.getPointerId(0),
+                    zone = zone,
+                )
             )
             lastDownTime = ev.downTime
             pendingMove?.recycle()
             pendingMove = null
             lastMoveFwdEventTime = ev.eventTime
+            streamSent = 0
+            streamDropped = 0
             // 2a：同进程起一份判定；DOWN 就接管（对齐 OS2/3 的 DOWN 域接管语义）
             sysPilfered = false
             diagMoves = 0; diagFwdMoves = 0; diagHist = 0
@@ -1170,7 +1656,7 @@ object SystemUiInputSpy {
                     "judge=$judge")
             }
         }
-        val tr = tracks[ev.downTime] ?: return // 非转发流的 MOVE/UP（带外起手）——静默忽略
+        val tr = tracksGet(ev.downTime) ?: return // 非转发流的 MOVE/UP（带外起手）——静默忽略
         val zone = tr.zone
         if (a == MotionEvent.ACTION_MOVE) {
             if (zone == com.lsp.hypersidebar.prefs.PrefKeys.SPY_ZONE_CORNER) {
@@ -1206,7 +1692,7 @@ object SystemUiInputSpy {
                 ) {
                     sysPilferNow("flush-before-end", ev.downTime)
                 }
-                sendStream(it, ctx, w, h, p, zone)
+                enqueueStream(it, w, h, zone, sysPilfered)
                 it.recycle()
             }
             pendingMove = null
@@ -1218,37 +1704,84 @@ object SystemUiInputSpy {
         ) {
             sysPilferNow("live", ev.downTime)
         }
-        sendStream(ev, ctx, w, h, p, zone)
+        enqueueStream(ev, w, h, zone, sysPilfered)
         if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
-            tracks.remove(ev.downTime)
+            if (HLog.verboseEnabled) {
+                HLog.i(TAG, "stream end a=$a sent=$streamSent dropped=$streamDropped")
+            }
+            tracksRemove(ev.downTime)
             sysPilfered = false
             sysCorner.reset()
         }
     }
 
-    private fun sendStream(
-        ev: MotionEvent,
-        ctx: android.content.Context,
-        w: Int,
-        h: Int,
-        p: android.content.SharedPreferences,
-        zone: Int,
-    ) {
-        val intent = android.content.Intent(com.lsp.hypersidebar.prefs.PrefKeys.SPY_STREAM_ACTION)
-            .setPackage(com.lsp.hypersidebar.prefs.HostPackages.UI_HOST)
-            .putExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_EVENT, ev)
-            .putExtra(
-                com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_LANDSCAPE,
-                w > h
-            )
-            .putExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_ZONE, zone)
-            // 2a：SystemUI 已自行 pilfer ⇒ :ui 别再发抢占指令（发了也只有 mismatch 噪声）
-            .putExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_SYS_PILFERED, sysPilfered)
-        com.lsp.hypersidebar.util.RelayToken.attach(
-            intent, com.lsp.hypersidebar.util.RelayToken.read(p)
-        )
-        runCatching { ctx.sendBroadcast(intent) }
-            .onFailure { HLog.w(TAG, "stream forward failed: ${it.message}") }
+    /**
+     * 输入线程：把事件副本入队，由 `hsb-spy-send` 线程发广播——输入回调里绝不 `sendBroadcast`
+     * （SystemUI 主线程繁忙时 monitor 无法 ack DOWN ⇒ issue #12 的 ANR）。
+     * 只有 MOVE 在积压 ≥ [MAX_PENDING_STREAMS] 时丢弃；DOWN/UP/CANCEL 永远入队。
+     * 副本由 [drainStreams] 发送后 recycle。
+     */
+    private fun enqueueStream(ev: MotionEvent, w: Int, h: Int, zone: Int, sysPilfered: Boolean) {
+        val hSend = sendHandler ?: return
+        val copy = MotionEvent.obtain(ev)
+        val item = PendingStream(copy, w > h, zone, sysPilfered)
+        synchronized(pendingStreams) {
+            if (ev.actionMasked == MotionEvent.ACTION_MOVE &&
+                pendingStreams.size >= MAX_PENDING_STREAMS
+            ) {
+                copy.recycle()
+                streamDropped++
+                return
+            }
+            pendingStreams.addLast(item)
+            streamSent++
+        }
+        hSend.post { drainStreams() }
+    }
+
+    /** 发送线程：按入队顺序发广播（Intent 结构与原 sendStream 完全一致）。 */
+    private fun drainStreams() {
+        val ctx = appContext
+        val p = prefs
+        while (true) {
+            val item = synchronized(pendingStreams) { pendingStreams.pollFirst() } ?: break
+            try {
+                if (ctx == null || p == null) continue
+                val intent = android.content.Intent(com.lsp.hypersidebar.prefs.PrefKeys.SPY_STREAM_ACTION)
+                    .setPackage(com.lsp.hypersidebar.prefs.HostPackages.UI_HOST)
+                    .putExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_EVENT, item.ev)
+                    .putExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_LANDSCAPE, item.landscape)
+                    .putExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_ZONE, item.zone)
+                    // 2a：SystemUI 已自行 pilfer ⇒ :ui 别再发抢占指令（发了也只有 mismatch 噪声）
+                    .putExtra(com.lsp.hypersidebar.prefs.PrefKeys.SPY_EXTRA_SYS_PILFERED, item.sysPilfered)
+                com.lsp.hypersidebar.util.RelayToken.attach(
+                    intent, com.lsp.hypersidebar.util.RelayToken.read(p)
+                )
+                runCatching { ctx.sendBroadcast(intent) }
+                    .onFailure { HLog.w(TAG, "stream forward failed: ${it.message}") }
+            } finally {
+                item.ev.recycle()
+            }
+        }
+    }
+
+    /** 发送线程/队列释放（输入线程或热重载）：丢弃未发副本、退出线程。 */
+    private fun disposeSender() {
+        val h = sendHandler
+        val t = sendThread
+        h?.removeCallbacksAndMessages(null)
+        synchronized(pendingStreams) {
+            while (true) {
+                val item = pendingStreams.pollFirst() ?: break
+                item.ev.recycle()
+            }
+        }
+        runCatching { t?.quitSafely() }
+            .onFailure { HLog.w(TAG, "send thread quit failed: ${it.message}") }
+        if (sendThread === t) {
+            sendThread = null
+            sendHandler = null
+        }
     }
 
     private fun onMotion(ev: MotionEvent, w: Int, h: Int) {
@@ -1264,45 +1797,21 @@ object SystemUiInputSpy {
                 hit
             }
         ) return
-        // 残留复位（2026-10-17，安全性）：若上一条手势的终态没到（流被掐/被系统取消），
-        // [takeoverForwarding] 会残留 ⇒ 之后**每个**触摸都会被我们注入一遍（重复触摸、整机手感错乱）。
-        // 新手势的 DOWN 一到就地清掉。
-        if (a == MotionEvent.ACTION_DOWN && takeoverForwarding) {
-            HLog.w(TAG, "takeover live-forward 残留 ⇒ 新手势重置")
+        // 空白/接管路径整体投到主线程（2026-11-12）：receiver 已不在主线程，而
+        // `GestureTakeover`/`BlankTapDetector`/`blankAtDown` 仍只由主线程碰。
+        // 必须 obtain 副本——框架在 finishInputEvent 后会回收原事件。
+        if (blankTapActive()) {
+            val copy = MotionEvent.obtain(ev)
+            if (!mainHandler.post { blankTapDispatch(copy) }) copy.recycle()
+        } else if (takeoverForwarding) {
+            // 功能中途关闭：没有主线程投递来收尾，残留会钉住转发（输入线程永久 early-return）。
+            HLog.w(TAG, "blank tap disabled mid-gesture ⇒ reset live-forward")
             takeoverForwarding = false
             takeoverInjected = 0
             takeoverPilfered = false
         }
-        // ===== 输入接管（防穿透）=======================================================
-        // ① 已交还（[takeoverForwarding]）：本手势剩余事件**实时**注入，且不再参与 blank-tap 判定
-        //    （否则一次拖动末尾的 UP 可能又触发动作）。
-        // ② 接管中：记录每个事件（含 history），并在"不再是轻点候选"的那一刻交还（[releaseTakeover]）。
-        if (takeoverForwarding) {
-            injectLive(ev)
-            if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
-                HLog.i(TAG, "takeover live-forward end dt=${ev.downTime} injected=$takeoverInjected")
-                takeoverForwarding = false
-                takeoverInjected = 0
-                takeoverPilfered = false
-                blankAtDown = null
-            }
-            return
-        }
-        if (takeover.active && a != MotionEvent.ACTION_DOWN) {
-            takeover.append(ev.actionMasked, ev.eventTime, ev.x, ev.y, ev.metaState, ev.source)
-            for (i in 0 until ev.historySize) {
-                takeover.append(
-                    MotionEvent.ACTION_MOVE, ev.getHistoricalEventTime(i),
-                    ev.getHistoricalX(i), ev.getHistoricalY(i), ev.metaState, ev.source
-                )
-            }
-            if (!takeoverStillTap(ev)) releaseTakeover()
-        }
-        // 小窗「点击空白处」（2026-10-16）：与下面的转发门控**无关**——轻点可以发生在
-        // 屏幕任何位置，而 forwardIfNeeded 只管边缘/角区那两条带。放在最前面，
-        // 保证带外起手也能被看见（spy 是全局 monitor 通道，本来就收全部触摸）。
-        runCatching { maybeBlankTap(ev) }
-            .onFailure { HLog.w(TAG, "blank tap path failed: ${it.message}") }
+        // 交还转发期间不参与条上转发/计数（原语义；注入与收尾在主线程）。
+        if (takeoverForwarding) return
         if (a == MotionEvent.ACTION_DOWN) {
             totalDown++
             if (ev.y > h * 3f / 4f) bottomBandDown++
@@ -1325,7 +1834,7 @@ object SystemUiInputSpy {
             // B2 转发模式下 MOVE 打点=纯噪音（1000 条环形缓冲 ~2s 即被刷光，pilfer 等
             // 低频关键日志全被冲掉——0505 15:30 导出教训）：仅非转发流记 MOVE
             if (a == MotionEvent.ACTION_MOVE) {
-                if (tracks[ev.downTime] == null) {
+                if (!tracksContains(ev.downTime)) {
                     HLog.i(TAG, "move x=${ev.x.toInt()} y=${ev.y.toInt()} dt=${ev.downTime}")
                 }
             } else {
@@ -1334,7 +1843,7 @@ object SystemUiInputSpy {
         }
         // B2-1：带内流转发（关=零开销；带外流在 DOWN 处即被排除）。
         // 2026-10-17：身份按 downTime 归并 ⇒ 用轨是否存在判断"这是不是我们转发过的流"。
-        if (a == MotionEvent.ACTION_DOWN || tracks.containsKey(ev.downTime)) {
+        if (a == MotionEvent.ACTION_DOWN || tracksContains(ev.downTime)) {
             forwardIfNeeded(ev, w, h)
         }
     }

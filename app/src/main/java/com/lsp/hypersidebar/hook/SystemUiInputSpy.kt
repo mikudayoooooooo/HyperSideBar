@@ -41,8 +41,8 @@ import java.util.concurrent.TimeUnit
  *  消费方门控：[ensureConsumer] 每 2s 在主线程求值一次（`SpyInputPolicy.needed`），
  *  没有消费方就 dispose monitor——OS2/3 全默认时本进程**不存在**任何 spy monitor。
  *
- * **归属**：[inputThread]/[sendThread]、pilfer 接收器、monitor/receiver 均由本对象创建；
- * [disposeForIdle]（无消费方）与 [releaseForReload]（热重载）负责释放。
+ * **归属**：[inputThread]/[sendThread]、pilfer/屏幕状态接收器、monitor/receiver 均由本对象
+ * 创建；[disposeForIdle]（无消费方）与 [releaseForReload]（热重载）负责释放。
  */
 object SystemUiInputSpy {
 
@@ -83,6 +83,13 @@ object SystemUiInputSpy {
     /** pilferPointers 与 dispose 互斥（2a 输入线程 / 空白接管主线程 / dispose 输入线程）。 */
     private val pilferLock = Any()
 
+    /** 息屏/锁屏暂停 deaf 重建，屏幕点亮/解锁时立即恢复（2026-11-13）。 */
+    private var screenReceiver: android.content.BroadcastReceiver? = null
+    @Volatile private var deafPausedLogged = false
+    private val deafCheckRunnable = Runnable { deafCheck() }
+    /** 无消费方时释放 monitor 后，屏幕事件不应再触发重建。 */
+    @Volatile private var screenReceiverCtx: android.content.Context? = null
+
     /** 消费方重查间隔（设置页改动/前台形态变化 ≤2s 内反映到 monitor 启停）。 */
     private const val CONSUMER_RECHECK_MS = 2_000L
 
@@ -115,6 +122,8 @@ object SystemUiInputSpy {
      *  原始 15s 的语义是"建得太早的聋 monitor"（那是**永久**聋，15s 内零事件即可识别），
      *  空闲并不等于聋 ⇒ 观察窗不能短于"人自然停顿不摸屏"的时间尺度。 */
     private const val DEAF_CHECK_WINDOW_MS = 15_000L
+    /** 息屏/锁屏期间不重建，只低频复查（屏幕点亮/解锁由 screen receiver 立即唤醒）。 */
+    private const val DEAF_CHECK_SCREEN_OFF_MS = 60_000L
     /** 原"重建封顶"（2026-10-18 起不再放弃，见 [deafCheck] 注释）：现仅作日志降频阈值——
      *  超过此轮次后聋行每 4 轮打一条。 */
     private const val MAX_DEAF_REBUILDS = 12
@@ -137,6 +146,10 @@ object SystemUiInputSpy {
 
     /** 恒开计数（B2 前置证据）：累计 DOWN / 底部 1/4 带 DOWN / 屏缘 40px 带 DOWN */
     @Volatile var totalDown = 0L; private set
+    /** **当前这次 build** 收到的 DOWN 数（2026-11-13）：聋判据必须看它，不能看累计的
+     *  [totalDown]——否则进程里只要有过一次触摸，之后每次重建都会在 15s 后被误判为 armed，
+     *  真聋的 monitor 永远得不到自愈。 */
+    private var buildDown = 0L
     @Volatile var bottomBandDown = 0L; private set
     @Volatile var edgeBandDown = 0L; private set
 
@@ -229,11 +242,64 @@ object SystemUiInputSpy {
     /** 建输入线程（幂等；只由 ensureConsumer 在需要 monitor 时调用）。 */
     @Synchronized
     private fun ensureThreads() {
-        if (inputThread?.isAlive == true) return
-        val t = android.os.HandlerThread("hsb-spy-input").apply { start() }
-        inputThread = t
-        // looper 访问会等 looper 就绪（HandlerThread 契约），此后可安全 post。
-        inputHandler = android.os.Handler(t.looper)
+        if (inputThread?.isAlive != true) {
+            val t = android.os.HandlerThread("hsb-spy-input").apply { start() }
+            inputThread = t
+            // looper 访问会等 looper 就绪（HandlerThread 契约），此后可安全 post。
+            inputHandler = android.os.Handler(t.looper)
+        }
+        ensureScreenReceiver()
+    }
+
+    /**
+     * 屏幕点亮/解锁时立即恢复 deaf 检查；息屏/锁屏期间不重建 monitor（2026-11-13）。
+     * receiver 注册在输入线程，回调里直接操作 `deafCheckRunnable`，与自愈检查同线程。
+     * 只在 monitor 真正需要时（ensureThreads 被调用）注册；释放见 [releaseForReload]。
+     */
+    private fun ensureScreenReceiver() {
+        if (screenReceiver != null) return
+        val ctx = appContext ?: return
+        val h = inputHandler ?: return
+        val recv = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context, intent: android.content.Intent) {
+                when (intent.action) {
+                    android.content.Intent.ACTION_SCREEN_ON,
+                    android.content.Intent.ACTION_USER_PRESENT -> {
+                        if (released) return
+                        HLog.i(TAG, "screen on/user-present ⇒ resume deaf-check")
+                        h.removeCallbacks(deafCheckRunnable)
+                        deafPausedLogged = false
+                        h.post(deafCheckRunnable)
+                    }
+                }
+            }
+        }
+        val filter = android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_SCREEN_ON)
+            addAction(android.content.Intent.ACTION_USER_PRESENT)
+        }
+        runCatching {
+            ctx.registerReceiver(recv, filter, null, h, android.content.Context.RECEIVER_NOT_EXPORTED)
+            screenReceiver = recv
+            screenReceiverCtx = ctx
+            HLog.i(TAG, "screen receiver registered")
+        }.onFailure { HLog.w(TAG, "screen receiver register failed: ${it.message}") }
+    }
+
+    /**
+     * 是否允许在"观察窗到点"时重建：息屏或锁屏时返回 false（没有可用的触摸源，
+     * 重建只会刷日志/通道）。读不到 Power/Keyguard 时按 true（保持旧行为）。
+     */
+    private fun canRebuildDeafMonitor(): Boolean {
+        val ctx = appContext ?: return true
+        val interactive = runCatching {
+            ctx.getSystemService(android.os.PowerManager::class.java)?.isInteractive ?: true
+        }.getOrDefault(true)
+        if (!interactive) return false
+        val locked = runCatching {
+            ctx.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked ?: false
+        }.getOrDefault(false)
+        return !locked
     }
 
     /** 建发送线程（只在 attemptStart 里调；幂等）。 */
@@ -253,6 +319,7 @@ object SystemUiInputSpy {
         started = false
         armed = false
         buildInFlight = false
+        deafPausedLogged = false
         disposeSender()
         HLog.i(TAG, "spy disposed: no consumer")
     }
@@ -272,13 +339,17 @@ object SystemUiInputSpy {
             return
         }
         attempts++
+        buildDown = 0L
+        // 2026-11-13：多次重建后降噪——api dump / 门控快照 / 2a 快照只在头 2 轮或 verbose
+        // 下打；spy built 每 4 轮留一条（前 2 轮仍全打）。避免空闲自愈把 1000 条环刷光。
+        val quiet = deafRebuilds > 2
         runCatching {
             ensureSendThread()
             ensurePilferReceiver()
             // 2026-10-18 OS3 真机实锤：dispose 后**同名**重建的 monitor 收不到任何事件
             // （dispatcher 侧同名重注册不重新挂接；OS4 无此问题）⇒ 聋循环永远聋。
             // 改为每次 build 用唯一名，绕开重注册冲突。
-            val channel = openSpyChannel(appContext, "hypersidebar-spy-$attempts")
+            val channel = openSpyChannel(appContext, "hypersidebar-spy-$attempts", quiet)
                 ?: error("no usable monitorInput candidate")
             channelRef = channel
             val h = inputHandler ?: error("no input handler")
@@ -309,22 +380,28 @@ object SystemUiInputSpy {
             }
             started = true
             buildInFlight = false
+            deafPausedLogged = false
             val dm0 = android.content.res.Resources.getSystem().displayMetrics
-            HLog.i(TAG, "spy built: display ${dm0.widthPixels}x${dm0.heightPixels} (build #$attempts" +
-                "${if (deafRebuilds > 0) ", deaf rebuild #$deafRebuilds" else ""}" +
-                ", receiver thread=${if (receiverOnMain) "main (fallback)" else Thread.currentThread().name})")
-            // 门控快照（1007 导出 162021 教训：角落 DOWN 被门静默拒=导出无法判读是哪个门关了）。
-            // sys prefs=启动快照，本行即本进程全部转发决策的依据
-            HLog.i(TAG, "forward gates: cornerSwipe=${cornerSwipeEnabled()} " +
-                "corner=${com.lsp.hypersidebar.hook.GestureThresholds.CORNER_BAND_DP}dp/" +
-                "${(com.lsp.hypersidebar.hook.GestureThresholds.CORNER_WIDTH_RATIO * 100).toInt()}% " +
-                "band=${bandWidthDp()}dp/${bandHeightPercent()}%+${bandPositionPercent()}%")
-            // 2a 判据快照（2026-11-12）：OS4 上用 romIsOs4 代理；无需做角手势即可确认分档生效。
-            val prop = runCatching { SysProps.get(PropNames.CORNER_SYSJUDGE).trim() }.getOrDefault("")
-            HLog.i(TAG, "2a judge: os4=$os4Host " +
-                "policy=${if (os4Host) "decideSysJudge" else "fallback"} sysjudgeProp=$prop")
+            if (!quiet || HLog.verboseEnabled || deafRebuilds % 4 == 0) {
+                HLog.i(TAG, "spy built: display ${dm0.widthPixels}x${dm0.heightPixels} (build #$attempts" +
+                    "${if (deafRebuilds > 0) ", deaf rebuild #$deafRebuilds" else ""}" +
+                    ", receiver thread=${if (receiverOnMain) "main (fallback)" else Thread.currentThread().name})")
+            }
+            if (!quiet || HLog.verboseEnabled) {
+                // 门控快照（1007 导出 162021 教训：角落 DOWN 被门静默拒=导出无法判读是哪个门关了）。
+                // sys prefs=启动快照，本行即本进程全部转发决策的依据
+                HLog.i(TAG, "forward gates: cornerSwipe=${cornerSwipeEnabled()} " +
+                    "corner=${com.lsp.hypersidebar.hook.GestureThresholds.CORNER_BAND_DP}dp/" +
+                    "${(com.lsp.hypersidebar.hook.GestureThresholds.CORNER_WIDTH_RATIO * 100).toInt()}% " +
+                    "band=${bandWidthDp()}dp/${bandHeightPercent()}%+${bandPositionPercent()}%")
+                // 2a 判据快照（2026-11-12）：OS4 上用 romIsOs4 代理；无需做角手势即可确认分档生效。
+                val prop = runCatching { SysProps.get(PropNames.CORNER_SYSJUDGE).trim() }.getOrDefault("")
+                HLog.i(TAG, "2a judge: os4=$os4Host " +
+                    "policy=${if (os4Host) "decideSysJudge" else "fallback"} sysjudgeProp=$prop")
+            }
             // 聋 monitor 观察窗：窗口内零 DOWN ⇒ dispose 重建（时序根因的自愈收口）
-            h.postDelayed({ deafCheck() }, DEAF_CHECK_WINDOW_MS)
+            h.removeCallbacks(deafCheckRunnable)
+            h.postDelayed(deafCheckRunnable, DEAF_CHECK_WINDOW_MS)
         }.onFailure {
             if (attempts >= MAX_ATTEMPTS) {
                 gaveUp = true
@@ -346,14 +423,29 @@ object SystemUiInputSpy {
      * 后 3 分钟内零触摸就把 spy 永久打死，次日全功能静默失效（OS3 真机实测复现：
      * `spy deaf after 13 rebuilds — giving up (inert)`）。改为永远重建；超过原封顶轮次后
      * 日志降为每 4 轮一条（≈1/min），避免聋行把 1000 条环形缓冲刷光。
+     *
+     * 2026-11-13：息屏/锁屏时没有可用触摸源，**不重建**（只 60s 复查一次）；屏幕点亮/
+     * 解锁由 screen receiver 立即 post 本检查。避免锁屏过夜每 15s 换 channel/刷日志。
      */
     private fun deafCheck() {
-        if (!started || gaveUp || armed) return
-        if (totalDown > 0) {
+        if (released || !started || gaveUp || armed) return
+        if (buildDown > 0) {
             armed = true
-            HLog.i(TAG, "spy armed: events flowing (down=$totalDown)")
+            HLog.i(TAG, "spy armed: events flowing (down=$totalDown buildDown=$buildDown)")
             return
         }
+        // 2026-11-13：息屏/锁屏期间没有可用触摸源，重建只会刷日志 + 换 channel。
+        // 暂停自愈，低频复查；屏幕点亮/解锁由 screen receiver 立即 post 本检查。
+        if (!canRebuildDeafMonitor()) {
+            if (!deafPausedLogged) {
+                deafPausedLogged = true
+                HLog.i(TAG, "spy deaf-check paused: screen off/locked (no rebuild)")
+            }
+            inputHandler?.removeCallbacks(deafCheckRunnable)
+            inputHandler?.postDelayed(deafCheckRunnable, DEAF_CHECK_SCREEN_OFF_MS)
+            return
+        }
+        deafPausedLogged = false
         deafRebuilds++
         if (deafRebuilds > MAX_DEAF_REBUILDS) {
             if (deafRebuilds % 4 == 0) {
@@ -416,8 +508,9 @@ object SystemUiInputSpy {
     private fun openSpyChannel(
         context: android.content.Context?,
         monitorName: String = "hypersidebar-spy",
+        quiet: Boolean = false,
     ): android.view.InputChannel? {
-        // 取证：候选类方法清单（低频一次性，恒打）
+        // 取证：候选类方法清单（多次盲重建时降噪；失败 W 不受 quiet 影响）
         for (cn in CANDIDATE_CLASSES) {
             runCatching {
                 val c = Class.forName(cn, false, SystemUiInputSpy::class.java.classLoader)
@@ -426,8 +519,12 @@ object SystemUiInputSpy {
                     .joinToString { m ->
                         m.name + "(" + m.parameterTypes.joinToString(",") { it.simpleName } + "):" + m.returnType.simpleName
                     }
-                HLog.i(TAG, "api dump $cn: ${lines.ifEmpty { "(no monitor/getInstance methods)" }}")
-            }.onFailure { HLog.i(TAG, "api dump $cn: class not found") }
+                if (!quiet || HLog.verboseEnabled) {
+                    HLog.i(TAG, "api dump $cn: ${lines.ifEmpty { "(no monitor/getInstance methods)" }}")
+                }
+            }.onFailure {
+                if (!quiet || HLog.verboseEnabled) HLog.i(TAG, "api dump $cn: class not found")
+            }
         }
         // 候选 0（首选，MiuiBackGestureHook 同款）：SystemUI context 的 InputManager 服务实例
         if (context != null) {
@@ -440,12 +537,14 @@ object SystemUiInputSpy {
                         it.parameterTypes[1] == Int::class.javaPrimitiveType
                 } ?: error("InputManager.monitorGestureInput(String,int) missing")
                 val r = m.invoke(im, monitorName, 0)
-                HLog.i(TAG, "ctx candidate: monitor=${r?.javaClass?.name}")
+                if (!quiet || HLog.verboseEnabled) {
+                    HLog.i(TAG, "ctx candidate: monitor=${r?.javaClass?.name}")
+                }
                 monitorRef = r
-                return monitorToChannel(r, "ctx")
+                return monitorToChannel(r, "ctx", quiet)
             }.onFailure { HLog.w(TAG, "ctx candidate failed: ${it.message}") }
         } else {
-            HLog.i(TAG, "ctx candidate skipped: no context yet")
+            if (!quiet || HLog.verboseEnabled) HLog.i(TAG, "ctx candidate skipped: no context yet")
         }
         // 兜底：InputManagerGlobal 单例路径（20:40 实锤拿不到 channel，保留观测）
         for ((cn, mn) in CANDIDATES) {
@@ -459,14 +558,16 @@ object SystemUiInputSpy {
                         it.parameterTypes[1] == Int::class.javaPrimitiveType
                 } ?: error("$mn(String,int) missing")
                 val res = m.invoke(inst, monitorName, 0)
-                HLog.i(TAG, "global candidate $cn.$mn: result=${res?.javaClass?.name}")
+                if (!quiet || HLog.verboseEnabled) {
+                    HLog.i(TAG, "global candidate $cn.$mn: result=${res?.javaClass?.name}")
+                }
                 monitorRef = res
                 res
             }.getOrElse { failure ->
                 HLog.w(TAG, "candidate $cn.$mn failed: ${failure.message}")
                 continue
             }
-            return monitorToChannel(r, cn.substringAfterLast('.')) ?: continue
+            return monitorToChannel(r, cn.substringAfterLast('.'), quiet) ?: continue
         }
         return null
     }
@@ -474,14 +575,18 @@ object SystemUiInputSpy {
     /** InputMonitor→InputChannel（带逐步日志）；InputChannel 直返。失败返回 null 不抛。
      *  toString 打印 channel/host/surface 三字段——判读"服务端到底回了什么"的钥匙：
      *  host/surface 在而 channel null=unparcel 丢字段；三者全 null=服务端短路回了个空壳。 */
-    private fun monitorToChannel(r: Any?, label: String): android.view.InputChannel? {
+    private fun monitorToChannel(
+        r: Any?,
+        label: String,
+        quiet: Boolean = false,
+    ): android.view.InputChannel? {
         if (r == null) {
             HLog.w(TAG, "[$label] monitor invoke returned null")
             return null
         }
         if (r is android.view.InputChannel) return r
         return runCatching {
-            HLog.i(TAG, "[$label] monitor=${r}")
+            if (!quiet || HLog.verboseEnabled) HLog.i(TAG, "[$label] monitor=${r}")
             val ch = r.javaClass.getMethod("getInputChannel").invoke(r) as? android.view.InputChannel
             if (ch == null) HLog.w(TAG, "[$label] getInputChannel returned null")
             ch
@@ -1148,7 +1253,7 @@ object SystemUiInputSpy {
      *  ① monitorInput spy 的 InputMonitor/InputChannel/receiver——native 侧注册在 owner looper
      *     （现 `hsb-spy-input`）上，不 dispose 就等于 dispatcher 里多留一份 spy 窗口（dumpsys
      *     input 里两份 `hypersidebar-spy`），新代再建一份就是双份观察、双份转发广播；
-     *  ② pilfer 广播接收器——AMS 持有的 receiver 钉住旧 classloader（见字段注释）；
+     *  ② pilfer / 屏幕状态广播接收器——AMS 持有的 receiver 钉住旧 classloader（见字段注释）；
      *  ③ mainHandler / inputHandler 上排队的回调（FIRST_BUILD_DELAY_MS / RETRY_MS /
      *     DEAF_CHECK_WINDOW_MS / 消费方轮询）——被排队的 Runnable 是**旧代闭包**，不清
      *     队列则旧代要等自愈循环跑完才可能被回收，且新代启动期间还会被旧代的逻辑搅一次。
@@ -1203,6 +1308,15 @@ object SystemUiInputSpy {
         pilferReceiver = null
         pilferCtx = null
         pilferReceiverOnMain = false
+        // 屏幕状态 receiver 同样由 AMS 持有；必须注销（否则旧代 classloader 被钉住）。
+        runCatching {
+            val r = screenReceiver
+            val c = screenReceiverCtx
+            if (r != null && c != null) c.unregisterReceiver(r)
+        }.onFailure { HLog.w(TAG, "screen receiver unregister failed: ${it.message}") }
+        screenReceiver = null
+        screenReceiverCtx = null
+        deafPausedLogged = false
         receiverOnMain = false
         pilferMethod = null
         // 线程退出（cleanup 已摘掉自有队列；quitSafely 只收尾已投递的清理任务）
@@ -1223,6 +1337,7 @@ object SystemUiInputSpy {
         buildInFlight = false
         idleLogged = false
         totalDown = 0L
+        buildDown = 0L
         bottomBandDown = 0L
         edgeBandDown = 0L
         streamSent = 0
@@ -1814,6 +1929,7 @@ object SystemUiInputSpy {
         if (takeoverForwarding) return
         if (a == MotionEvent.ACTION_DOWN) {
             totalDown++
+            buildDown++
             if (ev.y > h * 3f / 4f) bottomBandDown++
             if (ev.x < 40 || ev.x > w - 40 || ev.y < 40) edgeBandDown++
             // 首个事件=投递链接通（自愈循环的终止判据；deafCheck 也会兜底置位）

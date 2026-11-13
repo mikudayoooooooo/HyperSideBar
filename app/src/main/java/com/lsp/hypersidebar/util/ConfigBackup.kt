@@ -154,7 +154,14 @@ object ConfigBackup {
     )
 
     sealed interface ApplyResult {
-        data class Success(val settingsWritten: Int, val shortcutsWritten: Int) : ApplyResult
+        data class Success(
+            val settingsWritten: Int,
+            val shortcutsWritten: Int,
+            /** 固定应用中实际写入的数量（已安装）。 */
+            val appsWritten: Int,
+            /** 固定应用中因未安装被跳过的数量。 */
+            val appsSkipped: Int,
+        ) : ApplyResult
         data class Rejected(val reason: String) : ApplyResult
     }
 
@@ -318,8 +325,15 @@ object ConfigBackup {
      * 应用快照：单次 commit；快捷方式交给 [ShortcutStore]（保留其防覆盖闸）。
      * 本地回退 prefs（LSPosed 未绑定）**不允许写快捷方式**——那正是 2026-10-19 数据事故
      * 的形态（本地空壳把远端完整列表整表覆盖）；纯设置导入仍允许，只是本地生效。
+     *
+     * [isPackageInstalled]：导入固定应用时逐包校验；未安装的条目跳过（不写入），
+     * 结果里返回成功/跳过数量（2026-11-13 用户要求）。
      */
-    fun apply(prefs: SharedPreferences, snapshot: Snapshot): ApplyResult {
+    fun apply(
+        prefs: SharedPreferences,
+        snapshot: Snapshot,
+        isPackageInstalled: (String) -> Boolean = { true },
+    ): ApplyResult {
         val localFallback = prefs.javaClass.name == "android.app.SharedPreferencesImpl"
         if (localFallback && !snapshot.shortcuts.isNullOrEmpty()) {
             return ApplyResult.Rejected(
@@ -342,12 +356,20 @@ object ConfigBackup {
             }
             settingsWritten++
         }
+        // 固定应用：备份里可能含当前设备未安装的包，直接写入会让它们出现在列表里但无法启动。
+        // 跳过未安装项，并返回成功/失败计数；customAppsOrder 同样过滤，保持顺序表可用。
+        val keptApps = snapshot.customApps?.filter { pkg ->
+            runCatching { isPackageInstalled(pkg) }.getOrDefault(false)
+        }
+        val keptOrder = snapshot.customAppsOrder?.filter { pkg ->
+            runCatching { isPackageInstalled(pkg) }.getOrDefault(false)
+        }
         snapshot.customApps?.let {
-            editor.putStringSet(PrefKeys.CUSTOM_APPS, it.toHashSet())
+            editor.putStringSet(PrefKeys.CUSTOM_APPS, keptApps.orEmpty().toHashSet())
             settingsWritten++
         }
         snapshot.customAppsOrder?.let {
-            editor.putString(PrefKeys.CUSTOM_APPS_ORDER, JSONArray(it).toString())
+            editor.putString(PrefKeys.CUSTOM_APPS_ORDER, JSONArray(keptOrder.orEmpty()).toString())
             settingsWritten++
         }
         val committed = runCatching { editor.commit() }.getOrDefault(false)
@@ -356,7 +378,18 @@ object ConfigBackup {
             snapshot.shortcuts?.let { ShortcutStore.saveUserShortcuts(prefs, it) }
         }
         ConfigSync.notifyConfigChanged("(importBackup)")
-        return ApplyResult.Success(settingsWritten, snapshot.shortcuts?.size ?: 0)
+        val appsWritten = when {
+            snapshot.customApps != null -> keptApps?.size ?: 0
+            snapshot.customAppsOrder != null -> keptOrder?.size ?: 0
+            else -> 0
+        }
+        val appsTotal = snapshot.customApps?.size ?: snapshot.customAppsOrder?.size ?: 0
+        return ApplyResult.Success(
+            settingsWritten = settingsWritten,
+            shortcutsWritten = snapshot.shortcuts?.size ?: 0,
+            appsWritten = appsWritten,
+            appsSkipped = (appsTotal - appsWritten).coerceAtLeast(0),
+        )
     }
 
     // ===== 文件 I/O =====

@@ -28,7 +28,7 @@
     <string name="fan_preview_edit_a11y">编辑%1$s布局</string>
 
     <string name="apps_section">应用</string>
-    <string name="select_apps">扇形应用</string>
+    <string name="select_apps">固定应用</string>
     <string name="select_shortcut_apps">快捷应用</string>
     <string name="selected_apps_summary">已选择 %1$d 个应用</string>
     <string name="selected_apps_group">已选（%1$d）</string>
@@ -122,7 +122,9 @@
     <string name="selfcheck_exporting">正在生成探针与报告…</string>
     <string name="selfcheck_export_done">自检报告已保存：下载/%s</string>
 
-    <!-- 配置备份（2026-11-11）：JSON 导入/导出 -->
+    <!-- 配置备份（2026-11-11）：JSON 导入/导出；2026-11-13 合并为「备份与恢复」入口 -->
+    <string name="backup_menu_title">备份与恢复</string>
+    <string name="backup_menu_summary">导出当前配置，或从备份文件恢复</string>
     <string name="backup_export">导出配置备份</string>
     <string name="backup_import">从备份恢复</string>
     <string name="backup_busy">处理中…</string>
@@ -130,18 +132,15 @@
     <string name="backup_export_done">备份已保存：%1$s</string>
     <string name="backup_export_failed">导出失败：%1$s</string>
     <string name="backup_import_confirm_title">从备份恢复</string>
-    <string name="backup_import_confirm_summary">将写入 %1$d 项设置、%2$d 个固定应用、%3$d 个快捷方式。同键设置会被覆盖，备份未包含的键保持现状。</string>
+    <string name="backup_import_confirm_summary">将写入 %1$d 项设置、%2$d 个固定应用、%3$d 个快捷方式。同键设置会被覆盖，备份未包含的键保持现状。未安装的固定应用会跳过。</string>
     <string name="backup_import_confirm_action">恢复</string>
-    <string name="backup_import_done">已恢复 %1$d 项设置、%2$d 个快捷方式</string>
+    <string name="backup_import_done">恢复完成：固定应用成功 %1$d 个、失败 %2$d 个（未安装已跳过）；设置 %3$d 项、快捷方式 %4$d 个</string>
     <string name="backup_import_failed">备份读取失败：%1$s</string>
     <!-- 快捷方式 root 代发前台服务（2026-11-12）：仅启动瞬间显示，用于把冻结进程拉回前台 -->
     <string name="relay_notification_channel">快捷方式启动</string>
     <string name="relay_notification_title">正在启动快捷方式</string>
     <string name="relay_notification_text">root 代发执行中，完成后自动消失</string>
 
-    <!-- APK 更新后宿主仍跑旧 dex（2026-11-11） -->
-    <string name="stale_host_title">检测到 hook 宿主仍跑旧代码</string>
-    <string name="stale_host_summary">%1$d 个宿主需要重启（SystemUI/桌面/:ui）——更新 APK 后功能不生效通常就是这个；点此选择并确认重启</string>
     <string name="hook_ack_missing_title">未收到 hook 回执（可能没注入/旧代码/被冻结）</string>
     <string name="hook_ack_missing_summary">点此重启三个 hook 宿主；仍无回执时检查 LSPosed 作用域与模块 APK 路径（tools/hsb_deploy.py）</string>
 

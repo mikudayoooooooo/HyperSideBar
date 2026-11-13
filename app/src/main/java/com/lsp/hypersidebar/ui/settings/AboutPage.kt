@@ -164,6 +164,7 @@ internal fun AboutPage(
     // 打开文件选择器期间不锁按钮（用户可能停很久）。
     val backupScope = rememberCoroutineScope()
     var backupBusy by remember { mutableStateOf(false) }
+    var showBackupMenu by remember { mutableStateOf(false) }
     var importPreview by remember { mutableStateOf<ConfigBackup.Snapshot?>(null) }
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -187,22 +188,45 @@ internal fun AboutPage(
         }
     }
 
-    // 旧 dex（2026-11-11）：APK 更新后宿主可能仍跑旧代码；ack 带运行版本，和磁盘 APK 比。
-    // 模块绝不自动重启宿主，只把陈旧宿主预选进现有重启对话框。
-    var staleHosts by remember { mutableStateOf(emptySet<String>()) }
+    // 备份入口共用：导出动作（菜单里点“导出配置备份”）。
+    val exportBackup: () -> Unit = {
+        if (!backupBusy) {
+            backupBusy = true
+            backupScope.launch {
+                val exported = runCatching {
+                    val json = withContext(Dispatchers.IO) {
+                        ConfigBackup.encodeFromPrefs(effectivePrefs, versionName)
+                    }
+                    ConfigBackup.exportToDownloads(context, json)
+                }
+                backupBusy = false
+                exported.onSuccess { path ->
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.backup_export_done, path),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }.onFailure { e ->
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.backup_export_failed, e.message ?: ""),
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    // hook 回执（dex 老旧提示已移除，2026-11-13）：一条 ack 都收不到通常=没注入/被冻结。
     var hookAckMissing by remember { mutableStateOf(false) }
     LaunchedEffect(prefsRevision) {
-        // 模块 App 冷启动时桥绑定/首推可能晚于页面首帧：短轮询几次，拿到 ack 即停。
         repeat(5) {
             delay(800)
-            val disk = runCatching {
-                context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
-            }.getOrDefault(BuildConfig.VERSION_CODE.toLong())
-            val stale = ConfigSync.staleHostPackages(disk)
-            staleHosts = stale
-            if (stale.isNotEmpty()) return@LaunchedEffect
+            if (ConfigSync.ackSnapshot().isNotEmpty()) {
+                hookAckMissing = false
+                return@LaunchedEffect
+            }
         }
-        // 旧 dex 没有 `vc` extra / hook 没注入/冻结：一条 ack 都收不到。
         hookAckMissing = RemotePrefsBridge.prefs != null && ConfigSync.ackSnapshot().isEmpty()
     }
 
@@ -287,57 +311,17 @@ internal fun AboutPage(
         item { SectionTitle(text = stringResource(R.string.about_more)) }
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
-                // 配置备份（2026-11-11）：JSON 覆盖布局/交互/操作/固定应用/快捷方式/组
+                // 配置备份（2026-11-11；2026-11-13 合并为一个入口）：
+                // 点击后二选一“导出 / 恢复”，不再平铺两行占位。
                 ArrowPreference(
-                    title = stringResource(R.string.backup_export),
+                    title = stringResource(R.string.backup_menu_title),
                     summary = when {
                         backupBusy -> stringResource(R.string.backup_busy)
                         RemotePrefsBridge.prefs == null -> stringResource(R.string.backup_unbound)
-                        else -> null
+                        else -> stringResource(R.string.backup_menu_summary)
                     },
-                    onClick = {
-                        if (!backupBusy) {
-                            backupBusy = true
-                            backupScope.launch {
-                                val exported = runCatching {
-                                    val json = withContext(Dispatchers.IO) {
-                                        ConfigBackup.encodeFromPrefs(effectivePrefs, versionName)
-                                    }
-                                    ConfigBackup.exportToDownloads(context, json)
-                                }
-                                backupBusy = false
-                                exported.onSuccess { path ->
-                                    Toast.makeText(
-                                        context,
-                                        context.getString(R.string.backup_export_done, path),
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }.onFailure { e ->
-                                    Toast.makeText(
-                                        context,
-                                        context.getString(R.string.backup_export_failed, e.message ?: ""),
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                }
-                            }
-                        }
-                    }
+                    onClick = { if (!backupBusy) showBackupMenu = true }
                 )
-                ArrowPreference(
-                    title = stringResource(R.string.backup_import),
-                    summary = if (backupBusy) stringResource(R.string.backup_busy) else null,
-                    onClick = { if (!backupBusy) importPicker.launch(arrayOf("*/*")) }
-                )
-                if (staleHosts.isNotEmpty()) {
-                    ArrowPreference(
-                        title = stringResource(R.string.stale_host_title),
-                        summary = stringResource(R.string.stale_host_summary, staleHosts.size),
-                        onClick = {
-                            selectedRestarts = staleHosts
-                            showHostRestart = true
-                        }
-                    )
-                }
                 if (hookAckMissing) {
                     ArrowPreference(
                         title = stringResource(R.string.hook_ack_missing_title),
@@ -508,6 +492,41 @@ internal fun AboutPage(
         }
     )
 
+    // 备份与恢复（2026-11-13）：一个入口，弹窗内二选一“导出/恢复”。
+    WindowDialog(
+        show = showBackupMenu,
+        title = stringResource(R.string.backup_menu_title),
+        onDismissRequest = { if (!backupBusy) showBackupMenu = false },
+        content = {
+            BasicComponent(
+                title = stringResource(R.string.backup_export),
+                summary = if (backupBusy) stringResource(R.string.backup_busy) else null,
+                onClick = {
+                    if (!backupBusy) {
+                        showBackupMenu = false
+                        exportBackup()
+                    }
+                }
+            )
+            BasicComponent(
+                title = stringResource(R.string.backup_import),
+                summary = if (backupBusy) stringResource(R.string.backup_busy) else null,
+                onClick = {
+                    if (!backupBusy) {
+                        showBackupMenu = false
+                        importPicker.launch(arrayOf("*/*"))
+                    }
+                }
+            )
+            Spacer(Modifier.height(8.dp))
+            TextButton(
+                text = stringResource(R.string.layout_sheet_cancel),
+                onClick = { if (!backupBusy) showBackupMenu = false },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    )
+
     // 备份恢复确认（2026-11-11）：解析成功才弹；确认后 IO 写、主线程 toast。
     ImportConfirmDialog(
         snapshot = importPreview,
@@ -515,13 +534,18 @@ internal fun AboutPage(
             importPreview = null
             backupBusy = true
             backupScope.launch {
+                val pm = context.packageManager
                 val result = withContext(Dispatchers.IO) {
-                    ConfigBackup.apply(effectivePrefs, snapshot)
+                    ConfigBackup.apply(effectivePrefs, snapshot) { pkg ->
+                        runCatching { pm.getPackageInfo(pkg, 0) }.isSuccess
+                    }
                 }
                 backupBusy = false
                 val msg = when (result) {
                     is ConfigBackup.ApplyResult.Success -> context.getString(
                         R.string.backup_import_done,
+                        result.appsWritten,
+                        result.appsSkipped,
                         result.settingsWritten,
                         result.shortcutsWritten
                     )

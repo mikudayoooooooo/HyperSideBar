@@ -56,7 +56,6 @@ import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.prefs.savePref
 import com.lsp.hypersidebar.util.ConfigBackup
-import com.lsp.hypersidebar.util.ConfigSync
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.UpdateChecker
 import io.github.libxposed.service.XposedService
@@ -217,18 +216,7 @@ internal fun AboutPage(
         }
     }
 
-    // hook 回执（dex 老旧提示已移除，2026-11-13）：一条 ack 都收不到通常=没注入/被冻结。
-    var hookAckMissing by remember { mutableStateOf(false) }
-    LaunchedEffect(prefsRevision) {
-        repeat(5) {
-            delay(800)
-            if (ConfigSync.ackSnapshot().isNotEmpty()) {
-                hookAckMissing = false
-                return@LaunchedEffect
-            }
-        }
-        hookAckMissing = RemotePrefsBridge.prefs != null && ConfigSync.ackSnapshot().isEmpty()
-    }
+    // hook 回执/旧 dex 提示均已移除（2026-11-13 用户要求）。
 
     LazyColumn(
         modifier = modifier
@@ -322,16 +310,6 @@ internal fun AboutPage(
                     },
                     onClick = { if (!backupBusy) showBackupMenu = true }
                 )
-                if (hookAckMissing) {
-                    ArrowPreference(
-                        title = stringResource(R.string.hook_ack_missing_title),
-                        summary = stringResource(R.string.hook_ack_missing_summary),
-                        onClick = {
-                            selectedRestarts = HostRestarter.HOSTS.map { it.pkg }.toSet()
-                            showHostRestart = true
-                        }
-                    )
-                }
                 // 恢复默认值（0922 从首页迁入）：低频破坏性操作不再占首页一个分区；
                 // 只回写布局/手势/背景参数，应用选择与快捷方式不受影响（确认 dialog 里说清）
                 BasicComponent(

@@ -141,8 +141,6 @@
     <string name="relay_notification_title">正在启动快捷方式</string>
     <string name="relay_notification_text">root 代发执行中，完成后自动消失</string>
 
-    <string name="hook_ack_missing_title">未收到 hook 回执（可能没注入/旧代码/被冻结）</string>
-    <string name="hook_ack_missing_summary">点此重启三个 hook 宿主；仍无回执时检查 LSPosed 作用域与模块 APK 路径（tools/hsb_deploy.py）</string>
 
     <!-- Shortcut -->
     <string name="shortcut_count_format">已添加 %1$d · 启用 %2$d</string>

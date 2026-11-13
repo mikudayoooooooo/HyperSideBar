@@ -72,8 +72,24 @@ object DataLoader {
     @Volatile private var failureToastShown = false
 
     private val executor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
-        Thread(r, "FanDataLoader").apply { isDaemon = true }
+        Thread(r, "FanDataLoader").apply {
+            isDaemon = true
+            // 2026-11-13（issue #12 次要问题）：refresh 任务若仍有异常漏出，绝不能让
+            // ThreadGroup 默认处理器把整段栈写到 System.err/logd（高压设备上 38 分钟
+            // 41 次）。这里兜底成一条节流 W，最多 60s 一次、不带栈；线程由线程池重建。
+            setUncaughtExceptionHandler { _, e ->
+                // 处理器自身也绝不能抛（OOM 时字符串拼接也可能再失败）。
+                runCatching {
+                    val now = System.currentTimeMillis()
+                    if (now - lastLoaderUncaughtAt >= 60_000L) {
+                        lastLoaderUncaughtAt = now
+                        HLog.w(TAG, "loader uncaught: ${e.javaClass.simpleName}: ${e.message}")
+                    }
+                }
+            }
+        }
     }
+    @Volatile private var lastLoaderUncaughtAt = 0L
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
 
@@ -190,58 +206,74 @@ object DataLoader {
     private fun refreshAsync(context: Context) {
         if (refreshing) return
         refreshing = true
-        executor.execute {
-            try {
-                hydrateFromDisk(context)
-                val t0 = android.os.SystemClock.elapsedRealtime()
-                // 原料仓刷新（§A2）：新路径拿 romScores；任一环异常降级旧路径=legacyOrder
-                val scores = runCatching { loadRomScores(context) }
-                    .onFailure { HLog.w(TAG, "romScores path failed, fallback legacy: ${it.message}") }
-                    .getOrNull()
-                // 上下文记录装载（搭现有周期车，不新增线程/循环）：读+剪枝进内存
-                runCatching {
-                    val now = System.currentTimeMillis()
-                    contextCounts = ContextLaunchLog.countsAll(
-                        ContextLaunchLog.prune(ContextLaunchLog.read(context.contentResolver), now)
-                    )
-                }.onFailure { HLog.w(TAG, "context load failed: ${it.message}") }
+        // 热重载会 shutdownNow；之后迟到的调用若直接 execute 会在**主线程**抛
+        // RejectedExecutionException（host 进程崩溃）。这里兜底并复位 refreshing。
+        runCatching {
+            executor.execute {
+                try {
+                    hydrateFromDisk(context)
+                    val t0 = android.os.SystemClock.elapsedRealtime()
+                    // 原料仓刷新（§A2）：新路径拿 romScores；任一环异常降级旧路径=legacyOrder
+                    val scores = runCatching { loadRomScores(context) }
+                        .onFailure { HLog.w(TAG, "romScores path failed, fallback legacy: ${it.message}") }
+                        .getOrNull()
+                    // 上下文记录装载（搭现有周期车，不新增线程/循环）：读+剪枝进内存
+                    runCatching {
+                        val now = System.currentTimeMillis()
+                        contextCounts = ContextLaunchLog.countsAll(
+                            ContextLaunchLog.prune(ContextLaunchLog.read(context.contentResolver), now)
+                        )
+                    }.onFailure { HLog.w(TAG, "context load failed: ${it.message}") }
 
-                val suggestion: List<String>
-                if (scores != null) {
-                    romScores = scores
-                    suggestion = SuggestionRanker.rank(
-                        scores, contextCounts, null,
-                        com.lsp.hypersidebar.prefs.LayoutDefaults.REC_CTX_WEIGHT,
-                        com.lsp.hypersidebar.prefs.LayoutDefaults.REC_CTX_CAP
-                    )
-                } else {
-                    suggestion = loadSuggestionApps(context)
-                    legacyOrder = suggestion
-                }
-                cachedResult = suggestion
-                lastFetchTime = System.currentTimeMillis()
-                consecutiveFailures = 0
-                persistToDisk(context, scores, suggestion)
-                // label 预热（1C P3）：扇形呼出主线程逐 pkg 调 AppMetaCache.label，miss 即
-                // PM binder（首呼出最多 14 次）——后台刷新顺带灌缓存，呼出路径恒命中
-                suggestion.take(LEGACY_ORDER_LIMIT).forEach { AppMetaCache.label(context, it) }
-                HLog.i(
-                    TAG,
-                    "refreshed ${suggestion.size} suggestion apps in ${android.os.SystemClock.elapsedRealtime() - t0}ms (background, scores=${scores != null}, ctx=${contextCounts.size})"
-                )
-            } catch (e: Throwable) {
-                HLog.w(TAG, "refresh failed: ${e.message}")
-                consecutiveFailures++
-                if (!failureToastShown && cachedResult == null && consecutiveFailures >= DEAD_THRESHOLD) {
-                    failureToastShown = true
-                    mainHandler.post {
-                        toastOnMain(context, "推荐数据获取失败")
-                        onDataSourceDead?.invoke()
+                    val suggestion: List<String>
+                    if (scores != null) {
+                        romScores = scores
+                        suggestion = SuggestionRanker.rank(
+                            scores, contextCounts, null,
+                            com.lsp.hypersidebar.prefs.LayoutDefaults.REC_CTX_WEIGHT,
+                            com.lsp.hypersidebar.prefs.LayoutDefaults.REC_CTX_CAP
+                        )
+                    } else {
+                        suggestion = loadSuggestionApps(context)
+                        legacyOrder = suggestion
                     }
+                    cachedResult = suggestion
+                    lastFetchTime = System.currentTimeMillis()
+                    consecutiveFailures = 0
+                    persistToDisk(context, scores, suggestion)
+                    // label 预热（1C P3）：扇形呼出主线程逐 pkg 调 AppMetaCache.label，miss 即
+                    // PM binder（首呼出最多 14 次）——后台刷新顺带灌缓存，呼出路径恒命中
+                    suggestion.take(LEGACY_ORDER_LIMIT).forEach { AppMetaCache.label(context, it) }
+                    HLog.i(
+                        TAG,
+                        "refreshed ${suggestion.size} suggestion apps in ${android.os.SystemClock.elapsedRealtime() - t0}ms (background, scores=${scores != null}, ctx=${contextCounts.size})"
+                    )
+                } catch (e: Throwable) {
+                    consecutiveFailures++
+                    // 2026-11-13：失败日志同样限频（首次/前 3 次/每 10 次），避免后台
+                    // 反射失败在高压设备上把 1000 条 HLog 环刷掉；System.err 栈由线程
+                    // 未捕获处理器兜底。
+                    if (consecutiveFailures <= 3 || consecutiveFailures % 10 == 0) {
+                        HLog.w(
+                            TAG,
+                            "refresh failed (#$consecutiveFailures): " +
+                                "${e.javaClass.simpleName}: ${e.message}"
+                        )
+                    }
+                    if (!failureToastShown && cachedResult == null && consecutiveFailures >= DEAD_THRESHOLD) {
+                        failureToastShown = true
+                        mainHandler.post {
+                            toastOnMain(context, "推荐数据获取失败")
+                            onDataSourceDead?.invoke()
+                        }
+                    }
+                } finally {
+                    refreshing = false
                 }
-            } finally {
-                refreshing = false
             }
+        }.onFailure {
+            refreshing = false
+            HLog.w(TAG, "refresh dispatch failed: ${it.message}")
         }
     }
 

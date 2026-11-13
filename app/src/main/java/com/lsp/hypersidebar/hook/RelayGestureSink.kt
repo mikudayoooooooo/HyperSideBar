@@ -162,8 +162,10 @@ object RelayGestureSink {
             streamEdgeFlags = ev.edgeFlags
             streamPointerId = ev.getPointerId(0)
             streamCorner = cornerStream
-            HLog.i(TAG, "stream DOWN (${ev.rawX.toInt()},${ev.rawY.toInt()}) land=$landscape" +
-                if (streamCorner) " zone=corner" else "")
+            if (HLog.verboseEnabled) {
+                HLog.i(TAG, "stream DOWN (${ev.rawX.toInt()},${ev.rawY.toInt()}) land=$landscape" +
+                    if (streamCorner) " zone=corner" else "")
+            }
         }
         if (cornerStream) {
             o.feedCornerGesture(

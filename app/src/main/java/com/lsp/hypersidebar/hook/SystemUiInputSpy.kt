@@ -931,7 +931,7 @@ object SystemUiInputSpy {
         // 只看几何、不看状态位（理由见 FreeformBlankTapHook.takeoverRects 的注释）
         val wins = h.takeoverRects()
         if (wins.isEmpty()) {
-            HLog.i(TAG, "takeover: no window geometry ⇒ not armed")
+            if (HLog.verboseEnabled) HLog.i(TAG, "takeover: no window geometry ⇒ not armed")
             return@runCatching false
         }
         // 抢流与"能否动作"同门（2026-10-17）：没有可动作的目标 ⇒ 不抢，让点击照常落到背后 app。
@@ -943,7 +943,7 @@ object SystemUiInputSpy {
         // ⇒ isBlank 误判"空白" ⇒ 抢流被 ROM caption 监视器回抢 ⇒ 手势被当 caption 拖拽
         // ⇒ 窗口被误最大化）。⇒ 窗口动画期间一律不抢流。
         if (h.anyWindowAnimating()) {
-            HLog.i(TAG, "takeover: 小窗动画中 ⇒ 不抢流")
+            if (HLog.verboseEnabled) HLog.i(TAG, "takeover: 小窗动画中 ⇒ 不抢流")
             return@runCatching false
         }
         // 挂起窗几何缺失（2026-10-25 乱跳修复的 fail-open 门）：isBlank 的 pinned 非空白
@@ -951,7 +951,9 @@ object SystemUiInputSpy {
         // 动作打到别的窗（用户实测"乱跳不展开"）。宁可本轮不接管（点击全穿透给 ROM）。
         val pinNoGeom = h.pinnedWithoutGeometry()
         if (pinNoGeom > 0) {
-            HLog.i(TAG, "takeover: $pinNoGeom 只挂起窗几何缺失 ⇒ 不抢流（fail-open）")
+            if (HLog.verboseEnabled) {
+                HLog.i(TAG, "takeover: $pinNoGeom 只挂起窗几何缺失 ⇒ 不抢流（fail-open）")
+            }
             return@runCatching false
         }
         val mode = prefs?.getString(
@@ -959,7 +961,9 @@ object SystemUiInputSpy {
             com.lsp.hypersidebar.prefs.LayoutDefaults.FREEFORM_BLANK_TAP_MODE_DEFAULT
         ) ?: com.lsp.hypersidebar.prefs.LayoutDefaults.FREEFORM_BLANK_TAP_MODE_DEFAULT
         if (!h.hasActionTarget(mode)) {
-            HLog.i(TAG, "takeover: 无可动作小窗（mode=$mode）⇒ 不抢流")
+            if (HLog.verboseEnabled) {
+                HLog.i(TAG, "takeover: 无可动作小窗（mode=$mode）⇒ 不抢流")
+            }
             return@runCatching false
         }
         HLog.i(TAG, "takeover armed at (${x.toInt()},${y.toInt()}) wins=${wins.size}")
@@ -1549,7 +1553,7 @@ object SystemUiInputSpy {
                     if (takeover.active) {
                         // 已有接管中的手势（多指/两区同起）⇒ 本条不抢（回到穿透），别把前一条
                         // 的记录冲掉——重放需要它完整。
-                        HLog.i(TAG, "takeover busy at DOWN — 不抢流")
+                        if (HLog.verboseEnabled) HLog.i(TAG, "takeover busy at DOWN — 不抢流")
                     } else if (!takeoverPilferNow()) {
                         // 2026-11-12：抢流失败就不要 begin——否则 UP 会按"已接管"重放，
                         // 给背后 app 造出重复事件（点击既没被吞也没被原样放过）。

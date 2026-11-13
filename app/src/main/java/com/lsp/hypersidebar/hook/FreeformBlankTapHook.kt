@@ -676,7 +676,9 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         // 探针状态一起打出来（自诊断：键盘起着时这两个值决定护栏是否生效——
         // `floating`=insets 帧退化（浮层键盘），`romUp`=ROM 的 mImeShowing；都为 null/false
         // 就说明事件源没装上，那种情况下护栏不可能生效）。
-        if (verdict == true || HLog.verboseEnabled) {
+        // 2026-11-13：verdict=true 的空白点每次点按都会走到这里；常开会把 1000 条环刷掉
+        // （普通点击 0 行）。命中/失败证据分别由 `blank tap hit` 与 verbose 提供。
+        if (HLog.verboseEnabled) {
             HLog.i(TAG, "isBlank pred=$predBlank kernel=$kernelBlank -> $verdict " +
                 "at (${"%.0f".format(ev.x)},${"%.0f".format(ev.y)}) " +
                 "[ime floating=${InsetProbe.floatingIme} romUp=${InsetProbe.romImeShowing()} " +
@@ -1106,7 +1108,7 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         }
         // 档位敏感：close 档下 mini/挂起窗也算目标（见 pickTargetTaskId 的注释）
         val taskId = pickTargetTaskId(mode) ?: run {
-            HLog.i(TAG, "perform skipped: no visible freeform task")
+            if (HLog.verboseEnabled) HLog.i(TAG, "perform skipped: no visible freeform task")
             return false
         }
         if (mode == PrefKeys.FREEFORM_BLANK_TAP_MODE_CLOSE) {

@@ -471,8 +471,8 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
             .getOrElse { return shadeFail("provider.get() failed: ${it.message}", it) }
             ?: return shadeFail("provider.get()=null")
         val state = runCatching {
-            controller.javaClass.getDeclaredField("mCurrentState")
-                .apply { isAccessible = true }.get(controller)
+            // Impl 类直接声明 mCurrentState；用层级查找防 ROM 把它挪到父类。
+            fieldInHierarchy(controller.javaClass, "mCurrentState").get(controller)
         }.getOrElse {
             return shadeFail("mCurrentState missing (controller=${controller.javaClass.simpleName})", it)
         } ?: return shadeFail("mCurrentState=null")
@@ -494,26 +494,33 @@ class FreeformBlankTapHook(private val prefs: SharedPreferences) : BaseHook() {
         return readShade(state, fields)
     }
 
-    /** 在组件（或其嵌套的 ReferenceSysUIComponentImpl）的字段里找 shade 控制器 Provider。 */
+    /** 在组件（或其嵌套的 ReferenceSysUIComponentImpl）的字段里找 shade 控制器 Provider。
+     *  ⚠ OS4 同时有 `notificationShadeWindowControllerExtProvider`（优先级在前，且它的
+     *  `NotificationShadeWindowControllerExt` 没有 `mCurrentState`）与
+     *  `...ImplProvider` ⇒ **必须精确匹配 Impl**，不能只 contains（2026-11-13 真机实证：
+     *  contains 选中 Ext ⇒ 空白点击全 fail-closed）。 */
     private fun findShadeControllerProvider(comp: Any): Any? {
-        val fs = comp.javaClass.declaredFields
-        fs.firstOrNull { f ->
-            val n = f.name.lowercase()
-            n.contains("notificationshadewindowcontroller") && n.contains("provider")
-        }?.let { f ->
-            val v = runCatching { f.isAccessible = true; f.get(comp) }.getOrNull()
-            if (v != null) return v
+        val exact = "notificationshadewindowcontrollerimplprovider"
+        fun match(owner: Any): Any? {
+            val fs = owner.javaClass.declaredFields
+            return (fs.firstOrNull { it.name.lowercase() == exact }
+                ?: fs.firstOrNull { f ->
+                    val n = f.name.lowercase()
+                    n.contains("notificationshadewindowcontroller") && n.contains("provider") &&
+                        !n.contains("ext") && !n.contains("delegate")
+                })?.let { f ->
+                runCatching { f.isAccessible = true; f.get(owner) }.getOrNull()
+            }
         }
-        val nestedField = fs.firstOrNull { it.name.lowercase().contains("referencesysuicomponentimpl") }
+        match(comp)?.let { return it }
+        val nestedField = comp.javaClass.declaredFields
+            .firstOrNull { it.name.lowercase().contains("referencesysuicomponentimpl") }
             ?: return null
         val nested = runCatching {
             nestedField.isAccessible = true
             nestedField.get(comp)
         }.getOrNull() ?: return null
-        return nested.javaClass.declaredFields.firstOrNull { f ->
-            val n = f.name.lowercase()
-            n.contains("notificationshadewindowcontroller") && n.contains("provider")
-        }?.let { f -> runCatching { f.isAccessible = true; f.get(nested) }.getOrNull() }
+        return match(nested)
     }
 
     private fun fieldInHierarchy(cls: Class<*>, name: String): java.lang.reflect.Field {

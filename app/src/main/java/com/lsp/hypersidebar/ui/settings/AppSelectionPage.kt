@@ -50,6 +50,7 @@ import com.lsp.hypersidebar.ui.fan.AppIconImage
 import com.lsp.hypersidebar.ui.fan.FanAppInfo
 import com.lsp.hypersidebar.ui.fan.rememberAppIcon
 import com.lsp.hypersidebar.util.RelayToken
+import com.lsp.hypersidebar.util.RemotePrefsBridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
@@ -91,26 +92,29 @@ internal fun AppSelectionPage(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    // D1 残留（同 SettingsPage:52）：nav3 entry 可能固化绑定前的本地空壳 prefs，
+    // 读写统一切到 bridge 真源（remote 绑定后 Compose state 强制重组切读取源）
+    val effectivePrefs = RemotePrefsBridge.prefs ?: prefs
     var searchQuery by remember { mutableStateOf("") }
     var searchExpanded by remember { mutableStateOf(false) }
     // 数据源在 App 之外（:ui 准入列表 + PM）⇒ 支持顶栏刷新与下拉刷新
     var refreshToken by remember { mutableStateOf(0) }
     var refreshing by remember { mutableStateOf(false) }
-    var selectedApps by remember(prefs, prefsKey) {
-        mutableStateOf(prefs.getStringSet(prefsKey, emptySet()).orEmpty().toSet())
+    var selectedApps by remember(effectivePrefs, prefsKey) {
+        mutableStateOf(effectivePrefs.getStringSet(prefsKey, emptySet()).orEmpty().toSet())
     }
     // 已选顺序（拖动排序，§2.4）：CUSTOM_APPS_ORDER JSON 数组为权威；
     // 顺序键缺失/不完整时（旧数据迁移——升级前勾选的应用不在键里）把缺失项
     // 追加尾部，保证已选组完整可见，否则已选应用会在列表中整体消失
-    var selectedOrder by remember(prefs, prefsKey) {
-        val selected = prefs.getStringSet(prefsKey, emptySet()).orEmpty().toSet()
-        val stored = loadSelectedOrder(prefs)
+    var selectedOrder by remember(effectivePrefs, prefsKey) {
+        val selected = effectivePrefs.getStringSet(prefsKey, emptySet()).orEmpty().toSet()
+        val stored = loadSelectedOrder(effectivePrefs)
         mutableStateOf(stored.filter { it in selected } + (selected - stored.toSet()))
     }
 
     fun persistSelection() {
-        prefs.savePref(prefsKey, selectedApps)
-        prefs.savePref(
+        effectivePrefs.savePref(prefsKey, selectedApps)
+        effectivePrefs.savePref(
             PrefKeys.CUSTOM_APPS_ORDER,
             org.json.JSONArray(selectedOrder.filter { it in selectedApps }).toString()
         )
@@ -140,10 +144,10 @@ internal fun AppSelectionPage(
 
             // ① 读"之前的"：模块本地准入列表缓存（:ui 上次回带后落库），秒开且不依赖 :ui 存活。
             // 准入数据源（PRD §7.3.3"无小窗资格的应用在数据源层面即不展示"）取代原 PM 全列表
-            val cached = readCachedSuggestions(prefs)
+            val cached = readCachedSuggestions(effectivePrefs)
             if (cached.isNotEmpty()) {
                 val items = withContext(Dispatchers.IO) {
-                    withMissingPinned(appContext, prefs, prefsKey, loadAdmissionItems(appContext, cached))
+                    withMissingPinned(appContext, effectivePrefs, prefsKey, loadAdmissionItems(appContext, cached))
                 }
                 cachedApps = items
                 value = AppLoadState.Loaded(items)
@@ -156,9 +160,9 @@ internal fun AppSelectionPage(
             }
             if (fresh != null && fresh != cached) {
                 val items = withContext(Dispatchers.IO) {
-                    withMissingPinned(appContext, prefs, prefsKey, loadAdmissionItems(appContext, fresh))
+                    withMissingPinned(appContext, effectivePrefs, prefsKey, loadAdmissionItems(appContext, fresh))
                 }
-                persistCachedSuggestions(prefs, fresh)
+                persistCachedSuggestions(effectivePrefs, fresh)
                 cachedApps = items
                 value = AppLoadState.Loaded(items)
                 return@produceState

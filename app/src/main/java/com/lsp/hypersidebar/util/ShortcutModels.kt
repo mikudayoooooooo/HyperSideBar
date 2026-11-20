@@ -281,7 +281,10 @@ object ShortcutStore {
         userItems.forEach { arr.put(it.toJson()) }
 
         try {
-            prefs.edit().putString(KEY, arr.toString()).apply()
+            // 同步 commit（2026-11-20，与固定应用删空同因）：apply 只改内存、落库走单线程
+            // EXECUTOR 异步 binder，"保存→立刻退出(kill)"会把队列尾部截断；commit 失败
+            // 仍落进下方 catch 记日志。REFUSED 防覆盖闸与成功日志均保持原样。
+            prefs.edit().putString(KEY, arr.toString()).commit()
             // 快捷方式列表是 hook 侧直接读的键，写完显式推一次配置同步（见 ConfigSync.notifyConfigChanged）
             com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged(KEY)
             // 诊断锚点：快捷栏缺失问题时区分"保存没落盘"（无此行/条目缺）vs"扇形没读到"

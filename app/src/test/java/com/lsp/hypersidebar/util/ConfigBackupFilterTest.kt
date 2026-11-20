@@ -76,6 +76,33 @@ class ConfigBackupFilterTest {
         assertEquals(0, result.appsSkipped)
         assertEquals(1, result.settingsWritten)
     }
+
+    @Test
+    fun `importing zero kept apps removes row and backfills empty set`() {
+        val prefs = FakePrefs()
+        // 预置 DB 旧值：旧版空集 put 在框架 DB 层不生效，会残留此值（2026-11-20 实测根因）
+        prefs.edit().putStringSet(PrefKeys.CUSTOM_APPS, hashSetOf("com.stale.app")).commit()
+        val snapshot = ConfigBackup.Snapshot(
+            settings = emptyMap(),
+            customApps = linkedSetOf("com.missing.app"),
+            customAppsOrder = listOf("com.missing.app"),
+            shortcuts = null,
+        )
+
+        val result = ConfigBackup.apply(prefs, snapshot) { false }
+
+        result as ConfigBackup.ApplyResult.Success
+        assertEquals("全部未安装：写入 0", 0, result.appsWritten)
+        assertEquals("全部未安装：跳过 1", 1, result.appsSkipped)
+        // 删行 + 回填空集：快照必须显式带空集而非残留旧值（ConfigSync 全量推送与
+        // hook 侧 SyncedPrefs 缺键回落都会复活缺键旧值）
+        assertEquals(
+            "空导入后快照必须是空集而非残留旧值",
+            setOf<String>(),
+            prefs.getStringSet(PrefKeys.CUSTOM_APPS, null),
+        )
+        assertEquals("顺序表同步清空", "[]", prefs.getString(PrefKeys.CUSTOM_APPS_ORDER, null))
+    }
 }
 
 /** 只实现 ConfigBackup.apply 用到的 SharedPreferences/Editor 面。 */

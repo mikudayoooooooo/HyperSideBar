@@ -140,6 +140,9 @@ object PrefKeys {
     const val CUSTOM_APPS_ORDER = "customAppsOrder"
     const val SHORTCUT_ACTIONS = "shortcut_actions"   // 用户快捷方式 JSON（权威 key）
 
+    /** 用户资产键（丢失需用户重设）：写走同步 commit；空集走 remove+回填两段（见 SettingsRepository.commitUserAsset）。 */
+    val USER_ASSET_KEYS = setOf(CUSTOM_APPS, CUSTOM_APPS_ORDER, SHORTCUT_ACTIONS)
+
     /** 配置恢复通道（ConfigRestoreReceiver）：请求 action 与 extras（2026-10-19 数据事故后新增）。 */
     const val ACTION_CONFIG_RESTORE = "io.github.mikudayoooooooo.hypersidebar.ACTION_CONFIG_RESTORE"
     const val RESTORE_EXTRA_KEY = "restoreKey"

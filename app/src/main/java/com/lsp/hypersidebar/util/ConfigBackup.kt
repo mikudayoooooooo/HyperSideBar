@@ -364,8 +364,18 @@ object ConfigBackup {
         val keptOrder = snapshot.customAppsOrder?.filter { pkg ->
             runCatching { isPackageInstalled(pkg) }.getOrDefault(false)
         }
+        // 空集两段写（2026-11-20 OS3 实测"导入空固定应用→DB 残留旧值"）：空集 putStringSet
+        // 在框架 DB 层不生效 ⇒ 删行落库，主 commit 成功后回填空集进内存快照（ConfigSync
+        // 全量推送与 hook 侧 SyncedPrefs 缺键回落 base 死快照都要求 getAll() 显式带空集，
+        // 否则旧值复活）。settingsWritten 口径不变（仍计一次写入）。
+        var removedCustomApps = false
         snapshot.customApps?.let {
-            editor.putStringSet(PrefKeys.CUSTOM_APPS, keptApps.orEmpty().toHashSet())
+            if (keptApps.orEmpty().isEmpty()) {
+                editor.remove(PrefKeys.CUSTOM_APPS)
+                removedCustomApps = true
+            } else {
+                editor.putStringSet(PrefKeys.CUSTOM_APPS, keptApps.orEmpty().toHashSet())
+            }
             settingsWritten++
         }
         snapshot.customAppsOrder?.let {
@@ -374,6 +384,11 @@ object ConfigBackup {
         }
         val committed = runCatching { editor.commit() }.getOrDefault(false)
         if (!committed) return ApplyResult.Rejected("写入配置失败（SharedPreferences.commit 返回 false）")
+        if (removedCustomApps) {
+            // 回填失败仅意味 live 通道慢一拍（DB 已删行，进程重启即正确）；本对象纯 JVM
+            // 可测、不引日志依赖，故不记日志
+            prefs.edit().putStringSet(PrefKeys.CUSTOM_APPS, java.util.HashSet<String>()).commit()
+        }
         if (!localFallback) {
             snapshot.shortcuts?.let { ShortcutStore.saveUserShortcuts(prefs, it) }
         }

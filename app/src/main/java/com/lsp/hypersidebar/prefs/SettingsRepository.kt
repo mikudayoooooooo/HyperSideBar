@@ -5,6 +5,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 
+import com.lsp.hypersidebar.util.HLog
+
+private const val TAG = "SettingsRepository"
+
 /**
  * 设置 App 侧的单一数据源：typed 读写 + revision 失效通道。
  *
@@ -249,13 +253,29 @@ class SettingsRepository(val prefs: SharedPreferences) {
     }
 }
 
-/** 类型分发写 prefs（App 侧通用写入口）。
+/** 用户资产键的可靠落库（2026-11-20 OS3 实测：删空固定应用后残留最后一项）。
  *
- *  写完显式推一次配置同步——不让「设置能否热更新」依赖 `RemotePreferences` 是否回调本地
- *  变更监听（未写进契约的隐藏依赖；一旦不回调，模块侧只剩「绑定完成即推一次」，
- *  症状就是"改完不生效、重开设置 App 才生效"）。 */
-fun SharedPreferences.savePref(key: String, value: Any) {
-    edit().apply {
+ *  两条根因（libxposed RemotePreferences.java 源码 + 设备 DB 实证）：
+ *  ① `Editor.apply()` 只改本进程内存，落库是单线程 EXECUTOR 异步 binder——
+ *    "清除→立刻退出(kill)"会把队列尾部截断（实测 4 个逐个删后 kill 残留最后 1 个）。
+ *  ② 空集 `putStringSet(key, {})` 在框架 DB 层不生效：DB 里 customAppsOrder（后写）
+ *    已清、customApps（先写）停旧值 ⇒ 不是 kill 截断，是空集 put 被下游丢弃/忽略——
+ *    删空那次永远不落，正是"残留恰好最后一项"的原因。
+ *
+ *  形状 = 同步 commit（关掉 apply 截断窗口）+ 空集两段写（删行落库 → 回填空集进内存
+ *  快照）：回填段不可省——ConfigSync 全量推送与 hook 侧 SyncedPrefs 缺键回落 base
+ *  死快照都靠 getAll() 显式带空集，缺键会把旧值复活。
+ *  commit() 可感知失败（apply 不能），失败交由 savePref 记日志。 */
+fun SharedPreferences.commitUserAsset(key: String, value: Any): Boolean {
+    if (value is Set<*> && value.isEmpty()) {
+        // ① 删行落库：空集 put 在框架 DB 层不生效（2026-11-20 设备 DB 实证 set 停旧值/order 已清）
+        if (!edit().remove(key).commit()) return false
+        // ② 回填空集进内存快照：ConfigSync 全量推送 + hook 侧 SyncedPrefs 缺键回落 base
+        //   死快照（旧值复活），getAll() 必须显式带着空集
+        @Suppress("UNCHECKED_CAST")
+        return edit().putStringSet(key, value as Set<String>).commit()
+    }
+    return edit().apply {
         when (value) {
             is Boolean -> putBoolean(key, value)
             is Float -> putFloat(key, value)
@@ -266,6 +286,33 @@ fun SharedPreferences.savePref(key: String, value: Any) {
                 putStringSet(key, value as Set<String>)
             }
         }
-    }.apply()
+    }.commit()
+}
+
+/** 类型分发写 prefs（App 侧通用写入口）。
+ *
+ *  写完显式推一次配置同步——不让「设置能否热更新」依赖 `RemotePreferences` 是否回调本地
+ *  变更监听（未写进契约的隐藏依赖；一旦不回调，模块侧只剩「绑定完成即推一次」，
+ *  症状就是"改完不生效、重开设置 App 才生效"）。 */
+fun SharedPreferences.savePref(key: String, value: Any) {
+    if (key in PrefKeys.USER_ASSET_KEYS) {
+        // 用户资产键同步 commit：apply 的异步队列在"清除→立刻退出(kill)"时被截断
+        // （2026-11-20 实测残留最后 1 项）；空集自动走 remove+回填两段（见 commitUserAsset）
+        val ok = commitUserAsset(key, value)
+        if (!ok) HLog.w(TAG, "user asset commit failed: $key")
+    } else {
+        edit().apply {
+            when (value) {
+                is Boolean -> putBoolean(key, value)
+                is Float -> putFloat(key, value)
+                is Int -> putInt(key, value)
+                is String -> putString(key, value)
+                is Set<*> -> {
+                    @Suppress("UNCHECKED_CAST")
+                    putStringSet(key, value as Set<String>)
+                }
+            }
+        }.apply()
+    }
     com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged(key)
 }

@@ -4,7 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.lsp.hypersidebar.prefs.PrefKeys
-import com.lsp.hypersidebar.util.ConfigSync
+import com.lsp.hypersidebar.prefs.savePref
 import com.lsp.hypersidebar.util.HLog
 import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.RelayToken
@@ -85,16 +85,11 @@ class ConfigRestoreReceiver : BroadcastReceiver() {
                     HLog.w(TAG, "restore failed: remotePrefs 未绑定（LSPosed 桥不可用）")
                     return@Thread
                 }
-                prefs.edit().apply {
-                    if (parsed is Set<*>) {
-                        @Suppress("UNCHECKED_CAST")
-                        putStringSet(key, parsed as Set<String>)
-                    } else {
-                        putString(key, parsed as String)
-                    }
-                }.apply()
-                // 与 UI 保存同款：写完显式推一次配置同步（hook 进程实时生效）
-                ConfigSync.notifyConfigChanged(key)
+                // 与 UI 保存同款入口 savePref（2026-11-20）：资产键同步 commit（apply 异步
+                // 队列在"恢复→立刻退出(kill)"时被截断），CUSTOM_APPS 空集自动走 remove+回填
+                // 两段；CACHED_SUGGESTIONS 非资产键保持 apply——与旧行为同型。savePref 内已
+                // 显式推一次配置同步（hook 进程实时生效），此处不再单独推。
+                prefs.savePref(key, parsed)
                 HLog.i(
                     TAG,
                     "config restored: $key (${value.length}B, ${kind.name}, " +

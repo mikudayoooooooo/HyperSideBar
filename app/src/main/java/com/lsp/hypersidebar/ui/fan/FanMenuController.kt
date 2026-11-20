@@ -417,7 +417,9 @@ class FanMenuController(
         }
     }
 
-    /** 触摸事件转发给扇形菜单；返回 false 表示当前无菜单。跨线程安全（自动跳主线程）。 */
+    /** 触摸事件转发给扇形菜单；返回 false 表示当前无菜单。跨线程安全（自动跳主线程）。
+     *  B2 流驱动旗标在此处置位（真实派发点，见函数体注释）——调用方（EdgeGestureHook/
+     *  TurboLayout）不再管理旗标。 */
     fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (!isShowing) return false
         touchHeartbeat()
@@ -425,12 +427,30 @@ class FanMenuController(
         // 若 lambda 里读字段，转发的 UP 会被静默丢弃（实测 4 次呼出 0 次 UP 送达）
         val h = host ?: return false
         val copy = MotionEvent.obtain(event).apply { setLocation(event.rawX, event.rawY) }
+        // B2 流驱动旗标必须在真实派发点置位/复位（2026-11-20 OS3 快选失灵修复）：
+        // launcher 输入线程只把事件 post 到主线程，调用方置位在主线程实际派发时早已
+        // 复位 ⇒ 转发 UP 被 ComposeFanHost 孤儿防护吞掉、选中丢失——吞与不吞纯看调度
+        // 竞速（同 session orphan UP swallowed 与 UP commit 并存即两种结果）。旗标归
+        // 本函数所有；窗体自身 ViewRootImpl 收到的原始事件不经过这里 ⇒ 不带旗标，
+        // 照旧被防护吞（两条投递路径分离不变）。
         if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            try { h.dispatchTouchEvent(copy) } finally { copy.recycle() }
+            try {
+                B2StreamDispatch.active = true
+                h.dispatchTouchEvent(copy)
+            } finally {
+                B2StreamDispatch.active = false
+                copy.recycle()
+            }
         } else {
             // launcher 的触摸回调在 MiuiMirror 输入线程，Compose 视图操作必须主线程
             mainHandler.post {
-                try { h.dispatchTouchEvent(copy) } finally { copy.recycle() }
+                try {
+                    B2StreamDispatch.active = true
+                    h.dispatchTouchEvent(copy)
+                } finally {
+                    B2StreamDispatch.active = false
+                    copy.recycle()
+                }
             }
         }
         return true

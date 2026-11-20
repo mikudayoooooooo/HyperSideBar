@@ -307,30 +307,26 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
     ) {
         // fan 展示中：转发驱动；手势中途落地先合成 DOWN 起始选择状态（边缘通道同款：
         // showInternal 主线程阻塞期间丢 DOWN 会导致窗口原点/选中起点全部失效）。
-        // 派发期间置 B2 流驱动旗标：ComposeFanHost 孤儿防护对转发流的 DOWN/UP 放行
-        // （downTime < shownUptime 对 B 路径恒真，不旁路则拖选永无法提交）——窗体自身
-        // 收到的原始尾巴不带旗标，照旧被吞，两条投递路径分离。
+        // B2 流驱动旗标由 FanMenuController.dispatchTouchEvent 在真实派发前置位（本进程
+        // 主线程同步派发，语义与原先外置等价；launcher 侧 post 派发的竞速修复也在那里）：
+        // 孤儿防护对转发流的 DOWN/UP 放行（downTime < shownUptime 对 B 路径恒真，不旁路
+        // 则拖选永无法提交）——窗体自身收到的原始尾巴不带旗标，照旧被吞，两条投递路径分离。
         if (fanController.isShowing) {
-            com.lsp.hypersidebar.ui.fan.B2StreamDispatch.active = true
-            try {
-                if (!sFanSeen) {
-                    val down = MotionEvent.obtain(
-                        ev.downTime, ev.eventTime, MotionEvent.ACTION_DOWN, ev.rawX, ev.rawY, 0
-                    )
-                    try { sFanSeen = fanController.dispatchTouchEvent(down) } finally { down.recycle() }
+            if (!sFanSeen) {
+                val down = MotionEvent.obtain(
+                    ev.downTime, ev.eventTime, MotionEvent.ACTION_DOWN, ev.rawX, ev.rawY, 0
+                )
+                try { sFanSeen = fanController.dispatchTouchEvent(down) } finally { down.recycle() }
+            }
+            fanController.dispatchTouchEvent(ev)
+            if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+                // 常驻模式：松手未提交选中 → 转点选态（窗口保留）；现状=立即收起。
+                // UP 已提交选中时 LAUNCHED 收起在先、isShowing=false，两分支都自然跳过
+                if (fanController.isShowing) {
+                    if (fanController.stayAfterRelease()) fanController.onGestureEnded()
+                    else fanController.dismiss()
                 }
-                fanController.dispatchTouchEvent(ev)
-                if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
-                    // 常驻模式：松手未提交选中 → 转点选态（窗口保留）；现状=立即收起。
-                    // UP 已提交选中时 LAUNCHED 收起在先、isShowing=false，两分支都自然跳过
-                    if (fanController.isShowing) {
-                        if (fanController.stayAfterRelease()) fanController.onGestureEnded()
-                        else fanController.dismiss()
-                    }
-                    resetStripGesture()
-                }
-            } finally {
-                com.lsp.hypersidebar.ui.fan.B2StreamDispatch.active = false
+                resetStripGesture()
             }
             return
         }
@@ -990,50 +986,46 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
         // 流归属门（2026-10-31）：OS4 恒开；OS2/3 只有"底角兜底"接管时收流。
         // 与 RelayGestureSink.dispatch 同一判据，双保险防"抢了流没人消费"。
         if (!b2Enabled() && !cornerFallbackOwned()) return
-        // fan 展示中：转发流驱动拖选（与条上通道同款；B2 流驱动旗标放行孤儿防护）
+        // fan 展示中：转发流驱动拖选（与条上通道同款；B2 流驱动旗标已内化到
+        // FanMenuController.dispatchTouchEvent 的真实派发点，本进程同步派发语义不变）
         if (fanController.isShowing) {
-            com.lsp.hypersidebar.ui.fan.B2StreamDispatch.active = true
             cSysPilfered = cSysPilfered || sysPilfered
-            try {
-                if (!cFanSeen) {
-                    val down = MotionEvent.obtain(
-                        ev.downTime, ev.eventTime, MotionEvent.ACTION_DOWN, ev.rawX, ev.rawY, 0
-                    )
-                    try { cFanSeen = fanController.dispatchTouchEvent(down) } finally { down.recycle() }
-                }
-                fanController.dispatchTouchEvent(ev)
-                if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
-                    val isCancel = ev.actionMasked == MotionEvent.ACTION_CANCEL
-                    if (isCancel) cancelPendingStripShow()
-                    if (fanController.isShowing) {
-                        val keep = StreamEndPolicy.decide(
-                            isCancel = isCancel,
-                            isShowing = true,
-                            stayAfterRelease = fanController.stayAfterRelease(),
-                            // 独占开着（①发 pilfer，或 2a 已同进程 pilfer 过）时 CANCEL 是我们自己造的 ⇒
-                            // 保留扇形；否则系统真的在跑 Home，必须收窗（防三连）。
-                            cornerSelfSuppressed =
-                                cornerSuppressionOn() && (cornerPilferEnabled() || cSysPilfered)
-                        ) == StreamEndPolicy.Decision.KEEP_FOR_TAP
-                        if (keep) {
-                            // 独占开着时的 CANCEL 是我们自己造的（拒 pilfer ⇒ 系统把流收回，
-                            // 但没跑 Home/recents）⇒ 保留扇形转点选态。否则表现就是"闪一下消失"。
-                            HLog.i(
-                                TAG,
-                                "corner 流终态 ${if (isCancel) "CANCEL" else "UP"} ⇒ 保留扇形（转点选态）"
-                            )
-                            fanController.onGestureEnded()
-                        } else {
-                            // 安全阀：到这里才是"系统已接管且正在跑 Home/recents"，必须收窗——
-                            // 否则手指剩余触摸会继续走拖选 ⇒ 回桌面 + 扇形 + 启动应用三连。
-                            fanController.dismiss()
-                        }
+            if (!cFanSeen) {
+                val down = MotionEvent.obtain(
+                    ev.downTime, ev.eventTime, MotionEvent.ACTION_DOWN, ev.rawX, ev.rawY, 0
+                )
+                try { cFanSeen = fanController.dispatchTouchEvent(down) } finally { down.recycle() }
+            }
+            fanController.dispatchTouchEvent(ev)
+            if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+                val isCancel = ev.actionMasked == MotionEvent.ACTION_CANCEL
+                if (isCancel) cancelPendingStripShow()
+                if (fanController.isShowing) {
+                    val keep = StreamEndPolicy.decide(
+                        isCancel = isCancel,
+                        isShowing = true,
+                        stayAfterRelease = fanController.stayAfterRelease(),
+                        // 独占开着（①发 pilfer，或 2a 已同进程 pilfer 过）时 CANCEL 是我们自己造的 ⇒
+                        // 保留扇形；否则系统真的在跑 Home，必须收窗（防三连）。
+                        cornerSelfSuppressed =
+                            cornerSuppressionOn() && (cornerPilferEnabled() || cSysPilfered)
+                    ) == StreamEndPolicy.Decision.KEEP_FOR_TAP
+                    if (keep) {
+                        // 独占开着时的 CANCEL 是我们自己造的（拒 pilfer ⇒ 系统把流收回，
+                        // 但没跑 Home/recents）⇒ 保留扇形转点选态。否则表现就是"闪一下消失"。
+                        HLog.i(
+                            TAG,
+                            "corner 流终态 ${if (isCancel) "CANCEL" else "UP"} ⇒ 保留扇形（转点选态）"
+                        )
+                        fanController.onGestureEnded()
+                    } else {
+                        // 安全阀：到这里才是"系统已接管且正在跑 Home/recents"，必须收窗——
+                        // 否则手指剩余触摸会继续走拖选 ⇒ 回桌面 + 扇形 + 启动应用三连。
+                        fanController.dismiss()
                     }
-                    cornerTrigger.reset()
-                    cFanSeen = false
                 }
-            } finally {
-                com.lsp.hypersidebar.ui.fan.B2StreamDispatch.active = false
+                cornerTrigger.reset()
+                cFanSeen = false
             }
             return
         }

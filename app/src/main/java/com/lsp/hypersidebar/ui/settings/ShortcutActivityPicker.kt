@@ -504,11 +504,46 @@ private fun loadQsTileComponents(context: Context): Set<String> =
         emptySet()
     }
 
+/**
+ * 同 kind（activity/service）同 className 的重复条目合并为一条，保持首现位置与顺序。
+ *
+ * 为什么必须合并（2026-11-20 真机闪退，marble `adb logcat -b crash`）：
+ * `IllegalArgumentException: Key "com.xiaomi.voiceassistant.powerkey.PowerKeyGuideActivityV2#a"
+ * was already used` ——activity-alias 允许与其实体 activity 同 name ⇒ `GET_ACTIVITIES`
+ * 扫出两条同 className 条目 ⇒ 组件列表 LazyColumn 的 key（className + #a/#s）重复。
+ *
+ * 合并取或语义：exported/快捷/QS 任一为真即真（alias 常比实体更开放，Default
+ * 启动路需要 exported=true 才免 root）；label 取首个非空。activity 与 service 同名
+ * 不合并——key 本有 #a/#s 后缀，且同一个 Java 类不可能同时是两者。
+ */
+internal fun dedupeComponents(components: List<ComponentInfo>): List<ComponentInfo> {
+    if (components.size < 2) return components
+    val out = ArrayList<ComponentInfo>(components.size)
+    val index = HashMap<Pair<String, Boolean>, Int>(components.size)
+    for (c in components) {
+        val k = c.className to c.isService
+        val i = index[k]
+        if (i == null) {
+            index[k] = out.size
+            out.add(c)
+        } else {
+            val prev = out[i]
+            out[i] = prev.copy(
+                label = prev.label.ifEmpty { c.label },
+                exported = prev.exported || c.exported,
+                isShortcutTarget = prev.isShortcutTarget || c.isShortcutTarget,
+                isQsTile = prev.isQsTile || c.isQsTile
+            )
+        }
+    }
+    return out
+}
+
 private fun loadAppsByPackage(context: Context): List<AppInfo> {
     val pm = context.packageManager
     val shortcutTargets = loadShortcutTargetActivities(context)
     val qsTiles = loadQsTileComponents(context)
-    val apps = mutableMapOf<String, MutableList<ComponentInfo>>()
+    val apps = mutableMapOf<String, List<ComponentInfo>>()
     val labels = mutableMapOf<String, String>()
 
     try {
@@ -553,7 +588,11 @@ private fun loadAppsByPackage(context: Context): List<AppInfo> {
                 labels[pkgName] = pkgInfo.applicationInfo?.let {
                     pm.getApplicationLabel(it).toString()
                 } ?: pkgName
-                apps[pkgName] = components
+                // 同 kind 同名组件必须在此合并：activity-alias 可与实体 activity 同 name
+                // （2026-11-20 真机 crash 缓冲实锤：Key "…PowerKeyGuideActivityV2#a"
+                // was already used ⇒ 快速滑动两条同键行同帧组合即 IllegalArgumentException
+                // 闪退）。慢滑不炸是侥幸：两条分属不同导出段，先后进入组合范围。
+                apps[pkgName] = dedupeComponents(components)
             }
         }
     } catch (e: Exception) {

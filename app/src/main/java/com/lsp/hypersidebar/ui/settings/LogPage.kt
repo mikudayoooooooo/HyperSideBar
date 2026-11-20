@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -239,7 +239,10 @@ internal fun LogPage(
                 )
             }
         }
-        items(entries, key = { "${it.wallMs}-${it.tag}-${it.msg.hashCode()}" }) { e ->
+        // 键带序号（2026-11-20 组件选择器同类闪退收口）：环形缓冲同一毫秒可落多条同 tag
+        // 同文案的行（密集刷屏时并不罕见），纯内容指纹键会撞 ⇒ LazyColumn 同帧组合
+        // IllegalArgumentException。序号在单次导出内天然唯一。
+        itemsIndexed(entries, key = { i, e -> "$i-${e.wallMs}-${e.tag}" }) { _, e ->
             Text(
                 text = e.formatLine(),
                 style = MiuixTheme.textStyles.footnote2,

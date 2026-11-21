@@ -2503,8 +2503,11 @@ static int hsb_import_ok_any_base(const HsbLauncherAnchor *a, uintptr_t at,
  * 命中时 *base_out = 采纳的 load bias（sigscan 命中为 0），how = "offset"/"sigscan"。
  * 两路都 fail-closed：可执行段边界校验（hsb_in_exec）+ 32B prologue 校验（逐字节 → PC 相对掩码）。
  * 特征扫描命中数≠1 一律不用（歧义=拒，宁可不装也不猜）。 */
+/* allow_sigscan=0：只走 profile 偏移路（多表解析第一遍用，成本=逐表 32B 比对）；
+ * =1：偏移路未中才做全段特征扫描（第二遍兜底）。多 profile 时代若每表都直接扫，
+ * 一次拒装要白扫 HSB_PROFILE_COUNT 遍 .text——两遍制把扫描成本留到最后。 */
 static uintptr_t hsb_locate(const HsbLauncherAnchor *a, uintptr_t *base_out, char *how,
-                            size_t how_sz) {
+                            size_t how_sz, int allow_sigscan) {
     *base_out = 0u;
 
     /* offset==0 = profile 明确标记"本锚点还没取到偏移"（跨构建）⇒ 跳过偏移路，直接特征扫描。
@@ -2557,7 +2560,15 @@ static uintptr_t hsb_locate(const HsbLauncherAnchor *a, uintptr_t *base_out, cha
      * 2026-11-07：不再要求"全等扫必须唯一"——同一段序言可能对应多处（Rust 单态化），
      * 用 required_imports 做**结构消歧**：恰好一条通过才采纳，0/多条通过仍拒。
      * 这条改动是为了 OS4.0.6（launcher 8.01.02.8602）：主锚点位移且 3 处同序言，
-     * 旧口径 hits≠1 直接拒 ⇒ 整个“侧滑停顿呼出”静默失效。 */
+     * 旧口径 hits≠1 直接拒 ⇒ 整个“侧滑停顿呼出”静默失效。
+     * 2026-11-20 多 profile：本路只在第二遍（allow_sigscan=1）跑——第一遍跨表
+     * 偏移比对失败不代表"构建漂移到没有表"，先让别的表试完偏移路再花扫描成本。 */
+    if (!allow_sigscan) {
+        snprintf(g_hook.reason, sizeof(g_hook.reason),
+                 "offset cands=%u mismatch=%u (pass1: sigscan deferred)",
+                 g_cand_count, g_hook.prologue_mismatch);
+        return 0u;
+    }
     g_hook.sig_scans++;
     uint32_t hits = hsb_sigscan_collect(a->prologue, 0);
     int masked = 0;
@@ -3027,9 +3038,11 @@ static void hsb_selflocate_probe(uintptr_t base) {
     __system_property_get(HSB_SL_PROP, prop);
     if (prop[0] == '0') return;                 /* 显式关闭 */
     forced = (prop[0] == '1');                  /* 强制重扫 */
-    for (unsigned i = 0; i < HSB_ANCHOR_COUNT; i++) {
-        if (strcmp(kHsbAnchors[i].name, "action_probe") == 0) {
-            prof_off = (uintptr_t) kHsbAnchors[i].offset;
+    /* 对照偏移取第 0 张表（参考构建 8.01.02.8602）的 action_probe：selflocate 本来就是
+     * "不看 profile 能否自定位闸门"的探针，对照值只要稳定即可（2026-11-20 多 profile）。 */
+    for (unsigned i = 0; i < kHsbProfiles[0].count; i++) {
+        if (strcmp(kHsbProfiles[0].anchors[i].name, "action_probe") == 0) {
+            prof_off = (uintptr_t) kHsbProfiles[0].anchors[i].offset;
             break;
         }
     }
@@ -3095,26 +3108,36 @@ static void hsb_selflocate_probe(uintptr_t base) {
     }
 }
 
-/* 解析并安装一个具名锚点（主/副共用）。返回 1 = 装成功。 */
+/* 解析并安装一个具名锚点（主/副共用）。返回 1 = 装成功。
+ * 2026-11-20 多 profile：按表序跨 kHsbProfiles 找同名锚点，两遍制——
+ * 第一遍全部表只走偏移路（allow_sigscan=0，同构建必中，成本=逐表 32B 比对）；
+ * 第二遍才允许特征扫描兜底（构建不在表里、但函数字节没变的漂移场景）。 */
 static int hsb_install_named(const char *want, int secondary) {
-    for (unsigned i = 0; i < HSB_ANCHOR_COUNT; i++) {
-        const HsbLauncherAnchor *a = &kHsbAnchors[i];
-        if (strcmp(a->name, want) != 0) continue;
-        char how[16] = {0};
-        uintptr_t base = 0u;
-        /* 第三锚点只收只读观测件：把"能不能挂 action/pilfer 桩"在这里就挡死，
-         * 不给后人把 nav_hot_zone 接到会改判定的桩上的机会（判定那一类集合见 has_gate/has_ret）。 */
-        if (secondary == 2 && !hsb_anchor_has_navprobe(a->name)) {
-            snprintf(g_hook.reason, sizeof(g_hook.reason), "aux3 %s 非只读观测件", want);
-            LOGI("hook skipped: %s", g_hook.reason);
-            return 0;
+    for (int pass = 0; pass < 2; pass++) {
+        for (unsigned p = 0; p < HSB_PROFILE_COUNT; p++) {
+            const HsbLauncherProfile *prof = &kHsbProfiles[p];
+            for (unsigned i = 0; i < prof->count; i++) {
+                const HsbLauncherAnchor *a = &prof->anchors[i];
+                if (strcmp(a->name, want) != 0) continue;
+                /* 第三锚点只收只读观测件：把"能不能挂 action/pilfer 桩"在这里就挡死，
+                 * 不给后人把 nav_hot_zone 接到会改判定的桩上的机会（判定那一类集合见 has_gate/has_ret）。 */
+                if (secondary == 2 && !hsb_anchor_has_navprobe(a->name)) {
+                    snprintf(g_hook.reason, sizeof(g_hook.reason), "aux3 %s 非只读观测件", want);
+                    LOGI("hook skipped: %s", g_hook.reason);
+                    return 0;
+                }
+                char how[16] = {0};
+                uintptr_t base = 0u;
+                uintptr_t at = hsb_locate(a, &base, how, sizeof(how), pass == 1);
+                if (!at) continue;   /* 本表不匹配本机构建 ⇒ 下一张表的同名锚点 */
+                hsb_install_at(a, at, base, how, secondary);
+                LOGI("anchor %s matched profile %s (pass=%d, via %s)", want, prof->build,
+                     pass + 1, how);
+                return 1;
+            }
         }
-        uintptr_t at = hsb_locate(a, &base, how, sizeof(how));
-        if (!at) return 0;
-        hsb_install_at(a, at, base, how, secondary);
-        return 1;
     }
-    snprintf(g_hook.reason, sizeof(g_hook.reason), "anchor %s not in profile", want);
+    snprintf(g_hook.reason, sizeof(g_hook.reason), "anchor %s not in any profile", want);
     LOGI("hook skipped: %s", g_hook.reason);
     return 0;
 }
@@ -3122,21 +3145,27 @@ static int hsb_install_named(const char *want, int secondary) {
 /* ── 只解析、不挂钩（2026-10-18，rotate_size）──────────────────────────────────────
  * 与 [hsb_install_named] 的区别：不调 hsb_install_at（不写任何字节、不改任何判定），
  * 只把地址存起来给 hsb_live_screen_size 直接调。候选枚举由 hsb_try_install_hooks 做完，
- * 所以必须在那之后调用。
+ * 所以必须在那之后调用。多 profile 两遍制同 [hsb_install_named]。
  * 返回 1 = 解析成功（g_rotate_size_fn 已就位）。 */
 static int hsb_resolve_call_only(const char *want) {
-    for (unsigned i = 0; i < HSB_ANCHOR_COUNT; i++) {
-        const HsbLauncherAnchor *a = &kHsbAnchors[i];
-        if (strcmp(a->name, want) != 0) continue;
-        char how[16] = {0};
-        uintptr_t base = 0u;
-        uintptr_t at = hsb_locate(a, &base, how, sizeof(how));
-        if (!at) return 0;
-        g_rotate_size_fn = (void (*)(int *)) at;
-        LOGI("rotate_size resolved @%p via %s（只调用，不挂钩）", (void *) at, how);
-        return 1;
+    for (int pass = 0; pass < 2; pass++) {
+        for (unsigned p = 0; p < HSB_PROFILE_COUNT; p++) {
+            const HsbLauncherProfile *prof = &kHsbProfiles[p];
+            for (unsigned i = 0; i < prof->count; i++) {
+                const HsbLauncherAnchor *a = &prof->anchors[i];
+                if (strcmp(a->name, want) != 0) continue;
+                char how[16] = {0};
+                uintptr_t base = 0u;
+                uintptr_t at = hsb_locate(a, &base, how, sizeof(how), pass == 1);
+                if (!at) continue;
+                g_rotate_size_fn = (void (*)(int *)) at;
+                LOGI("rotate_size resolved @%p via %s（profile %s，只调用，不挂钩）",
+                     (void *) at, how, prof->build);
+                return 1;
+            }
+        }
     }
-    LOGI("rotate_size: profile 里没有这个锚点");
+    LOGI("rotate_size: 任何 profile 里都没有可用的 %s", want);
     return 0;
 }
 

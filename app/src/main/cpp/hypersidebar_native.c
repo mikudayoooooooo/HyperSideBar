@@ -368,6 +368,7 @@ static struct {
     uint32_t sig_hits;            /* 最近一次特征扫描的命中数（≠1 一律不用） */
     uint32_t hook_installed;
     uint32_t hook_failed;
+    uint32_t descriptor_hits;  /* 走描述符路装成功的锚点数（诊断：0 = 形状路没帮上忙） */
     uint32_t hits;
     uint64_t installed_at_s;   /* 安装时刻（CLOCK_MONOTONIC 秒）——心跳的"存活时长"基准 */
     uint64_t last_log_s;       /* 最近一次出声时刻（心跳去抖） */
@@ -375,7 +376,7 @@ static struct {
     uintptr_t bias;           /* 最终采纳的 load bias（sigscan 命中时为 0） */
     char reason[160];
     char anchor[40];          /* 实际挂上的锚点名（桩日志与报告都用它） */
-    char how[16];             /* offset | sigscan */
+    char how[32];             /* offset | sigscan | descriptor:shape[+size] */
     char lib_path[192];       /* maps 里目标库首条映射路径（namespace 取证） */
     int has_xy;               /* 该锚点以 s0/s1 传坐标 ⇒ 日志打 x/y（见 HsbFn16） */
     int has_ret;              /* 返回值带门控信息 ⇒ 日志打 ret=（见 hsb_anchor_has_ret） */
@@ -3335,7 +3336,7 @@ static int hsb_install_named(const char *want, int secondary) {
                     LOGI("hook skipped: %s", g_hook.reason);
                     return 0;
                 }
-                char how[16] = {0};
+                char how[32] = {0};
                 uintptr_t base = 0u;
                 uintptr_t at = hsb_locate(a, &base, how, sizeof(how), pass == 1);
                 if (!at) continue;   /* 本表不匹配本机构建 ⇒ 下一张表的同名锚点 */
@@ -3363,7 +3364,7 @@ static int hsb_resolve_call_only(const char *want) {
             for (unsigned i = 0; i < prof->count; i++) {
                 const HsbLauncherAnchor *a = &prof->anchors[i];
                 if (strcmp(a->name, want) != 0) continue;
-                char how[16] = {0};
+                char how[32] = {0};
                 uintptr_t base = 0u;
                 uintptr_t at = hsb_locate(a, &base, how, sizeof(how), pass == 1);
                 if (!at) continue;

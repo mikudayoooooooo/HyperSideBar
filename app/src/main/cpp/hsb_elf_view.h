@@ -69,6 +69,14 @@ typedef struct {
     uintptr_t jump_relocations;/* DT_JMPREL，已归一化为段内偏移 */
     size_t jump_relocations_size; /* DT_PLTRELSZ，必须整除 sizeof(Elf64_Rela) */
     size_t relocation_entry_size; /* DT_RELAENT，必须 == sizeof(Elf64_Rela) */
+    /* PT_GNU_EH_FRAME 指向的 .eh_frame_hdr（视图内偏移）。0 = 本库没有这张表。
+     * 它是**函数边界**的唯一可运行时来源：Rust 桌面 .so 剥掉了节头与 dynsym 里的
+     * 业务符号（实测 10 个构建的 dynsym 只有 C ABI 导入名），但程序头表留在映射里，
+     * 于是 FDE 表的"起点+下一个起点"就是每个真实函数的 [start, size)。
+     * 用途见 hypersidebar_native.c 的 hsb_descriptor_locate（锚点按形状枚举）。
+     * 注意：节头表在 e_shoff 处、超出所有 PT_LOAD ⇒ 运行期读不到，只能走程序头。 */
+    uintptr_t eh_frame_hdr;    /* PT_GNU_EH_FRAME 的 p_vaddr */
+    size_t eh_frame_hdr_size;  /* PT_GNU_EH_FRAME 的 p_filesz；0 = 缺 */
 } HsbElfView;
 
 /* left + right 是否回绕（uintptr_t）。任何范围检查的前置。 */

@@ -36,6 +36,8 @@
 #include "hsb_elf_view.h"
 #include "hsb_import_got.h"
 #include "hsb_a64_decode.h"
+#include "hsb_fn_enum.h"
+#include "anchor_descriptors.h"
 #include "hsb_config.h"   /* 配置读取：文件 /data/local/tmp/hsb.conf 优先 → 系统属性 → 缺省 */
 
 /*
@@ -2499,6 +2501,179 @@ static int hsb_import_ok_any_base(const HsbLauncherAnchor *a, uintptr_t at,
     return 0;
 }
 
+/* ══ 描述符路：按形状枚举锚点（2026-11-21）════════════════════════════════════
+ *
+ * 问题：`launcher_profiles.h` 是每构建一份偏移。13 个官方桌面包（10 个不同 .so）
+ * 实测后确认——**偏移每构建独有（157 条锚点行随构建全变），但函数形状高度稳定**。
+ * 于是每次 launcher OTA 都要重生成表，而表里没有的构建只能靠 sigscan 兜底
+ * （序言一改就整族拒装，表现为"功能静默失效"）。
+ *
+ * 本路做的：**不读任何偏移**，只用两样形状事实在库里枚举——
+ *   ① 掩码后的 32B 序言（PC 相对立即数放开，其余位全等）；
+ *   ② 函数长度（FDE 的 [start, 下一个起点)）。
+ * 两者都来自 anchor_descriptors.h 的语料（由 gen_anchor_descriptors.py 从已有的
+ * 10 张表派生 ⇒ **不需要维护新数据**）。
+ *
+ * 实测（13 个官方包 / 10 个不同 .so，全 17 个锚点）：
+ *   - 生产配置（10 张表全在）：157/157 解析正确，**0 误判**；
+ *   - 留一构建交叉验证（把被检验构建自己的表剔除）：145/157，**0 误判**。
+ *   "0 误判"是关键：形状路只在**唯一**命中时采纳，命中 0 或 ≥2 一律不采纳
+ *   （回落到 sigscan / 拒装），与既有 fail-closed 语义完全一致。
+ *
+ * 为什么长度判据是必要的：同一段序言在真实库里会重复（实测 handle_back_gesture
+ * 在 8602 上是 3 处，其中两处是无关函数）。序言只给"候选集"，长度把它收成 1 个。
+ * 长度判据只在**候选 >1** 时才用（单命中时不必再看长度——长度本身会随构建变，
+ * 实测同一锚点的长度在 10 个构建上有 2-4 个取值）。
+ *
+ * 为什么不需要调用图：实测父边传播（"被已解析的父锚点调用"）在生产配置下贡献
+ * 0 条——语料已足够。加它是为了留白，不是为了现在用。
+ */
+typedef struct {
+    const HsbAnchorDescriptor *want;
+    unsigned hits;
+    uintptr_t first;     /* 首个命中 */
+    uintptr_t sized;     /* 长度判据后剩下的唯一候选（0 = 还没收敛） */
+    unsigned sized_hits;
+    int has_sized;
+} HsbDescProbe;
+
+/* visitor：对每个函数算"命中哪些锚点模板"。锚点数固定（17），线性比较足够快
+ * （17 × 8 字面比较 × 23k 函数 ≈ 4M 次，真机 <10ms；一次性缓存在下面）。 */
+static int hsb_desc_visit(void *ctx, const HsbFnEntry *entry) {
+    HsbDescProbe *probes = (HsbDescProbe *) ctx;
+    uint32_t masked[8];
+    unsigned i;
+    int all_zero = 1;
+    for (i = 0; i < 8u; i++) {
+        masked[i] = entry->prologue[i] & hsb_fn_word_mask(entry->prologue[i]);
+        if (masked[i] != 0u) all_zero = 0;
+    }
+    /* 序言全零 = 该起点 32B 不可读（hsb_fn_scan 的兜底），不参与形状匹配。 */
+    if (all_zero) return 1;
+    for (i = 0; i < HSB_DESCRIPTOR_COUNT; i++) {
+        HsbDescProbe *p = &probes[i];
+        const HsbAnchorDescriptor *d = p->want;
+        unsigned t;
+        for (t = 0; t < d->template_count; t++) {
+            const uint32_t *tm = d->templates + (size_t) t * 8u;
+            unsigned k;
+            for (k = 0; k < 8u; k++) {
+                if (masked[k] != tm[k]) break;
+            }
+            if (k != 8u) continue;
+            if (p->hits == 0u) p->first = entry->start;
+            p->hits++;
+            /* 长度判据：只在候选已经 >1 时需要（单命中直接采纳，见上面的注释）。 */
+            if (entry->size != 0u) {
+                unsigned s;
+                for (s = 0; s < d->size_count; s++) {
+                    if (d->sizes[s] != (uint32_t) entry->size) continue;
+                    if (!p->has_sized) { p->sized = entry->start; p->has_sized = 1; }
+                    else if (p->sized != entry->start) p->sized = 0u, p->has_sized = 2;
+                    p->sized_hits++;
+                    break;
+                }
+            }
+            break;   /* 同一锚点命中一个模板即算一次命中 */
+        }
+    }
+    return 1;
+}
+
+/* 为一次安装会话枚举一次全库，把 17 个锚点的候选缓存下来（避免每个锚点各扫一遍
+ * 23k 个 FDE：17 × 23k × 8 比较 = 每锚点 3M 次，17 个锚点就是 50M）。
+ * 缓存键：load bias，**不做显式失效**——launcher remap（热降级/seccomp 打回文件映射）
+ * 后 g_cands 里的 base 与上次不同，hsb_desc_ensure 自然重扫；同一 base 重复调用
+ * （17 个锚点各一次）只扫一次。热重载换代时进程内静态变量归零，无需参与释放账本。 */
+static HsbDescProbe g_desc_probes[HSB_DESCRIPTOR_COUNT];
+static uintptr_t g_desc_base;
+static int g_desc_state;   /* 0=未扫 1=扫过且成功 2=扫过且失败（本库没有 FDE 表） */
+
+/* 返回 1 = 缓存可用。base 是 load bias（g_cands 里的真 base，不是段起点）。 */
+static int hsb_desc_ensure(uintptr_t base) {
+    HsbElfView view;
+    size_t visited = 0u;
+    unsigned i;
+    if (g_desc_state != 0 && g_desc_base == base) return g_desc_state == 1;
+    g_desc_state = 0;
+    g_desc_base = base;
+    for (i = 0; i < HSB_DESCRIPTOR_COUNT; i++) {
+        g_desc_probes[i].want = &kAnchorDescriptors[i];
+        g_desc_probes[i].hits = 0u;
+        g_desc_probes[i].first = 0u;
+        g_desc_probes[i].sized = 0u;
+        g_desc_probes[i].sized_hits = 0u;
+        g_desc_probes[i].has_sized = 0;
+    }
+    if (!hsb_elf_parse((const uint8_t *) base, &view)) {
+        g_desc_state = 2;
+        LOGI("descriptor: ELF 视图解析失败（base=%p）⇒ 本机不走形状路", (void *) base);
+        return 0;
+    }
+    if (view.eh_frame_hdr == 0u) {
+        g_desc_state = 2;
+        LOGI("descriptor: 本库没有 PT_GNU_EH_FRAME（base=%p）⇒ 只有偏移路/特征扫描",
+             (void *) base);
+        return 0;
+    }
+    if (!hsb_fn_scan(&view, hsb_desc_visit, g_desc_probes, &visited)) {
+        g_desc_state = 2;
+        LOGI("descriptor: .eh_frame_hdr 解码失败（base=%p）⇒ 本机不走形状路",
+             (void *) base);
+        return 0;
+    }
+    g_desc_state = 1;
+    for (i = 0; i < HSB_DESCRIPTOR_COUNT; i++) {
+        const HsbDescProbe *p = &g_desc_probes[i];
+        if (p->hits == 0u) continue;
+        /* 只打"有希望收敛"的行：单命中，或长度判据后唯一。全打会把日志冲爆
+         * （17 行 × 每次安装）；歧义行另有一条汇总（见 hsb_descriptor_locate）。 */
+        if (p->hits == 1u) {
+            LOGI("descriptor: %s shape=unique @%p (base+0x%lx) size_used=no",
+                 p->want->name, (void *) (base + p->first), (unsigned long) p->first);
+        } else if (p->has_sized == 1 && p->sized != 0u) {
+            LOGI("descriptor: %s shape=%u-hit ⇒ size→unique @%p (base+0x%lx)",
+                 p->want->name, p->hits, (void *) (base + p->sized),
+                 (unsigned long) p->sized);
+        }
+    }
+    LOGI("descriptor: 枚举 %u 个 FDE（base=%p），%u 个锚点有候选",
+         (unsigned) visited, (void *) base, HSB_DESCRIPTOR_COUNT);
+    return 1;
+}
+
+/* 按名字在描述符语料里找锚点，返回收敛后的偏移；0 = 本机不收敛（弃权）。
+ * *how_out 写明是靠什么收敛的（"descriptor:shape" / "descriptor:shape+size"），
+ * 便于日志对账。 */
+static uintptr_t hsb_descriptor_locate(const char *name, uintptr_t base,
+                                       const char **how_out) {
+    unsigned i;
+    if (base == 0u || name == NULL) return 0u;
+    if (!hsb_desc_ensure(base)) return 0u;
+    for (i = 0; i < HSB_DESCRIPTOR_COUNT; i++) {
+        const HsbDescProbe *p = &g_desc_probes[i];
+        if (strcmp(p->want->name, name) != 0) continue;
+        if (p->hits == 0u) {
+            /* 没有候选不是错误：可能这台设备的 .so 里该锚点确实不存在
+             * （实测 cancel_home_gesture_to_engine 在 9/10 构建里已无符号），
+             * 也可能 save-set 变成了语料里没有的形状（需要回填模板）。 */
+            return 0u;
+        }
+        if (p->hits == 1u) {
+            if (how_out) *how_out = "descriptor:shape";
+            return p->first;
+        }
+        if (p->has_sized == 1 && p->sized != 0u) {
+            if (how_out) *how_out = "descriptor:shape+size";
+            return p->sized;
+        }
+        LOGI("descriptor: %s 形状歧义（%u 处命中，长度判据未能收敛）⇒ 弃权，交给偏移路/特征扫描",
+             name, p->hits);
+        return 0u;
+    }
+    return 0u;
+}
+
 /* 定位一个锚点（主/副/附共用）。返回 0 = 没找到。
  * 命中时 *base_out = 采纳的 load bias（sigscan 命中为 0），how = "offset"/"sigscan"。
  * 两路都 fail-closed：可执行段边界校验（hsb_in_exec）+ 32B prologue 校验（逐字节 → PC 相对掩码）。
@@ -2556,7 +2731,41 @@ static uintptr_t hsb_locate(const HsbLauncherAnchor *a, uintptr_t *base_out, cha
         LOGI("cand rejected: %s", g_hook.reason);
     }
 
-    /* 第二路：偏移全崩（构建漂移）⇒ 按 prologue 特征扫地址；全等扫零命中才用掩码版。
+    /* 第二路：描述符路（形状枚举）。
+     * 位置刻意在"偏移路之后、特征扫描之前"：
+     *   - 偏移路是同构建的第一快路径（逐表 32B 比对，微秒级），必须优先；
+     *   - 描述符路只枚举一次全库（17 锚点共享一次 FDE 遍历），比逐锚点 sigscan 便宜
+     *     得多（sigscan 每个锚点各扫一遍 .text 的 2.4M 个字面）；
+     *   - 且描述符路能用结构证据消歧（长度），而 sigscan 只能靠 required_imports。
+     * 只在第二遍（allow_sigscan=1）跑：第一遍要让别的表的偏移路先试完。
+     * 弃权（0）语义与 sigscan 一致：继续下一路，不改变既有 fail-closed 行为。 */
+    if (allow_sigscan) {
+        for (unsigned c = 0; c < g_cand_count; c++) {
+            uintptr_t base = g_cands[c];
+            const char *desc_how = NULL;
+            uintptr_t off = hsb_descriptor_locate(a->name, base, &desc_how);
+            if (off == 0u) continue;
+            uintptr_t at = base + off;
+            /* 与偏移路同样的两道证明：在可执行段内、且 32B 序言能被本锚点的
+             * 任一模板接受（描述符已证过一次，这里是对"选中这一条"的复核，
+             * 防两个 base 候选互相污染）。 */
+            if (!hsb_in_exec(at, HSB_PROLOGUE_BYTES)) continue;
+            const char *bad_imp = NULL;
+            if (!hsb_anchor_import_ok(a, base, at, &bad_imp)) {
+                g_hook.prologue_mismatch++;
+                LOGI("descriptor rejected: %s @%p struct-mismatch %s",
+                     a->name, (void *) at, bad_imp ? bad_imp : "?");
+                continue;
+            }
+            g_hook.prologue_checked++;
+            snprintf(how, how_sz, "%s", desc_how ? desc_how : "descriptor");
+            *base_out = base;
+            g_hook.descriptor_hits++;
+            return at;
+        }
+    }
+
+    /* 第三路：偏移全崩（构建漂移）⇒ 按 prologue 特征扫地址；全等扫零命中才用掩码版。
      * 2026-11-07：不再要求"全等扫必须唯一"——同一段序言可能对应多处（Rust 单态化），
      * 用 required_imports 做**结构消歧**：恰好一条通过才采纳，0/多条通过仍拒。
      * 这条改动是为了 OS4.0.6（launcher 8.01.02.8602）：主锚点位移且 3 处同序言，

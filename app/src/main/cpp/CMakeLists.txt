@@ -21,7 +21,8 @@ add_library(hypersidebar_native SHARED
     hsb_config.c
     hsb_elf_view.c
     hsb_import_got.c
-    hsb_a64_decode.c)
+    hsb_a64_decode.c
+    hsb_fn_enum.c)
 
 # 纯 C、不用 STL；日志走 liblog
 target_link_libraries(hypersidebar_native PRIVATE log)

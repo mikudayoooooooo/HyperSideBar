@@ -38,12 +38,16 @@ hs_err_pid*.log
 # .ota-extract/ 内含已解包的 ROM 分区与固件（GB 级，且属第三方版权物），
 # tools/、docs/ 为离线取证脚本与调研文档，_apk/、_repos/ 为反编译产物与第三方仓库克隆。
 .ota-extract/
-tools/
 docs/
 _apk/
 _repos/
 analysis/
 analysis_result.md
+# tools/ 整目录按惯例不入库（离线取证脚本，换机器可丢）。**唯一例外**是构建期
+# 生成器：它的产物 anchor_descriptors.h 是入库的 C 头文件，缺了生成器就无法复现、
+# 也无法用 `--check` 守住"描述符 ↔ 偏移表"同步（NativeDescriptorCorpusTest 同样依赖它）。
+tools/*
+!tools/gen_anchor_descriptors.py
 result.json
 
 # 模块级 build 目录（/build 只匹配根级，子模块需显式）

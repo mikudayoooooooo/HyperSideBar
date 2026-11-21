@@ -150,6 +150,12 @@ int hsb_elf_parse(const uint8_t *base, HsbElfView *output) {
             }
             dynamic_offset = (uintptr_t) program_header.p_vaddr;
             dynamic_size = (size_t) program_header.p_memsz;
+        } else if (program_header.p_type == PT_GNU_EH_FRAME) {
+            /* 函数边界来源（见 .h）。这里只记录位置，不在这里解析——解析要按需
+             * 做（不是每个设备都会走到描述符路），且解析失败必须只影响描述符路，
+             * 不能让"这台设备的 .so 恰好没有 FDE 表"变成整个 hook 安装失败。 */
+            view.eh_frame_hdr = (uintptr_t) program_header.p_vaddr;
+            view.eh_frame_hdr_size = (size_t) program_header.p_filesz;
         }
     }
     if (!headers_covered || view.load_count == 0u ||

@@ -90,6 +90,20 @@ pwsh -File tools\hsb_device_test.ps1 -Stage A|B|C|L|M|N|O [-Install] [-Inject] [
 - LSPosed path trap: `adb install -r` can invalidate the APK path in `/data/adb/lspd/config/modules_config.db` ⇒ module silently not injected. `python tools\hsb_deploy.py` (rewrites path, reboots, bounces hosts — SystemUI needs `kill -9`, verify injection) or `pwsh tools\hsb_lsp_fix_path.ps1` (path-only).
 - Anchor/profile regen after a launcher OTA: `pwsh -File tools\gen_profile_from_device.ps1 [-Apk <MiuiHome.apk>] [-Build] [-Install]` (pull → `gen_launcher_profiles.py --from-so … --write` → `sync_probe_mirror.py --write` → `verify_profile_imports.py`, must report 0 broken imports).
 
+### Launcher OTA: what to do (since 2026-11-21 the default is "nothing")
+
+`hsb_locate` resolves an anchor in **three** passes: offset table (fastest, per-build) → **descriptor** (shape enumeration) → sigscan. The descriptor pass is why an unknown launcher build usually needs no work at all.
+
+| Situation | Action |
+|---|---|
+| New launcher build, gesture still works | **None.** Watch one log line per anchor: `descriptor: <anchor> shape=unique @…` or `shape=N-hit ⇒ size→unique`. Record the build tag in `launcher_profiles.h` only when you next touch that file anyway |
+| Gesture silently dead after OTA (`descriptor` logs absent or all `弃权`) | 1) `adb logcat -d -s HSBNative:* \| Select-String 'descriptor:\|hook refused\|anchor '`; 2) if the FDE line is missing (`本库没有 PT_GNU_EH_FRAME` / `解码失败`) the device's `.so` shape differs — pull the APK and run the regen command above; 3) if `形状歧义` appears for one anchor, that anchor's save-set changed: add **one template** via the regen command, not a hand edit |
+| You pulled a new `MiuiHome.apk` for any reason | `python tools\gen_launcher_profiles.py --from-so <apk> <existing ones…> --write` → `python tools\sync_probe_mirror.py --write` → `python tools\gen_anchor_descriptors.py` → `python tools\verify_profile_imports.py <so>` → `:app:testDebugUnitTest` (the corpus test fails if you forget step 3) |
+
+Cost of the descriptor pass on device: one FDE sweep per `load bias` (≈23k entries, 17 anchors × 8-word compare — single-digit ms), cached in a process-local static, re-swept automatically when launcher remap changes the base. It does **not** participate in hot-reload release bookkeeping (statics, no threads/windows).
+
+To check the descriptor corpus is in sync without running Gradle: `python tools\gen_anchor_descriptors.py --check` (non-zero exit on drift; same predicate as `NativeDescriptorCorpusTest`).
+
 ## Code Conventions & Common Patterns
 
 - **Cross-process contract:** every key/action/extra/probe code goes in `prefs/PrefContract.kt` (`PrefKeys`, `HostPackages`, `PrefsFiles`, `LayoutDefaults`). Never scatter literals; add new keys there first.
@@ -117,6 +131,8 @@ pwsh -File tools\hsb_device_test.ps1 -Stage A|B|C|L|M|N|O [-Install] [-Inject] [
 7. **Prologue/prologue-mask matching is fail-closed**: a scan with ≠1 hit must refuse to install rather than guess.
 8. Even "log-only" native edits need `tools\check_native_syntax.py` **and** an on-device run before being called done.
 9. `HSB_NATIVE_SPIKE` is a plain CMake variable (deliberately **not** `option()`/CACHE — cached values stick in `app/.cxx`); it is currently `ON` in the tree while the in-file comment still says spike-branch-only. Flipping it is a release-shape decision — don't convert it to a cache variable, and verify before shipping OS2/OS3 builds.
+10. **`anchor_descriptors.h` is generated, never hand-edited** — `python tools/gen_anchor_descriptors.py`. It is derived from `launcher_profiles.h` (17 anchors / 30 masked templates / per-anchor length sets); `NativeDescriptorCorpusTest` enforces sync **both ways** and `--check` is the same predicate. It must never contain `action_probe`: that stub rewrites system gesture judgement (`hsb_stub_actionprobe`) and its prologue has 85–88 hits in real launchers, so shape enumeration is necessarily ambiguous there — `action_probe` stays offset-table-only, and a shape miss means "refuse to install", never "guess".
+11. **The descriptor path must never guess.** In `hsb_descriptor_locate` a 0-hit or ≥2-hit-after-size anchor returns 0 (abstain → fall through to sigscan → refuse). Do not add a "take the first hit" fallback and do not widen it to `action_probe`; measured 0 wrong picks across 10 launcher builds depend on this exact rule.
 
 ## Important Files
 

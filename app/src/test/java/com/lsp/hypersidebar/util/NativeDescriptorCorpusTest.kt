@@ -184,4 +184,55 @@ class NativeDescriptorCorpusTest {
             actual
         )
     }
+
+    /**
+     * 审计必须在**任何 hook 装上之前**读参照。
+     *
+     * 2026-11-21 真机踩过（marble / 9261 / 模块 2026112102）：审计原本放在 `hooks ready`
+     * 之后，拿偏移表当参照去比 32B 序言——而那时 inline hook 已经改写目标处字节，
+     * 读到的是 trampoline 首字（日志实测 `got=51470fb0 want=eb2bb86d`）⇒ 16 个锚点全部
+     * 假阴性 `noref=16`，看起来像"形状路完全不可用"，实际是审计自身时序错。
+     *
+     * 修法是把 `hsb_desc_audit_all(...)` 移到 `hsb_install_named(...)` 之前。这条断言守
+     * 住顺序：源码里 `hsb_desc_audit_all(` 的调用必须出现在 `hsb_install_named(` 之前。
+     */
+    @Test
+    fun auditRunsBeforeAnyHookInstall() {
+        val src = cppFile("hypersidebar_native.c").readText()
+        val auditCall = src.indexOf("hsb_desc_audit_all(g_cands[0])")
+        assertTrue(
+            "找不到 hsb_desc_audit_all(g_cands[0]) 调用点——审计如果被删/改名，这条顺序保证就没了",
+            auditCall > 0
+        )
+        val installCall = src.indexOf("hsb_install_named(want, 0)")
+        assertTrue("找不到 hsb_install_named(want, 0) 主锚点安装点", installCall > 0)
+        assertTrue(
+            "hsb_desc_audit_all 必须在 hsb_install_named 之前调用：" +
+                "hook 装上后序言已被改写，此后拿偏移表当参照会读到 trampoline 首字而全部假阴性" +
+                "（2026-11-21 真机实测 noref=16）。audit@$auditCall install@$installCall",
+            auditCall < installCall
+        )
+    }
+
+    /**
+     * 形状路绝不能"猜"：弃权（0 命中 / 多命中未收敛）必须返回 0 而不是取第一处命中。
+     * 实测 10 个构建 0 误判全靠这条；一旦改成"取第一个"，错误地址上装 inline hook
+     * 轻则功能失效、重则崩桌面（红线第 11 条）。
+     */
+    @Test
+    fun descriptorPathNeverPicksFirstHit() {
+        val src = cppFile("hypersidebar_native.c").readText()
+        val start = src.indexOf("static uintptr_t hsb_descriptor_locate(")
+        assertTrue("找不到 hsb_descriptor_locate", start > 0)
+        val body = src.substring(start, src.indexOf("\n}", start))
+        assertTrue(
+            "hsb_descriptor_locate 里出现 'p->first' 直接返回：单命中才允许用 first，" +
+                "多命中后必须有长度判据收敛，不得取第一处",
+            body.contains("p->hits == 1u") || body.contains("hits == 1u")
+        )
+        assertTrue(
+            "多命中未收敛时必须 return 0（弃权），找不到该分支",
+            body.contains("形状歧义") && body.contains("return 0u;")
+        )
+    }
 }

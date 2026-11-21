@@ -254,6 +254,13 @@ static void probe_dtor(void) {
  * 已证数据（2026-10-15，36 个真人采样点）：系统热区只在横向中段 x∈[400,760] y≈2380，
  * 与我们角窗（x≤130 或 x≥950、y≥2328）**0 重叠** ⇒ 角区内压制热区是空操作。 */
 #define HSB_ANCHOR3_PROP "debug.hsb.native.anchor3"
+/* 描述符路审计（2026-11-21）：默认 0 = 只在偏移路/特征扫描都未命中时才用形状枚举。
+ *   `setprop debug.hsb.native.desc 1` + 重启桌面 ⇒ 每个锚点**额外**把形状枚举的结果
+ *   与最终采纳的偏移对照一行。这是描述符路唯一的真机验证手段：偏移路同构建必中，
+ *   若不主动对照，形状路永远没有执行机会（9261 首装实测就是 via=offset）。
+ *   只读：不改任何安装决策，对照结果只进日志。 */
+#define HSB_DESC_AUDIT_PROP "debug.hsb.native.desc"
+
 /* 底角"斜滑独占"开关（抑制）：由模块 App 设置项推（`persist.` ⇒ 重启后仍在；读法 1 秒缓存）。
  * 定义在这里是因为 [hsb_chosen_anchor3] 的缺省值要用它（抑制开 ⇒ 自动挂 action_probe）。 */
 #define HSB_CORNER_SUPP_PROP "persist.hsb.corner.supp"
@@ -2675,6 +2682,98 @@ static uintptr_t hsb_descriptor_locate(const char *name, uintptr_t base,
     return 0u;
 }
 
+static uintptr_t hsb_descriptor_locate(const char *name, uintptr_t base,
+                                       const char **how_out);
+
+/* 这张表的偏移在本机是否成立：看它的 handle_back_gesture 能否按偏移+序言命中。
+ * ⚠ 必须在**任何 hook 装上之前**调用：inline hook 会改写目标处序言，装上之后同一地址
+ * 读到的是跳转指令（实测 got=51470fb0 = trampoline 首字），这里就会假阴性。
+ * 因此全量审计在 hsb_try_install_hooks 的安装**之前**取参照（见那里的调用点）。 */
+static int hsb_profile_matches_build(const HsbLauncherProfile *prof, uintptr_t base) {
+    if (prof == NULL || base == 0u) return 0;
+    for (unsigned k = 0; k < prof->count; k++) {
+        const HsbLauncherAnchor *h = &prof->anchors[k];
+        uintptr_t at;
+        uint32_t bad = HSB_PROLOGUE_BYTES;
+        int masked = 0;
+        if (strcmp(h->name, "handle_back_gesture") != 0) continue;
+        if (h->offset == 0u) return 0;
+        at = base + (uintptr_t) h->offset;
+        if (!hsb_in_exec(at, HSB_PROLOGUE_BYTES)) return 0;
+        return hsb_pl_match((const volatile uint8_t *) at, h->prologue, &bad, &masked);
+    }
+    return 0;
+}
+
+/* 全量审计（见 HSB_DESC_AUDIT_PROP）：拿**偏移表**当参照，逐锚点对照形状枚举结果。
+ * 参照取法：每张表按表序找同名锚点，用与偏移路完全相同的两道证明（在可执行段内 +
+ * required_imports 结构校验）确认它是真的那个函数——这样"参照"本身就是可信的，
+ * 否则两边都错时我们会误报 agree。
+ *
+ * 为什么用偏移表当参照而不是符号表：设备上没有符号（dynsym 只有 C ABI 导入名），
+ * 而偏移表在同构建立面上已被逐字节验证（10 构建 × 132 锚点全对）。 */
+static void hsb_desc_audit_all(uintptr_t base) {
+    char v[8] = {0};
+    unsigned p, i;
+    unsigned agree = 0u, differ = 0u, abstain = 0u, noref = 0u;
+    if (__system_property_get(HSB_DESC_AUDIT_PROP, v) <= 0 || v[0] != '1') return;
+    if (base == 0u) return;
+    if (!hsb_desc_ensure(base)) {
+        LOGI("descriptor AUDIT 全量跳过：形状枚举不可用（base=%p）", (void *) base);
+        return;
+    }
+    for (i = 0; i < HSB_DESCRIPTOR_COUNT; i++) {
+        const HsbAnchorDescriptor *d = &kAnchorDescriptors[i];
+        uintptr_t ref_at = 0u;
+        uintptr_t shape_at;
+        const char *shape_how = NULL;
+        /* 找同构建的偏移参照（表序先到先得，与安装时一致）。
+         * 前置条件：这张表的 handle_back_gesture 必须按偏移+序言命中——否则这张表
+         * 的偏移在这台设备上只是一组无意义的数字，拿它当参照会把 audit 变成噪声。 */
+        for (p = 0; p < HSB_PROFILE_COUNT && ref_at == 0u; p++) {
+            const HsbLauncherProfile *prof = &kHsbProfiles[p];
+            const HsbLauncherAnchor *self = NULL;
+            if (!hsb_profile_matches_build(prof, base)) continue;
+            for (unsigned k = 0; k < prof->count; k++) {
+                const HsbLauncherAnchor *a = &prof->anchors[k];
+                if (strcmp(a->name, d->name) != 0) continue;
+                self = a;
+                break;
+            }
+            if (self == NULL) continue;
+            {
+                uintptr_t at = base + (uintptr_t) self->offset;
+                uint32_t bad = HSB_PROLOGUE_BYTES;
+                int masked = 0;
+                if (self->offset == 0u) continue;
+                if (!hsb_in_exec(at, HSB_PROLOGUE_BYTES)) continue;
+                if (!hsb_pl_match((const volatile uint8_t *) at, self->prologue,
+                                  &bad, &masked)) continue;
+                if (!hsb_anchor_import_ok(self, base, at, NULL)) continue;
+                ref_at = at;
+            }
+        }
+        if (ref_at == 0u) { noref++; continue; }
+        shape_at = hsb_descriptor_locate(d->name, base, &shape_how);
+        if (shape_at == 0u) {
+            abstain++;
+            LOGI("descriptor AUDIT %-30s abstain (ref=0x%lx)", d->name,
+                 (unsigned long) (ref_at - base));
+        } else if (base + shape_at == ref_at) {
+            agree++;
+            LOGI("descriptor AUDIT %-30s agree (0x%lx, %s)", d->name,
+                 (unsigned long) (ref_at - base), shape_how ? shape_how : "?");
+        } else {
+            differ++;
+            LOGI("descriptor AUDIT %-30s DIFFER shape=0x%lx ref=0x%lx (%s)",
+                 d->name, (unsigned long) shape_at, (unsigned long) (ref_at - base),
+                 shape_how ? shape_how : "?");
+        }
+    }
+    LOGI("descriptor AUDIT 汇总: agree=%u DIFFER=%u abstain=%u noref=%u (锚点语料 %u) base=%p cands=%u",
+         agree, differ, abstain, noref, HSB_DESCRIPTOR_COUNT, (void *) base, g_cand_count);
+}
+
 /* 定位一个锚点（主/副/附共用）。返回 0 = 没找到。
  * 命中时 *base_out = 采纳的 load bias（sigscan 命中为 0），how = "offset"/"sigscan"。
  * 两路都 fail-closed：可执行段边界校验（hsb_in_exec）+ 32B prologue 校验（逐字节 → PC 相对掩码）。
@@ -3412,6 +3511,12 @@ static void hsb_try_install_hooks(void) {
     /* 自定位探针（2026-11-07，默认关）：只读一行日志；失败不影响任何后续逻辑。
      * 放在安装之前，保证即使锚点拒装也能拿到"自定位算到了什么"的读数。 */
     if (g_cand_count > 0u) hsb_selflocate_probe(g_cands[0]);
+
+    /* 描述符路全量审计（debug.hsb.native.desc=1 才跑，见 HSB_DESC_AUDIT_PROP）。
+     * **必须在这里**：inline hook 会改写目标处序言，一旦装上，拿偏移表当参照就会
+     * 读到 trampoline 首字而假阴性（2026-11-21 实测 got=51470fb0 即此）。所以参照
+     * 与形状枚举都必须在任何字节被改写之前取。 */
+    if (g_cand_count > 0u && !g_hook.hook_installed) hsb_desc_audit_all(g_cands[0]);
 
     if (!g_hook.hook_installed) {
         const char *want = hsb_chosen_anchor();

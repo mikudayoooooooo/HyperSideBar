@@ -52,4 +52,41 @@ class ConfigPathMirrorTest {
                 c.contains("#define HSB_CFG_PREFIX \"persist.hsb.\"")
         )
     }
+
+    /**
+     * native 状态文件镜像（2026-11-22，方向与 hsb.conf 相反：C 写 / Kotlin 读）。
+     * 写侧在宿主进程：媒体目录跨 uid 写通常 EACCES ⇒ 双候选（媒体 best-effort +
+     * 宿主自身 data 目录保底，导出经 root 读）。任何一侧改前缀/目录族而另一侧没跟上
+     * ⇒ 导出静默缺段，和 hsb.conf 脱钩同族病。
+     */
+    @Test
+    fun nativeStateFileMirroredBetweenWriterAndReader() {
+        val c = moduleFile("src/main/cpp/hypersidebar_native.c").readText()
+        val kt = moduleFile("src/main/java/com/lsp/hypersidebar/util/NativeRootProbe.kt").readText()
+        val gradle = moduleFile("build.gradle.kts").readText()
+        val pkg = Regex("""applicationId\s*=\s*"([^"]+)"""")
+            .find(gradle)?.groupValues?.get(1)
+            ?: throw AssertionError("build.gradle.kts 里没找到 applicationId")
+
+        assertTrue(
+            "C 写侧缺状态文件前缀宏 hsb_native_state.",
+            c.contains("#define HSB_STATE_PREFIX \"hsb_native_state.\"")
+        )
+        assertTrue(
+            "Kotlin 读侧前缀与 C 宏不一致",
+            kt.contains("\"hsb_native_state.\"")
+        )
+        assertTrue(
+            "C 写侧媒体候选缺 \"$pkg/\" + 前缀（免 root 读路脱钩）",
+            c.contains("\"/storage/emulated/0/Android/media/$pkg/\" HSB_STATE_PREFIX")
+        )
+        assertTrue(
+            "Kotlin 读侧不再扫模块媒体目录（BuildConfig.APPLICATION_ID 拼路）",
+            kt.contains("Android/media/\${BuildConfig.APPLICATION_ID}")
+        )
+        assertTrue(
+            "宿主 data 目录保底候选两侧不一致（/data/user/0/）",
+            c.contains("\"/data/user/0/") && kt.contains("/data/user/0/")
+        )
+    }
 }

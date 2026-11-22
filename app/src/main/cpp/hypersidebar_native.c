@@ -3478,6 +3478,8 @@ static int hsb_resolve_call_only(const char *want) {
     return 0;
 }
 
+static void hsb_state_file_write(void);
+
 static void hsb_try_install_hooks(void) {
     const char *want2 = hsb_chosen_anchor2();
     int need2 = want2 != NULL;
@@ -3505,6 +3507,7 @@ static void hsb_try_install_hooks(void) {
                  "target lib absent here (phdr=%u maps=%u cb=%u)",
                  req.matches, g_xseg_count, g_report.launcher_cb_hits);
         LOGI("hook not ready: %s", g_hook.reason);
+        hsb_state_file_write();
         return;
     }
 
@@ -3561,6 +3564,7 @@ static void hsb_try_install_hooks(void) {
         /* 装上之后起心跳：从此"native 还活着吗/补丁还在吗"不用做手势也能看（见 hsb_heartbeat_thread） */
         hsb_heartbeat_start();
     }
+    hsb_state_file_write();
 }
 
 /* ── 文件 marker 关断通道（2026-10-13 追加，见 plan §17）─────────────────────────────
@@ -3939,6 +3943,92 @@ static int hsb_hook3_heal(void) {
     return 1;
 }
 
+/* ── native 状态文件镜像（2026-11-22 增强 1：C 写 / Kotlin 读，方向与 hsb.conf 相反）─────
+ * 为什么：OS4 桌面没有模块 Java 半侧，logcat 稀疏行（ctor/installed/refused）约 4 分钟滚掉，
+ * 导出取证段只能写"不能据此下结论"（issue #13 实测）。状态落盘后导出不再依赖 logcat 新鲜度。
+ * 写侧在宿主进程：模块媒体目录跨 uid 写通常 EACCES（既有通道全是模块写/native 读，无反向
+ * 先例）⇒ 双候选：媒体 best-effort（写成功则导出免 root 可读）+ 宿主自身 data 目录保底
+ * （导出经 root 读；本模块本就要求 root）。候选顺序记住上次成功者，避免每拍重试 EACCES。
+ * 节奏：安装/拒装判决各一次 + 心跳 60s 摘要拍 + patch 状态迁移；手势线程零参与。
+ * tmp+rename 原子替换（与 ConfigFileBridge 同形）⇒ 读侧永远不见半截。
+ * 路径/前缀契约由 ConfigPathMirrorTest.nativeStateFileMirroredBetweenWriterAndReader 守。 */
+#define HSB_STATE_PREFIX "hsb_native_state."
+static const char *kStateMediaDirs[] = {
+    "/storage/emulated/0/Android/media/io.github.mikudayoooooooo.hypersidebar/" HSB_STATE_PREFIX,
+    "/sdcard/Android/media/io.github.mikudayoooooooo.hypersidebar/" HSB_STATE_PREFIX,
+    "/data/media/0/Android/media/io.github.mikudayoooooooo.hypersidebar/" HSB_STATE_PREFIX,
+    NULL,
+};
+static int g_state_cand = -1;   /* 上次写成功的候选：0..2 媒体 / 3 宿主 data 目录 */
+static int g_state_fail_logged;
+static const char *g_hb_state = "-";   /* 心跳最近一拍判词（ok/WIPED/CHANGED），供状态行 */
+
+static void hsb_state_file_write(void) {
+    const char *proc = getprogname();
+    if (!proc || !proc[0]) proc = "?";
+    char safe[80];
+    size_t n = 0;
+    for (const char *p = proc; *p && n < sizeof(safe) - 1; p++)
+        safe[n++] = (*p == ':' || *p == '/') ? '_' : *p;
+    safe[n] = '\0';
+    char pkg[80];
+    snprintf(pkg, sizeof(pkg), "%s", proc);
+    char *colon = strchr(pkg, ':');
+    if (colon) *colon = '\0';
+
+    char body[900];
+    snprintf(body, sizeof(body),
+             "proc=%s t=%lld installed=%u anchor=%s via=%s bias=0x%lx target=0x%lx attempts=%u desc=%u "
+             "hits=%u seen=%u inband=%u dw=%u sw=%u af=%u ac=%u pub=%u/%u heal=%u/%u patch=%s "
+             "a2=%s a3=%s lib=%s reason=%s\n",
+             proc, (long long) time(NULL), g_hook.hook_installed,
+             g_hook.anchor[0] ? g_hook.anchor : "-", g_hook.how[0] ? g_hook.how : "-",
+             (unsigned long) g_hook.bias, (unsigned long) g_hook.target,
+             g_hook.attempts, g_hook.descriptor_hits,
+             g_hook.hits, g_supp.seen, g_supp.in_band, g_supp.dwelled, g_supp.swallow,
+             g_supp.arrow_fix, g_supp.arrow_clean, g_pub_ok, g_pub_fail,
+             g_patch_heals, g_patch_heal_fail, g_hb_state,
+             g_hook2_installed ? g_hook2_name : "-",
+             g_hook3_installed ? g_hook3_name : "-",
+             g_hook.lib_path[0] ? g_hook.lib_path : "-",
+             g_hook.reason[0] ? g_hook.reason : "-");
+
+    int order[4] = {0, 1, 2, 3};
+    if (g_state_cand >= 0 && g_state_cand <= 3) {
+        for (int i = 0; i < 4; i++) {
+            if (order[i] == g_state_cand) {
+                order[i] = order[0];
+                order[0] = g_state_cand;
+                break;
+            }
+        }
+    }
+    char path[320], tmp[336];
+    for (int k = 0; k < 4; k++) {
+        int i = order[k];
+        if (i == 3) snprintf(path, sizeof(path), "/data/user/0/%s/" HSB_STATE_PREFIX "%s", pkg, safe);
+        else snprintf(path, sizeof(path), "%s%s", kStateMediaDirs[i], safe);
+        snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+        FILE *f = fopen(tmp, "w");
+        if (!f) continue;
+        fputs(body, f);
+        fclose(f);
+        if (rename(tmp, path) == 0) {
+            if (g_state_cand != i) {
+                g_state_cand = i;
+                LOGI("state file: channel=%s path=%s（宿主进程写、导出读；不再怕 logcat 滚掉）",
+                     i == 3 ? "host-data(root 读)" : "media(免 root 读)", path);
+            }
+            return;
+        }
+        remove(tmp);
+    }
+    if (!g_state_fail_logged) {
+        g_state_fail_logged = 1;
+        LOGI("state file: 全候选写失败(errno=%d) ⇒ 导出回落 logcat 判词", errno);
+    }
+}
+
 /* ── 心跳线程：补丁完整性巡检（G1 检测者）+ 被抹即自愈（G3）────────────────────
  *
  * 为什么必须是一条**定时**线：本文件里原来那条 `hook ALIVE …` 其实是 `hook HIT` 的限流版
@@ -3992,7 +4082,8 @@ static void *hsb_heartbeat_thread(void *arg) {
         } else {
             state = "CHANGED";
         }
-        if (state != last_state) {   /* 指针比较：全部是字符串字面量 */
+        int transition = (state != last_state);   /* 指针比较：全部是字符串字面量 */
+        if (transition) {
             if (state[0] == 'W') {
                 LOGI("ARCHIVE REMAP DETECTED %s：目标页 32B 已还原成原始序言 ⇒ 手势链路静默失效"
                      "（此后不会再出现 hook HIT / chanpublish / back SUPPRESS）；"
@@ -4007,6 +4098,8 @@ static void *hsb_heartbeat_thread(void *arg) {
             }
             last_state = state;
         }
+        g_hb_state = state;
+        if (transition) hsb_state_file_write();   /* 迁移立即落盘，不等 60s 摘要拍 */
         /* ---- 附锚点（anchor3）巡检：同一块 .text 被抹时它一起死 ------------------
          * 2026-10-16 之前这里什么都没有 ⇒ action_probe 装上 235s 被抹后静默失效，
          * 而"被抹"与"没开探针"在日志里一模一样（B 组第一轮就是这么废掉的）。
@@ -4050,6 +4143,7 @@ static void *hsb_heartbeat_thread(void *arg) {
                  state, g_hook.hits, g_supp.seen, g_supp.in_band, g_supp.dwelled,
                  g_supp.swallow, g_supp.arrow_fix, g_supp.arrow_clean, g_pub_ok, g_pub_fail,
                  g_patch_heals, g_heal_backoff_ms / 1000u);
+            hsb_state_file_write();   /* 摘要拍兜底刷新计数（状态文件与 HB 行同节奏） */
         }
     }
     return NULL;

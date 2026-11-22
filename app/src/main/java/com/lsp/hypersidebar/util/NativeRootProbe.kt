@@ -1,7 +1,14 @@
 package com.lsp.hypersidebar.util
 
 import android.content.Context
+import android.os.Environment
+import com.lsp.hypersidebar.BuildConfig
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PropNames
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * native hook 的 root 取证桥（spike/os4-native，2026-10-08/09）。
@@ -38,6 +45,9 @@ object NativeRootProbe {
 
     private const val TAG = "NativeRoot"
     private const val HOST_PKG = "com.miui.home"
+
+    /** 状态文件前缀（C 侧 HSB_STATE_PREFIX 镜像，ConfigPathMirrorTest 守） */
+    private const val STATE_PREFIX = "hsb_native_state."
 
     /**
      * 一次抓多少行 HSBNative。要在"够翻到安装行"与"别把整份 logcat 灌进报告"之间取平衡。
@@ -95,7 +105,47 @@ object NativeRootProbe {
     )
 
     /** 导出用的一段文本（诊断页 / 日志页 / 使用数据页三条路径都收口在 `SelfCheck.export`） */
-    fun snapshot(context: Context): String {
+    fun snapshot(context: Context): String =
+        stateFileSection() + "\n" + snapshotCore(context)
+
+    /**
+     * native 状态文件镜像读侧（2026-11-22 增强 1）：宿主进程写、导出读。
+     * 媒体目录段免 root（仅当 ROM 允许跨 uid 写时存在——写侧 best-effort 候选）；
+     * 宿主 data 目录段经 root（保底候选，本模块本就要求 root）。
+     * 前缀/目录族契约由 ConfigPathMirrorTest 守；放在 snapshot 最前 ⇒ root 不可用时
+     * 媒体段仍带得上（no-root 早退在 core 里）。
+     */
+    private fun stateFileSection(): String = buildString {
+        appendLine("== native 状态文件镜像（宿主进程写 / 导出读；不依赖 logcat 新鲜度）==")
+        var found = 0
+        val mediaDir = runCatching {
+            File(Environment.getExternalStorageDirectory(), "Android/media/${BuildConfig.APPLICATION_ID}")
+        }.getOrNull()
+        mediaDir?.listFiles()?.filter { it.isFile && it.name.startsWith(STATE_PREFIX) }
+            ?.sortedBy { it.name }?.forEach { f ->
+                found++
+                val mt = SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(Date(f.lastModified()))
+                appendLine("[media] ${f.name} mtime=$mt")
+                appendLine("  " + runCatching { f.readText() }.getOrDefault("<读失败>").trim().take(700))
+            }
+        if (ShortcutLauncher.isRootAvailable()) {
+            for (pkg in listOf(HostPackages.HOME, HostPackages.UI_HOST, HostPackages.SYSTEM_UI)) {
+                // grep -H 自带文件名前缀，免 shell 变量（$f 会被 Kotlin 插值吃掉）
+                val out = runRoot(
+                    "grep -H '' /data/user/0/$pkg/$STATE_PREFIX* 2>/dev/null"
+                )?.trim().orEmpty()
+                if (out.isNotEmpty()) {
+                    found++
+                    out.lines().forEach { appendLine("[host-data] $it") }
+                }
+            }
+        }
+        if (found == 0) {
+            appendLine("（无状态文件：本构建宿主侧 native 尚未写成功或通道被挡 ⇒ 回落下方 logcat 判词）")
+        }
+    }
+
+    private fun snapshotCore(context: Context): String {
         val buildState = packageBuildState(context)
         if (!ShortcutLauncher.isRootAvailable()) {
             return "本包编译态：$buildState\nroot 不可用 ⇒ 桌面侧 native 状态取不到（活性/命中读不了）"

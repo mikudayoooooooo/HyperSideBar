@@ -209,6 +209,7 @@
     <string name="shortcut_section_enabled">已启用</string>
     <string name="shortcut_section_disabled">未启用</string>
     <string name="shortcut_enabled_cap_toast">已启用 %d 项达上限（含面板占位），请先关闭其它项</string>
+    <string name="shortcut_save_failed">保存失败：模块服务未连接或写入错误，请重试</string>
     <string name="shortcut_overflow_card">已启用 %1$d，上限 %2$d</string>
     <string name="batch_create_group">组成分组</string>
     <string name="batch_group_invalid">请选择 2~3 个普通快捷方式（组与工具箱不可入组）</string>

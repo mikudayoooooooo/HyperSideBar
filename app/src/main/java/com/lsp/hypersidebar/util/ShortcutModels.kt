@@ -261,8 +261,10 @@ object ShortcutStore {
     /**
      * 保存用户快捷方式列表到 SharedPreferences。
      * 存储不截断（§2.4 解耦）；order 按当前列表序整体重排。
+     * 返回 false = 未落盘（防覆盖闸拒绝 / commit 失败 / 异常）——调用方必须给用户
+     * 反馈（2026-11-22：静默 return 让"调序后保存失败"看起来像保存成功）。
      */
-    fun saveUserShortcuts(prefs: SharedPreferences, shortcuts: List<ShortcutAction>) {
+    fun saveUserShortcuts(prefs: SharedPreferences, shortcuts: List<ShortcutAction>): Boolean {
         // 防覆盖闸（2026-10-19 数据事故）：冷启动时桥未绑定，传入的 prefs 可能是本地
         // 回退（APP_LOCAL，重装后为空）——用它保存=把 remotePrefs 里的完整列表整表覆盖
         // （真机事故：6 条快捷方式被 1 条覆盖）。平台 SharedPreferencesImpl = 本地回退的
@@ -271,7 +273,7 @@ object ShortcutStore {
         if (prefs.javaClass.name == "android.app.SharedPreferencesImpl") {
             HLog.w(TAG, "saveUserShortcuts REFUSED: 桥未绑定（本地回退不可作保存目标，" +
                 "防止覆盖 remotePrefs 完整列表）")
-            return
+            return false
         }
         val userItems = shortcuts
             .filter { it.source == ShortcutSource.USER }
@@ -284,14 +286,19 @@ object ShortcutStore {
             // 同步 commit（2026-11-20，与固定应用删空同因）：apply 只改内存、落库走单线程
             // EXECUTOR 异步 binder，"保存→立刻退出(kill)"会把队列尾部截断；commit 失败
             // 仍落进下方 catch 记日志。REFUSED 防覆盖闸与成功日志均保持原样。
-            prefs.edit().putString(KEY, arr.toString()).commit()
+            if (!prefs.edit().putString(KEY, arr.toString()).commit()) {
+                HLog.w(TAG, "saveUserShortcuts: commit returned false（未落盘）")
+                return false
+            }
             // 快捷方式列表是 hook 侧直接读的键，写完显式推一次配置同步（见 ConfigSync.notifyConfigChanged）
             com.lsp.hypersidebar.util.ConfigSync.notifyConfigChanged(KEY)
             // 诊断锚点：快捷栏缺失问题时区分"保存没落盘"（无此行/条目缺）vs"扇形没读到"
             HLog.i(TAG, "saved ${userItems.size} shortcuts: " +
                 userItems.joinToString { "${it.kind}:${it.label}(${if (it.enabled) "on" else "off"})" })
+            return true
         } catch (e: Exception) {
             HLog.e(TAG, "saveUserShortcuts: write failed", e)
+            return false
         }
     }
 
@@ -335,8 +342,7 @@ object ShortcutStore {
             order = current.size
         )
         current.add(newItem)
-        saveUserShortcuts(prefs, current)
-        return true
+        return saveUserShortcuts(prefs, current)
     }
 
     /**
@@ -349,8 +355,7 @@ object ShortcutStore {
         val idx = current.indexOfFirst { it.id == updated.id }
         if (idx >= 0) {
             current[idx] = updated
-            saveUserShortcuts(prefs, current)
-            return true
+            return saveUserShortcuts(prefs, current)
         }
         // 组成员寻址：只替换命中的那一层，不动其它成员
         for (i in current.indices) {
@@ -360,8 +365,7 @@ object ShortcutStore {
             val kIdx = kids.indexOfFirst { it.id == updated.id }
             if (kIdx >= 0) {
                 current[i] = g.copy(children = kids.toMutableList().also { it[kIdx] = updated })
-                saveUserShortcuts(prefs, current)
-                return true
+                return saveUserShortcuts(prefs, current)
             }
         }
         return false
@@ -376,8 +380,7 @@ object ShortcutStore {
         val current = loadUserShortcuts(prefs)
         val newList = current.filter { it.id != id }
         if (newList.size < current.size) {
-            saveUserShortcuts(prefs, newList)
-            return true
+            return saveUserShortcuts(prefs, newList)
         }
         for (i in current.indices) {
             val g = current[i]
@@ -386,9 +389,8 @@ object ShortcutStore {
             if (kids.any { it.id == id }) {
                 newList.toMutableList().apply {
                     this[i] = g.copy(children = kids.filter { it.id != id })
-                    saveUserShortcuts(prefs, this)
+                    return saveUserShortcuts(prefs, this)
                 }
-                return true
             }
         }
         return false
@@ -402,8 +404,7 @@ object ShortcutStore {
         if (fromIndex !in current.indices || toIndex !in current.indices) return false
         val item = current.removeAt(fromIndex)
         current.add(toIndex, item)
-        saveUserShortcuts(prefs, current)
-        return true
+        return saveUserShortcuts(prefs, current)
     }
 
     /**

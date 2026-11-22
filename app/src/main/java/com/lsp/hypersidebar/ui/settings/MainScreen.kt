@@ -1,6 +1,7 @@
 package com.lsp.hypersidebar.ui.settings
 
 import android.content.SharedPreferences
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -23,12 +24,14 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
 import com.lsp.hypersidebar.prefs.SettingsRepository
 import com.lsp.hypersidebar.theme.ThemeMode
+import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutStore
@@ -95,6 +98,9 @@ internal fun MainScreen(
 ) {
     val settingsRepo = remember(prefs) { SettingsRepository(prefs) }
     val prefsRevision = settingsRepo.revision
+    val context = LocalContext.current
+    // D1 同款：entry 回调捕获的 prefs 可能是绑定前固化的本地空壳，写路径切 bridge 真源
+    val effectivePrefs = RemotePrefsBridge.prefs ?: prefs
     val moduleStatus by produceState<ModuleStatus>(
         initialValue = ModuleStatus.INACTIVE,
         key1 = service
@@ -393,19 +399,35 @@ internal fun MainScreen(
                             act = key.shortcut.activityName ?: ""
                         ),
                         onSave = { updated ->
-                            if (key.isNew) {
-                                ShortcutStore.addShortcut(prefs, updated)
+                            val ok = if (key.isNew) {
+                                ShortcutStore.addShortcut(effectivePrefs, updated)
                             } else {
-                                ShortcutStore.updateShortcut(prefs, updated)
+                                ShortcutStore.updateShortcut(effectivePrefs, updated)
                             }
-                            shortcutRevision++
-                            popLast(settingsStack)
+                            if (ok) {
+                                shortcutRevision++
+                                popLast(settingsStack)
+                            } else {
+                                // 拒存/写失败：留在编辑页保草稿，toast 给原因
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.shortcut_save_failed),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
                         },
                         onDelete = if (key.isNew) null else {
                             {
-                                ShortcutStore.removeShortcut(prefs, key.shortcut.id)
-                                shortcutRevision++
-                                popLast(settingsStack)
+                                if (ShortcutStore.removeShortcut(effectivePrefs, key.shortcut.id)) {
+                                    shortcutRevision++
+                                    popLast(settingsStack)
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.shortcut_save_failed),
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
                             }
                         },
                         onPickActivity = { settingsStack.add(SettingsKey.ShortcutPicker) },

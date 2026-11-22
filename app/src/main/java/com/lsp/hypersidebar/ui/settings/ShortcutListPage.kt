@@ -50,6 +50,7 @@ import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import com.lsp.hypersidebar.R
 import com.lsp.hypersidebar.util.HLog
+import com.lsp.hypersidebar.util.RemotePrefsBridge
 import com.lsp.hypersidebar.util.ShortcutAction
 import com.lsp.hypersidebar.util.ShortcutGroups
 import com.lsp.hypersidebar.util.ShortcutKind
@@ -112,9 +113,16 @@ internal fun ShortcutListPage(
     onCreateGroup: (List<ShortcutAction>) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 内存工作列表（revision 变化重建即重读）：写入时保持"已启用在前、未启用在后"的
-    // 分区不变量（列表序=存储序；扇形端按启用序截断）
-    var workingList by remember(revision) { mutableStateOf(ShortcutStore.loadUserShortcuts(prefs)) }
+    // D1 同款（SettingsPage:52）：nav3 entry 可能固化绑定前的本地空壳 prefs——
+    // 漏了这页就是 2026-11-22 的"调序后保存不上"：空壳上 saveUserShortcuts 撞防覆盖闸
+    // 静默拒存。页内直读 bridge 的 Compose state，绑定完成强制重组切真源。
+    val effectivePrefs = RemotePrefsBridge.prefs ?: prefs
+    // 内存工作列表（prefs 实例/revision 变化重建即重读）：写入时保持"已启用在前、未启用在后"的
+    // 分区不变量（列表序=存储序；扇形端按启用序截断）。prefs 实例进 key：晚绑定后不得
+    // 拿着本地空壳读出的旧列表往远端写（10-19 覆写事故同族）。
+    var workingList by remember(effectivePrefs, revision) {
+        mutableStateOf(ShortcutStore.loadUserShortcuts(effectivePrefs))
+    }
     // 批量选择模式（长按行进入）：顶栏变形 + 删除收底（HyperOS 闹钟批量范式）
     var selectionMode by remember { mutableStateOf(false) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
@@ -213,6 +221,16 @@ internal fun ShortcutListPage(
     val enabledList = workingList.filter { it.enabled }
     val disabledList = workingList.filter { !it.enabled }
     val enabledCount = enabledList.size
+    /** 落盘统一入口：拒存/写失败必须可见（静默成功假象=调序"保存不上"的用户观感） */
+    fun persistWorkingList() {
+        if (!ShortcutStore.saveUserShortcuts(effectivePrefs, workingList)) {
+            Toast.makeText(
+                context,
+                context.getString(R.string.shortcut_save_failed),
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
     // 启用上限拦截（布局定稿拍板：固定 5，超了不允许再启用，杜绝候补态）
     fun toggleEnabled(item: ShortcutAction, value: Boolean) {
         if (value && enabledCount >= ShortcutStore.ENABLED_CAP) {
@@ -231,13 +249,13 @@ internal fun ShortcutListPage(
         } else {
             rest + updated
         }
-        ShortcutStore.saveUserShortcuts(prefs, workingList)
+        persistWorkingList()
     }
 
     fun deleteSelected() {
         if (selectedIds.isEmpty()) return
         workingList = workingList.filter { it.id !in selectedIds }
-        ShortcutStore.saveUserShortcuts(prefs, workingList)
+        persistWorkingList()
         exitSelection()
     }
 
@@ -340,7 +358,7 @@ internal fun ShortcutListPage(
                         shortcut = shortcut,
                         showHandle = true,
                         reorderState = reorderState,
-                        prefs = prefs,
+                        onDragSave = ::persistWorkingList,
                         haptics = haptics,
                         onEdit = onEdit,
                         onToggle = ::toggleEnabled,
@@ -360,7 +378,7 @@ internal fun ShortcutListPage(
                         shortcut = shortcut,
                         showHandle = false,
                         reorderState = reorderState,
-                        prefs = prefs,
+                        onDragSave = ::persistWorkingList,
                         haptics = haptics,
                         onEdit = onEdit,
                         onToggle = ::toggleEnabled,
@@ -509,7 +527,7 @@ internal fun ShortcutListPage(
         atStoreCap = atStoreCap,
         draft = draftShortcut,
         draftBar = draftBar,
-        prefs = prefs,
+        prefs = effectivePrefs,
         onSaved = { updated ->
             HLog.i("AddShortcut", "draft saved: kind=${updated.kind} label='${updated.label}'")
             val decision = ShortcutStore.decideAdd(
@@ -517,10 +535,7 @@ internal fun ShortcutListPage(
                 enabledCount = enabledCount,
                 storageUnits = ShortcutGroups.storageUnits(workingList)
             )
-            if (decision is ShortcutStore.AddDecision.RejectedStorageFull ||
-                (decision is ShortcutStore.AddDecision.Save &&
-                    !ShortcutStore.addShortcut(prefs, decision.item))
-            ) {
+            if (decision is ShortcutStore.AddDecision.RejectedStorageFull) {
                 // 存储上限：保留 sheet 与草稿，否则用户填完一整轮却什么都没存下
                 Toast.makeText(
                     context,
@@ -528,6 +543,15 @@ internal fun ShortcutListPage(
                         R.string.shortcuts_at_store_limit,
                         ShortcutStore.MAX_STORED_SHORTCUTS
                     ),
+                    Toast.LENGTH_LONG
+                ).show()
+            } else if (decision is ShortcutStore.AddDecision.Save &&
+                !ShortcutStore.addShortcut(effectivePrefs, decision.item)
+            ) {
+                // 拒存/写失败：同样保留 sheet 与草稿，但文案换成保存失败原因
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.shortcut_save_failed),
                     Toast.LENGTH_LONG
                 ).show()
             } else {
@@ -541,7 +565,7 @@ internal fun ShortcutListPage(
                         Toast.LENGTH_SHORT
                     ).show()
                 }
-                workingList = ShortcutStore.loadUserShortcuts(prefs)
+                workingList = ShortcutStore.loadUserShortcuts(effectivePrefs)
                 draftShortcut = null
                 addStep = 0
                 showAddSheet = false
@@ -719,7 +743,8 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.ShortcutRow(
     shortcut: ShortcutAction,
     showHandle: Boolean,
     reorderState: sh.calvin.reorderable.ReorderableLazyListState,
-    prefs: SharedPreferences,
+    /** 松手落盘回调（页内统一入口：拒存/写失败带 toast） */
+    onDragSave: () -> Unit,
     haptics: androidx.compose.ui.hapticfeedback.HapticFeedback,
     onEdit: (ShortcutAction) -> Unit,
     onToggle: (ShortcutAction, Boolean) -> Unit,
@@ -814,7 +839,7 @@ private fun androidx.compose.foundation.lazy.LazyItemScope.ShortcutRow(
                                             haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                         },
                                         onDragStopped = {
-                                            ShortcutStore.saveUserShortcuts(prefs, workingList)
+                                            onDragSave()
                                         }
                                     )
                             } else {

@@ -108,6 +108,12 @@ android {
         buildConfig = true
     }
 
+    testOptions {
+        // ShortcutStore 保存结果测试要穿过 HLog（android.util.Log）：不开默认值返回，
+        // mockable jar 的桩直接抛 "not mocked"（2026-11-22）。纯函数测试不受影响。
+        unitTests.isReturnDefaultValues = true
+    }
+
     compileOptions {
         // miuix 0.9.4 起以 JVM 21 目标发布，其中 inline API（miuix-nav 的 entry DSL）要求
         // 调用方同为 21，否则报 "Cannot inline bytecode built with JVM target 21"

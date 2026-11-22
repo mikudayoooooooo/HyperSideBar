@@ -46,6 +46,7 @@ import com.lsp.hypersidebar.util.ShortcutGroups
 import com.lsp.hypersidebar.util.ShortcutKind
 import com.lsp.hypersidebar.util.ShortcutStore
 import com.lsp.hypersidebar.util.HLog
+import com.lsp.hypersidebar.util.RemotePrefsBridge
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
@@ -95,18 +96,20 @@ internal fun GroupEditPage(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // D1 同款（SettingsPage:52）：nav3 entry 固化的本地空壳上读写都落不到远端
+    val effectivePrefs = RemotePrefsBridge.prefs ?: prefs
     // 新建组首次落盘后置位（之后所有读写走"已存在"分支，防重复建组）
     var created by remember(group.id) { mutableStateOf(false) }
     val onDisk = !isNew || created
-    var topList by remember(group.id, revision) {
-        mutableStateOf(ShortcutStore.loadUserShortcuts(prefs))
+    var topList by remember(effectivePrefs, group.id, revision) {
+        mutableStateOf(ShortcutStore.loadUserShortcuts(effectivePrefs))
     }
     var name by remember(group.id) { mutableStateOf(group.label) }
     var groupEnabled by remember(group.id) { mutableStateOf(group.enabled) }
     // 成员：未落盘=NavKey 携带（批量建组预填）；已落盘=盘上组的 children（成员编辑返回刷新）
-    var members by remember(group.id, if (onDisk) revision else 0) {
+    var members by remember(effectivePrefs, group.id, if (onDisk) revision else 0) {
         mutableStateOf(
-            if (onDisk) ShortcutStore.loadUserShortcuts(prefs)
+            if (onDisk) ShortcutStore.loadUserShortcuts(effectivePrefs)
                 .firstOrNull { it.id == group.id }?.children.orEmpty()
             else group.children.orEmpty()
         )
@@ -122,16 +125,17 @@ internal fun GroupEditPage(
     val haptics = LocalHapticFeedback.current
     val invalidMsg = stringResource(R.string.group_edit_invalid)
     val quotaExceededMsg = stringResource(R.string.group_edit_quota_exceeded)
+    val saveFailedMsg = stringResource(R.string.shortcut_save_failed)
     val defaultName = stringResource(R.string.group_edit_title)
 
     fun dirty(): Boolean =
         name != group.label || groupEnabled != group.enabled || members != group.children.orEmpty()
 
     fun diskChildren(): List<ShortcutAction> =
-        ShortcutStore.loadUserShortcuts(prefs).firstOrNull { it.id == group.id }?.children.orEmpty()
+        ShortcutStore.loadUserShortcuts(effectivePrefs).firstOrNull { it.id == group.id }?.children.orEmpty()
 
     fun buildTopList(updatedGroup: ShortcutAction, removedToTop: List<ShortcutAction>): List<ShortcutAction> {
-        val current = ShortcutStore.loadUserShortcuts(prefs)
+        val current = ShortcutStore.loadUserShortcuts(effectivePrefs)
         return if (!onDisk) {
             val absorbed = members.map { it.id }.toSet()
             val withoutAbsorbed = current.filter { it.id !in absorbed }
@@ -146,11 +150,15 @@ internal fun GroupEditPage(
         }
     }
 
-    fun persist(updated: ShortcutAction) {
+    fun persist(updated: ShortcutAction): Boolean {
         val removed = diskChildren().filter { c -> members.none { it.id == c.id } }
-        ShortcutStore.saveUserShortcuts(prefs, buildTopList(updated, removed))
+        if (!ShortcutStore.saveUserShortcuts(effectivePrefs, buildTopList(updated, removed))) {
+            error = saveFailedMsg
+            return false
+        }
         if (!onDisk) created = true
         HLog.i(TAG, "group saved: ${updated.label} members=${members.size}")
+        return true
     }
 
     fun validatedGroup(): ShortcutAction? {
@@ -176,18 +184,21 @@ internal fun GroupEditPage(
     /** 解散：删组容器，returned 成员回到组原位置（按钮=当前全部成员；不足确认按操作语义取子集） */
     fun dissolveWith(returned: List<ShortcutAction>) {
         if (!onDisk) { onBack(); return }
-        val current = ShortcutStore.loadUserShortcuts(prefs)
+        val current = ShortcutStore.loadUserShortcuts(effectivePrefs)
         val idx = current.indexOfFirst { it.id == group.id }
         val without = current.filter { it.id != group.id }
         val insertAt = if (idx >= 0) idx.coerceAtMost(without.size) else without.size
-        ShortcutStore.saveUserShortcuts(prefs, without.toMutableList().apply { addAll(insertAt, returned) })
+        if (!ShortcutStore.saveUserShortcuts(effectivePrefs, without.toMutableList().apply { addAll(insertAt, returned) })) {
+            error = saveFailedMsg
+            return
+        }
         HLog.i(TAG, "group dissolved: ${group.label} members back=${returned.size}")
         onBack()
     }
 
     fun save() {
         val updated = validatedGroup() ?: return
-        persist(updated)
+        if (!persist(updated)) return
         onBack()
     }
 
@@ -195,7 +206,7 @@ internal fun GroupEditPage(
     fun jumpToMember(member: ShortcutAction) {
         if (dirty()) {
             val updated = validatedGroup() ?: return
-            persist(updated)
+            if (!persist(updated)) return
         }
         onEditMember(member)
     }

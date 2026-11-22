@@ -242,6 +242,23 @@ object SelfCheck {
                     appendLine("陈旧宿主: $staleHosts（运行旧 dex，需重启对应宿主/应用）")
                 }
                 appendLine()
+                appendLine("== 运行环境 ==")
+                runCatching {
+                    val launcherVc = context.packageManager
+                        .getPackageInfo(HostPackages.HOME, 0).longVersionCode
+                    SelfCheckEnv.lines(
+                        rom = Build.VERSION.INCREMENTAL ?: "?",
+                        os4 = com.lsp.hypersidebar.hook.Os4Marker.romIsOs4(),
+                        launcherVc = launcherVc,
+                        moduleVc = diskVc,
+                        pilferProp = SysProps.get(PropNames.CORNER_PILFER),
+                        sysjudgeProp = SysProps.get(PropNames.CORNER_SYSJUDGE),
+                        gateMarker = NativeGateBridge.markerContent(),
+                        acks = acks,
+                        nowElapsedMs = android.os.SystemClock.elapsedRealtime()
+                    ).forEach { appendLine(it) }
+                }.onFailure { appendLine("运行环境读取失败: ${it.message}") }
+                appendLine()
                 appendLine("== 配置快照 ==")
                 appendLine("图标大小: ${f(prefs, PrefKeys.ICON_SIZE, LayoutDefaults.ICON_SIZE)} dp" +
                     " / 内圈半径: ${f(prefs, PrefKeys.INNER_RADIUS, LayoutDefaults.INNER_RADIUS)}" +

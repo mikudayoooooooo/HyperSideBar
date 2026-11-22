@@ -137,6 +137,10 @@ object NativeGateBridge {
         File(dir, MARKER_NAME)
     }.getOrNull()
 
+    /** marker 当前内容（自检环境头部用）；null = 不存在/读不到（native fail-open 语义同） */
+    fun markerContent(): String? =
+        runCatching { markerFile()?.takeIf { it.isFile }?.readText()?.trim() }.getOrNull()
+
     /**
      * 写关断 marker（只有 `"0"` 一种内容）。回读校验首字符——和属性一样，写失败是可能的
      * （目录不可写/没有外部存储），但失败了也只是"关不掉"，功能不受影响（native 缺省开）。

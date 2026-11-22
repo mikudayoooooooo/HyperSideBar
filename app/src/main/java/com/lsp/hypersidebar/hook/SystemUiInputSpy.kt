@@ -846,10 +846,17 @@ object SystemUiInputSpy {
         if (sysPilfered) return
         if (pilferPointersNow()) {
             sysPilfered = true
-            HLog.i(TAG, "sys-pilfer ok ($reason) dt=$dt")
+            HLog.i(TAG, "sys-pilfer ok ($reason) dt=$dt zone=${zoneName(tracksGet(dt)?.zone ?: -1)}")
         } else {
             HLog.w(TAG, "sys-pilfer failed ($reason)")
         }
+    }
+
+    /** zone 数值→报告可读名（PrefKeys：0=strip 侧带 / 1=corner 底角；-1=无轨） */
+    private fun zoneName(zone: Int): String = when (zone) {
+        com.lsp.hypersidebar.prefs.PrefKeys.SPY_ZONE_CORNER -> "corner"
+        com.lsp.hypersidebar.prefs.PrefKeys.SPY_ZONE_STRIP -> "strip"
+        else -> "none"
     }
 
     // ===== 输入接管（防穿透）辅助 =====================================================
@@ -1200,7 +1207,7 @@ object SystemUiInputSpy {
                 }
                 runCatching {
                     if (pilferPointersNow()) {
-                        HLog.i(TAG, "pilfered stream dt=$dt")
+                        HLog.i(TAG, "pilfered stream dt=$dt zone=${zoneName(tracksGet(dt)?.zone ?: -1)}")
                     }
                 }.onFailure { HLog.w(TAG, "pilferPointers failed: ${it.message}") }
             }
@@ -1778,9 +1785,8 @@ object SystemUiInputSpy {
         val tr = tracksGet(ev.downTime) ?: return // 非转发流的 MOVE/UP（带外起手）——静默忽略
         val zone = tr.zone
         if (a == MotionEvent.ACTION_MOVE) {
-            if (zone == com.lsp.hypersidebar.prefs.PrefKeys.SPY_ZONE_CORNER) {
-                diagMoves++; diagHist += ev.historySize
-            }
+            // 逐 MOVE 只累加整数（摘要行在流结束才拼字符串——热路径零字符串分配）
+            diagMoves++; diagHist += ev.historySize
             if (ev.eventTime - lastMoveFwdEventTime < MOVE_COALESCE_MS) {
                 // 窗口内：只留最新（框架会在 finishInputEvent 后回收 ev，故必须 obtain 副本）
                 pendingMove?.recycle()
@@ -1795,16 +1801,16 @@ object SystemUiInputSpy {
                 return
             }
             lastMoveFwdEventTime = ev.eventTime
-            if (zone == com.lsp.hypersidebar.prefs.PrefKeys.SPY_ZONE_CORNER) diagFwdMoves++
+            diagFwdMoves++
         } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
-            // 2a 诊断：一流一行，把"spy 收到 N 个 MOVE / 其中 history H 点 / 转发 M 个"
-            // 对齐——这是区分"系统 pilfer 后断流"与"广播丢包/合流吃点"的唯一手段。
-            if (zone == com.lsp.hypersidebar.prefs.PrefKeys.SPY_ZONE_CORNER) {
-                HLog.i(TAG, "sys-corner $a dur=${ev.eventTime - ev.downTime}ms " +
-                    "moves=$diagMoves fwd=$diagFwdMoves hist=$diagHist " +
-                    "claimed=${sysCorner.claimed} shown=${sysCorner.lastReject == "SHOWN"} " +
-                    "pilfered=$sysPilfered ${sysCorner.diag()}")
-            }
+            // 一流一行默认级摘要（2026-11-22 增强 2）：冻屏时刻必须留下"抢没抢/还没还"的
+            // 证据。原先只有 corner 区有这行，strip 流结束零痕迹（issue #13 故障时刻零证据）。
+            HLog.i(TAG, "gesture end a=$a zone=${zoneName(zone)} dur=${ev.eventTime - ev.downTime}ms " +
+                "moves=$diagMoves fwd=$diagFwdMoves hist=$diagHist " +
+                "pilfered=$sysPilfered sent=$streamSent dropped=$streamDropped judge=${sysJudgeEnabled()}" +
+                if (zone == com.lsp.hypersidebar.prefs.PrefKeys.SPY_ZONE_CORNER)
+                    " claimed=${sysCorner.claimed} shown=${sysCorner.lastReject == "SHOWN"} ${sysCorner.diag()}"
+                else "")
             pendingMove?.let {
                 if (zone == com.lsp.hypersidebar.prefs.PrefKeys.SPY_ZONE_CORNER &&
                     sysJudgeEnabled() && sysPilfered.not() && sysCornerOnMove(it)
@@ -1825,9 +1831,6 @@ object SystemUiInputSpy {
         }
         enqueueStream(ev, w, h, zone, sysPilfered)
         if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
-            if (HLog.verboseEnabled) {
-                HLog.i(TAG, "stream end a=$a sent=$streamSent dropped=$streamDropped")
-            }
             tracksRemove(ev.downTime)
             sysPilfered = false
             sysCorner.reset()

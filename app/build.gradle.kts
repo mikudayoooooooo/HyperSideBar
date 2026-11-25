@@ -55,7 +55,7 @@ android {
         //         + 快捷方式保存防整表覆盖；均无包名断代，2.2.0 用户可直接覆盖安装
         // 2.3.1 = OS4 侧滑停顿以系统返回手势已认领为前提（系统手势门）
         //         + 竖屏扇形张角固定为配置值（修靠上/靠下留白）；无包名断代，可直接覆盖安装
-        versionName = "3.0.0"
+        versionName = "3.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

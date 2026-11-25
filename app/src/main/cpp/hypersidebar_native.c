@@ -2665,6 +2665,12 @@ static uintptr_t hsb_descriptor_locate(const char *name, uintptr_t base,
             /* 没有候选不是错误：可能这台设备的 .so 里该锚点确实不存在
              * （实测 cancel_home_gesture_to_engine 在 9/10 构建里已无符号），
              * 也可能 save-set 变成了语料里没有的形状（需要回填模板）。 */
+            /* 2026-11-25 优化 1：此前 0 命中完全静默（歧义有判词行、0 命中没有）⇒
+             * 「形状漂移要回填模板」与「本构建本来就没有」在日志里无法区分，
+             * 远程取证要多一轮往返。定位时机天然只在真要装/解析该锚点时（audit
+             * 也会打，与逐锚点 verdict 行同现不算噪声）。 */
+            LOGI("descriptor: %s 0 命中（save-set 漂移需回填模板，或本构建无此函数）⇒ 弃权，交特征扫描",
+                 name);
             return 0u;
         }
         if (p->hits == 1u) {
@@ -2680,6 +2686,36 @@ static uintptr_t hsb_descriptor_locate(const char *name, uintptr_t base,
         return 0u;
     }
     return 0u;
+}
+
+/* ── 形状路命中记录（2026-11-25 优化 2）：未知构建的回填素材 ──────────────────
+ * 语义：偏移表全未中、形状路收敛 ⇒ 这个锚点的偏移是表里没有的**新信息**。
+ * 随状态文件落一行 dloc=name@off,...，配合导出头部已有的 launcher versionCode，
+ * 维护者从用户导出即可回填 launcher_profiles.h 候选行（原字节核验仍需 APK，但
+ * 锚点定位的大头已到手）——issue #13 工作流从「要 APK」降为「要导出」。
+ * 只记形状路命中：偏移路命中=表已知无新信息；sigscan 命中不在此记（reason/判词
+ * 已有，如需同录属后续项）。上限 8 条，实际至多 main/a2/a3/rot 4 条；同名重试
+ * 覆盖不重复记。纯静态无线程，与描述符缓存同一生命周期（不进热重载账本）。 */
+#define HSB_DESC_WINS_MAX 8u
+static struct {
+    char name[32];          /* 最长锚点名 cancel_home_gesture_to_engine=29+NUL */
+    unsigned long off;      /* base 相对偏移，与偏移表同口径 */
+} g_desc_wins[HSB_DESC_WINS_MAX];
+static unsigned g_desc_wins_n;
+
+static void hsb_desc_win_note(const char *name, unsigned long off) {
+    unsigned i;
+    if (name == NULL || name[0] == '\0' || off == 0u) return;
+    for (i = 0; i < g_desc_wins_n; i++) {
+        if (strcmp(g_desc_wins[i].name, name) == 0) {   /* 重试同锚点：覆盖 */
+            g_desc_wins[i].off = off;
+            return;
+        }
+    }
+    if (g_desc_wins_n >= HSB_DESC_WINS_MAX) return;
+    snprintf(g_desc_wins[g_desc_wins_n].name, sizeof(g_desc_wins[0].name), "%s", name);
+    g_desc_wins[g_desc_wins_n].off = off;
+    g_desc_wins_n++;
 }
 
 static uintptr_t hsb_descriptor_locate(const char *name, uintptr_t base,
@@ -2861,6 +2897,9 @@ static uintptr_t hsb_locate(const HsbLauncherAnchor *a, uintptr_t *base_out, cha
             snprintf(how, how_sz, "%s", desc_how ? desc_how : "descriptor");
             *base_out = base;
             g_hook.descriptor_hits++;
+            /* 形状路命中=未知构建的新信息，进 dloc 回填记录（优化 2，见 g_desc_wins）。
+             * off 即 locate 返回的 base 相对偏移，与偏移表同口径。 */
+            hsb_desc_win_note(a->name, (unsigned long) off);
             return at;
         }
     }
@@ -3980,10 +4019,11 @@ static void hsb_state_file_write(void) {
     if (colon) *colon = '\0';
 
     char body[900];
+    /* 末尾换行挪到 dloc 段之后拼（优化 2）：dloc 为空时输出与旧格式逐字节相同。 */
     snprintf(body, sizeof(body),
              "proc=%s t=%lld installed=%u anchor=%s via=%s bias=0x%lx target=0x%lx attempts=%u desc=%u "
              "hits=%u seen=%u inband=%u dw=%u sw=%u af=%u ac=%u pub=%u/%u heal=%u/%u patch=%s "
-             "a2=%s a3=%s lib=%s reason=%s\n",
+             "a2=%s a3=%s lib=%s reason=%s",
              proc, (long long) time(NULL), g_hook.hook_installed,
              g_hook.anchor[0] ? g_hook.anchor : "-", g_hook.how[0] ? g_hook.how : "-",
              (unsigned long) g_hook.bias, (unsigned long) g_hook.target,
@@ -3995,6 +4035,20 @@ static void hsb_state_file_write(void) {
              g_hook3_installed ? g_hook3_name : "-",
              g_hook.lib_path[0] ? g_hook.lib_path : "-",
              g_hook.reason[0] ? g_hook.reason : "-");
+    /* dloc 段（优化 2）：形状路命中的偏移，未知构建回填素材；已知构建恒为空段。
+     * 拼装按剩余容量截断，绝不越过 body 边界；最多 8 条 × ~50B + 头部 ~310B < 900。 */
+    if (g_desc_wins_n > 0u) {
+        size_t len = strlen(body);
+        int n = snprintf(body + len, sizeof(body) - len, " dloc=");
+        if (n > 0) len += (size_t) n;
+        for (unsigned i = 0; i < g_desc_wins_n; i++) {
+            n = snprintf(body + len, sizeof(body) - len, "%s%s@0x%lx",
+                         i == 0 ? "" : ",", g_desc_wins[i].name, g_desc_wins[i].off);
+            if (n <= 0 || (size_t) n >= sizeof(body) - len) break;
+            len += (size_t) n;
+        }
+    }
+    strncat(body, "\n", sizeof(body) - strlen(body) - 1);
 
     int order[4] = {0, 1, 2, 3};
     if (g_state_cand >= 0 && g_state_cand <= 3) {

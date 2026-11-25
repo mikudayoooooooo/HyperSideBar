@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.SystemClock
+import com.lsp.hypersidebar.prefs.HostPackages
 import com.lsp.hypersidebar.prefs.PrefKeys
 import org.json.JSONObject
 
@@ -55,6 +56,41 @@ object LogDumpBridge {
     private const val CHUNK = 200
 
     /**
+     * HSBNative live 回灌节流（2026-11-23，issue #13 噪声治理）：同一进程 60s 只回灌一次。
+     * 旧行为每次日志拉取都灌 13 条 live: 行进环 ⇒ cache/power/remote 等无目标库进程的
+     * 缓冲被纯噪声占满（#13 导出实测三进程各 49 条全在重复同一段）。
+     * native 状态落盘（hsb_native_state.*，e37133f）后 live 回灌的取证价值已被取代，
+     * 保留本条只为"现场进程不看落盘也能看 native 现状"。
+     */
+    private const val LIVE_REFLOOD_INTERVAL_MS = 60_000L
+
+    /**
+     * 非接管进程判据（2026-11-23 #13 噪声治理）：securitycenter 的非 `:ui` 子进程
+     * （cache/power/remote）。这些进程不含桌面 native 库，native 报告永远是
+     * `target lib absent`，回灌对定性零信息量。
+     *
+     * **2026-11-25 订正（原注释写错了，别按它推理）**：原注释称短名被截成
+     * `securitycent`、短名名单永远匹配不上。那是错的——
+     * `"com.miui.securitycenter.cache".substringAfterLast('.')` 就是 `cache`
+     * （只有不带后缀的 `com.miui.securitycenter` 才会截成 `securitycent`），
+     * 短名名单本来可用。23:01 那份导出里 cache 仍在灌的真实原因是 **dex 陈旧**：
+     * cache 进程 21:18:35 启动、APK 21:19:05 才装完 ⇒ 它整晚跑的是旧代代码
+     * （即 AGENTS.md 记的 `install -r` 陈旧陷阱）。这里按原始进程名判定，
+     * 只是不依赖短名截断规则，与短名写法等价。
+     */
+    private fun isNonHookSecurityProc(): Boolean {
+        val raw = runCatching { android.app.Application.getProcessName() }.getOrNull() ?: return false
+        if (!raw.startsWith(HostPackages.UI_HOST)) return false
+        // securitycenter 子进程命名实测（2026-11-23 导出实锤）：`:ui` 用冒号，
+        // cache/power/remote 用**点**（com.miui.securitycenter.cache）——后缀判定两种都要收。
+        return raw.endsWith(".cache") || raw.endsWith(".power") || raw.endsWith(".remote") ||
+            raw.endsWith(":cache") || raw.endsWith(":power") || raw.endsWith(":remote")
+    }
+
+    @Volatile
+    private var lastLiveFloodUptime = 0L
+
+    /**
      * 接收器只注册一次；provider 后到者覆盖（EdgeGestureHook 带 CircuitBreaker/StatsRecorder
      * 的富注册到达时自动顶掉 XposedInit 早期注册的空 provider）。
      *
@@ -86,14 +122,26 @@ object LogDumpBridge {
                 override fun onReceive(c: Context, intent: Intent) {
                     val roundId = intent.getLongExtra(PrefKeys.LOG_DUMP_EXTRA_ROUND, 0L)
                     // native 现状即时回灌（spike 取证）：installed/hits 是运行期累积量，
-                    // 模块加载时那份快照看不到；logcat 在这台 ROM 上不可靠 ⇒ 导出必须带活体
-                    runCatching { NativeProbe.report() }.getOrNull()
-                        ?.split('\n')
-                        ?.forEach { HLog.i("HSBNative", "live: $it") }
-                    val entries = HLog.snapshot()
+                    // 模块加载时那份快照看不到；logcat 在这台 ROM 上不可靠 ⇒ 导出必须带活体。
+                    // 2026-11-23 节流 + 收窄（issue #13 噪声治理）：非接管进程跳过
+                    // （reason=target lib absent 恒定，无取证价值）、同进程 60s 只灌一次。
+                    val proc = HLog.proc()
+                    if (!isNonHookSecurityProc() &&
+                        SystemClock.uptimeMillis() - lastLiveFloodUptime > LIVE_REFLOOD_INTERVAL_MS
+                    ) {
+                        lastLiveFloodUptime = SystemClock.uptimeMillis()
+                        runCatching { NativeProbe.report() }.getOrNull()
+                            ?.split('\n')
+                            ?.forEach { HLog.i("HSBNative", "live: $it") }
+                    }
+                    // 2026-11-25：非接管进程只带尾部 3 行（纯 liveness）。它们的 22 行
+                    // 启动快照对定性零信息量，却固定占掉导出 66 行（issue #13 导出实测）。
+                    val nonHook = isNonHookSecurityProc()
+                    val entries = HLog.snapshot().let { if (nonHook) it.takeLast(3) else it }
                     val meta = JSONObject()
                         .put("entries", entries.size)
                         .put("dropped", HLog.dropped)
+                        .put("keepDropped", HLog.keepDropped())
                         .put("verbose", HLog.verboseEnabled)
                         .put("upMs", procStartUptime)
                     val chunks = entries.chunked(CHUNK)

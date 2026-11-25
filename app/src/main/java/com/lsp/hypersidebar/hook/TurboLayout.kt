@@ -466,19 +466,37 @@ class TurboLayout(private val remotePrefs: SharedPreferences) : BaseHook() {
                     "s#$sGestureSeq $act dur=${dur}ms stallFired=$sStallFired shown=${fanController.isShowing} " +
                         "strict=$sNativeStrict auth=$sAuthSeen"
                 )
-                if (sNativeStrict && !sAuthSeen && !sStallFired) {
-                    // 既没等到授权、也没到回退点：dur 短 = 抬手/被抢太快（dwell 没成立，正常不出扇形）；
-                    // dur 长 = 异常（回退支没落地），见上面的修复说明。
-                    val late = dur >= stripDwellMs() + authGraceMs()
-                    val note = if (late) "；⚠ dur 已超回退点却仍没落地 ⇒ 回退支有问题"
-                    else "；dur 短 ⇒ 正常（dwell 没成立）"
-                    com.lsp.hypersidebar.util.HLog.w(
-                        TAG,
-                        "s#$sGestureSeq AUTH 未出扇形：$act dur=${dur}ms" +
-                            "（既没等到 native 授权、也没到回退点 dwell+${authGraceMs()}ms$note）" +
-                            "（${authChannelHint()}）"
-                    )
+                // 2026-11-25 新增：**每条流一行的默认级终态**（issue #13 盲区）。
+                // 症状：用户报"轮盘不显示"，而此前本函数只有 vlog（高频开关默认关）和 strict 档的 W 行，
+                // strict=0 的用户一旦"收到流却没弹扇形"，日志里**一个字都没有** ⇒ 只能靠猜。
+                // 判词把四种结局分开：shown（正常）/ auth-ok-not-shown（收到授权却装配失败，真 bug）/
+                // late-no-fallback（超过回退点仍无动作，回退支挂了）/ dwell-not-met（抬手太快，正常）。
+                // dt=downTime 是**跨进程关联键**：native 发布的 payload 与 SpySink 的 gesture end 都带它。
+                // 2026-11-25 二次修正：判词必须把「手势没成立」和「回退支坏了」分开。
+                // 首版按 dur 判 late，实测（marble 11:11:41）把一条 901ms 但**根本没被识别为
+                // 侧滑**的流报成 late-no-fallback（误导方向：让人去查回退定时器）。
+                // sSwipeConfirmed 才是"位移/方向/角度都够了"的判据（见 confirm 分支）。
+                val authOk = sAuthSeen
+                val shown = fanController.isShowing
+                val confirmed = sSwipeConfirmed
+                val late = dur >= stripDwellMs() + authGraceMs()
+                val reason = when {
+                    shown -> "shown"
+                    !confirmed -> "not-triggered"
+                    authOk -> "auth-ok-not-shown"
+                    sStallFired -> "stall-fired-not-shown"
+                    late -> "late-no-fallback"
+                    else -> "dwell-not-met"
                 }
+                com.lsp.hypersidebar.util.HLog.i(
+                    TAG,
+                    "fan end s#$sGestureSeq act=$act dur=${dur}ms dt=${ev.downTime} " +
+                        "strict=$sNativeStrict confirmed=$confirmed auth=$authOk " +
+                        "stall=$sStallFired shown=$shown reason=$reason" +
+                        (if (reason == "dwell-not-met" || reason == "shown" ||
+                            reason == "not-triggered") ""
+                         else "（${authChannelHint()}）")
+                )
                 cancelStallTimer()
                 if (sStallFired) {
                     if (fanController.isShowing) {

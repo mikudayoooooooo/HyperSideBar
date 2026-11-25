@@ -279,15 +279,25 @@ private fun statusLine(json: String): String = runCatching {
 /** 导出为分段 txt（复用 SelfCheck 的 MediaStore 路径） */
 private suspend fun exportLogs(context: Context, logs: Map<String, List<HLog.Entry>>): String =
     withContext(Dispatchers.IO) {
-        val sb = StringBuilder("hyperSidebar 运行日志导出\n时间: ")
-            .append(java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
-                .format(java.util.Date()))
-            .append('\n')
-        logs.forEach { (proc, list) ->
-            sb.append("\n===== [$proc] ${list.size} 条 =====\n")
-            list.forEach { sb.append(it.formatLine()).append('\n') }
+        val header = buildString {
+            append("hyperSideBar 运行日志导出\n时间: ")
+            append(
+                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+                    .format(java.util.Date())
+            )
+            append('\n')
         }
+        // 段落骨架（段头 + 缓冲元信息 + 行体）单源在 LogExportFormat（2026-11-24）：
+        // 日志页导出原先不带 meta，keepDropped/dropped 看不到 ⇒ "导出里缺某行"
+        // 无法判读是没发生还是被环滚掉（与自检报告对齐）。
+        val metas = LogCollector.metas.toMap()
+        val sections = logs.map { (proc, list) ->
+            Triple(proc, metas[proc], list.map { it.formatLine() })
+        }
+        val content = com.lsp.hypersidebar.util.LogExportFormat.build(header, sections)
         // native 取证段由 `SelfCheck.export()` 统一附加（三条导出路径共用那个收口，
         // 免得按哪个按钮结果不一样——1009 就是踩在这里：日志页导出里没有 hook 状态）
-        SelfCheck.export(context, sb.toString())
+        // 2026-11-25：补环境头 —— 日志页导出此前只有日志分段，缺版本/分档/回执，
+        // 远程排障时同一台设备按不同按钮导出结论不一致。
+        SelfCheck.export(context, content, includeHeader = true)
     }

@@ -314,5 +314,6 @@ private suspend fun exportStatsCsv(context: Context, merged: JSONObject): String
             sb.append("\n# events\n")
             sb.append(StatsRecorder.eventCsvRows(events))
         }
-        com.lsp.hypersidebar.util.SelfCheck.export(context, sb.toString())
+        // 2026-11-25：补环境头（同日志页）。统计 CSV 单看无法判断是哪一版/哪台机。
+        com.lsp.hypersidebar.util.SelfCheck.export(context, sb.toString(), includeHeader = true)
     }

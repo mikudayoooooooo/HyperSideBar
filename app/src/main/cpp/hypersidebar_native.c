@@ -3965,7 +3965,10 @@ static const char *g_hb_state = "-";   /* 心跳最近一拍判词（ok/WIPED/CH
 
 static void hsb_state_file_write(void) {
     const char *proc = getprogname();
-    if (!proc || !proc[0]) proc = "?";
+    /* native_init 那一拍 getprogname 还是 zygote 占位名：此刻写会留下垃圾后缀文件、
+     * 且各进程互覆（2026-11-22 真机实测 hsb_native_state.<pre-initialized>）。
+     * 跳过本拍；后续安装判决/心跳拍进程名已就绪，会以真名写。 */
+    if (!proc || !proc[0] || strcmp(proc, "<pre-initialized>") == 0) return;
     char safe[80];
     size_t n = 0;
     for (const char *p = proc; *p && n < sizeof(safe) - 1; p++)

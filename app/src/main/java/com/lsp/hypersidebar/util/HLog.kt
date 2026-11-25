@@ -1,6 +1,5 @@
 package com.lsp.hypersidebar.util
 
-import android.os.SystemClock
 import android.util.Log
 import com.lsp.hypersidebar.prefs.HostPackages
 import org.json.JSONArray
@@ -36,8 +35,35 @@ object HLog {
     const val PROC_SYS = "sys"
     const val PROC_APP = "app"
 
-    /** 缓冲容量（约 150KB/进程，实现假设值 §11.2） */
-    private const val CAPACITY = 1000
+    /**
+     * 缓冲容量（2026-11-23 #13 后由 1000 提到 4000：issue #13 用户长时间使用后导出只剩
+     * [sys] 138 条且手势流痕迹被 blank-tap 高频行稀释；4000 条 ≈600KB/进程，对
+     * systemui/securitycenter 宿主进程无压力。分块回传（LogDumpBridge.CHUNK=200）
+     * 天然兼容，只是块数变多）。
+     */
+    private const val CAPACITY = 4000
+
+    /**
+     * 关键行保护环（2026-11-23 #13 后新增）：E/W 级别 + 故障定位关键 tag 双写进一个
+     * 小环（[KEEP_CAPACITY] 槽）。主环被高频 I 行（blank-tap/gesture end）滚掉后，
+     * 故障时刻的关键行仍在这里——导出两环合并（主环在前、关键环补差），去重按 Entry 引用。
+     * 纯内存追加，热路径只多一次 if + 偶尔一次小环覆盖，无 I/O。
+     */
+    private const val KEEP_CAPACITY = 300
+
+    /**
+     * 关键 tag 白名单（精确匹配，与各 hook 的 TAG 常量同源）：这些 tag 的 I 行即使主环
+     * 被冲也保留。tag 选择原则——只收"故障定性必需"的行，不收高频明细：
+     * SysInputSpy 的 gesture end（zone/dur/judge 摘要）、corner/AuthRelay（AUTH/回执）、
+     * TurboLayout（触发带状态机）、AnchorResolver（拒装）、HSBNative（native live 回灌）、
+     * LogDump 自身。blank-tap 等高频行不在名单。
+     */
+    private val KEEP_TAGS = setOf(
+        "SysInputSpy", "AuthRelay", "TurboLayout", "AnchorResolver",
+        "AnchorNative", "HSBNative", "LogDump", "LogCollector", "FanMenu",
+    )
+
+    private val keepBuf = ArrayDeque<Entry>(KEEP_CAPACITY)
 
     /**
      * 高频明细开关（volatile，无锁读）。赋值点：各进程 hook init 时读 prefs 一次 +
@@ -136,6 +162,14 @@ object HLog {
                 dropped++
             }
             buf.addLast(entry)
+            // 关键行保护环双写（2026-11-23）：E/W 或关键 tag 的 I 行进小环，主环被冲也留底
+            if (level != 'I' || tag in KEEP_TAGS) {
+                if (keepBuf.size >= KEEP_CAPACITY) {
+                    keepBuf.removeFirst()
+                    keepDroppedCount++
+                }
+                keepBuf.addLast(entry)
+            }
         }
     }
 
@@ -157,13 +191,29 @@ object HLog {
         return out
     }
 
-    /** 快照（模块 App 日志页直读本进程缓冲） */
-    fun snapshot(): List<Entry> = synchronized(buf) { buf.toList() }
+    /** 快照（模块 App 日志页直读本进程缓冲）：主环 + 关键环补差（主环在前，按引用去重） */
+    fun snapshot(): List<Entry> = synchronized(buf) {
+        val seen = buf.toHashSet()
+        val merged = ArrayList<Entry>(buf.size + keepBuf.size)
+        merged.addAll(buf)
+        keepBuf.forEach { if (it !in seen) merged.add(it) }
+        merged.sortedBy { it.wallMs }
+    }
 
     /** 拉取载荷：最近 [limit] 条的 JSON 数组字符串（跨进程广播 extra 用） */
     fun dumpJson(limit: Int = CAPACITY): String {
         val arr = JSONArray()
-        synchronized(buf) { buf.takeLast(limit).forEach { arr.put(it.toJson()) } }
+        snapshot().takeLast(limit).forEach { arr.put(it.toJson()) }
         return arr.toString()
     }
+
+    /** 关键环独立计数（meta 取证用：判读"关键行也被冲掉"还剩多少余量） */
+    fun keepDropped(): Long = synchronized(buf) { keepDroppedCount }
+
+    private var keepDroppedCount = 0L
+
+    /** 测试探针（HLogKeepRingProbe 单源消费；生产代码不得调用） */
+    internal fun capacityForTest(): Int = CAPACITY
+
+    internal fun keepCapacityForTest(): Int = KEEP_CAPACITY
 }

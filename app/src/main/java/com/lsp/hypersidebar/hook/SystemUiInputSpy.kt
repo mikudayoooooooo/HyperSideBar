@@ -1805,7 +1805,10 @@ object SystemUiInputSpy {
         } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
             // 一流一行默认级摘要（2026-11-22 增强 2）：冻屏时刻必须留下"抢没抢/还没还"的
             // 证据。原先只有 corner 区有这行，strip 流结束零痕迹（issue #13 故障时刻零证据）。
-            HLog.i(TAG, "gesture end a=$a zone=${zoneName(zone)} dur=${ev.eventTime - ev.downTime}ms " +
+            // dt=downTime：**跨进程关联键**（2026-11-25）。native 发布的 payload 第 2 段、
+            // 以及 :ui 的 fan end 行都带同一个值 ⇒ 导出里三条链路能按同一次按下对齐，
+            // 而不是靠时间戳肉眼配对（issue #13 多手势场景下曾对不上）。
+            HLog.i(TAG, "gesture end a=$a zone=${zoneName(zone)} dur=${ev.eventTime - ev.downTime}ms dt=${ev.downTime} " +
                 "moves=$diagMoves fwd=$diagFwdMoves hist=$diagHist " +
                 "pilfered=$sysPilfered sent=$streamSent dropped=$streamDropped judge=${sysJudgeEnabled()}" +
                 if (zone == com.lsp.hypersidebar.prefs.PrefKeys.SPY_ZONE_CORNER)

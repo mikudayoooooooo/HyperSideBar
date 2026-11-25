@@ -350,12 +350,58 @@ object SelfCheck {
             }
         }
 
+    /**
+     * 紧凑环境头（2026-11-25，用户提问「不同位置导出的日志有差异吗」的落地）。
+     *
+     * 背景：三条导出路径（自检报告 / 日志页 / 使用统计）共用 [export] 挂 native 取证段，
+     * 但**只有自检报告**带环境头。用户点「日志页导出」时，拿到的文件里没有桌面
+     * versionCode、没有 2a 分档判决、没有回执年龄、没有 native gate marker ——
+     * 而这些恰是 issue #13 定性必需的信息，于是同一台设备按不同按钮导出，结论不一样
+     * （与 1009「日志页导出没有 hook 状态」同一类问题）。
+     *
+     * 本函数只放**判读必需且廉价**的项：版本族 / ROM / 桌面分档 / native 总闸 / 三宿主回执。
+     * 配置快照、探针双路等重项仍只在完整自检报告里（导出体积与耗时考虑）。
+     */
+    fun compactHeader(context: Context): String = buildString {
+        appendLine("== 环境与状态（三条导出路径共用；缺这段就无法判读版本/分档/回执）==")
+        runCatching {
+            val diskVc = context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
+            appendLine("模块: ${com.lsp.hypersidebar.BuildConfig.VERSION_NAME}" +
+                " 运行vc=${com.lsp.hypersidebar.BuildConfig.VERSION_CODE} 磁盘vc=$diskVc")
+        }.onFailure { appendLine("模块版本: 读取失败 ${it.message}") }
+        runCatching {
+            appendLine("系统: Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT}) / ${Build.MODEL}" +
+                " / ${Build.VERSION.INCREMENTAL}")
+        }
+        runCatching {
+            val launcherVc = context.packageManager.getPackageInfo(HostPackages.HOME, 0).longVersionCode
+            val acks = ConfigSync.ackSnapshot()
+            SelfCheckEnv.lines(
+                rom = Build.VERSION.INCREMENTAL ?: "?",
+                os4 = com.lsp.hypersidebar.hook.Os4Marker.romIsOs4(),
+                launcherVc = launcherVc,
+                moduleVc = com.lsp.hypersidebar.BuildConfig.VERSION_CODE.toLong(),
+                pilferProp = SysProps.get(PropNames.CORNER_PILFER),
+                sysjudgeProp = SysProps.get(PropNames.CORNER_SYSJUDGE),
+                gateMarker = NativeGateBridge.markerContent(),
+                acks = acks,
+                nowElapsedMs = android.os.SystemClock.elapsedRealtime()
+            ).forEach { appendLine(it) }
+        }.onFailure { appendLine("运行环境: 读取失败 ${it.message}") }
+    }
     /** 导出到公共下载目录（MediaStore，无需存储权限）；返回展示用路径描述 */
-    suspend fun export(context: Context, content: String): String = withContext(Dispatchers.IO) {
+    suspend fun export(
+        context: Context,
+        content: String,
+        includeHeader: Boolean = false,
+    ): String = withContext(Dispatchers.IO) {
+        // 日志页/统计页导出默认补环境头（2026-11-25）：同一台设备按不同按钮导出，
+        // 结论不该不一样。自检报告自己已带完整环境段，故传 false 避免重复。
+        val head = if (includeHeader) compactHeader(context) + "\n" else ""
         // 三条导出路径（诊断页 / 日志页 / 使用数据页）都收口在这里 ⇒ native 取证段保证带得上。
         // 桌面进程无模块 Java 半侧（导出永远不会有 [launcher] 段），hook 的活性与命中只能经
         // root 抓一拍；1009 的教训是只加在自检报告里，用户按"日志页导出"就一个字都没拿到。
-        val withNative = content + "\n\n== native root 取证（spike 分支）==\n" +
+        val withNative = head + content + "\n\n== native root 取证（spike 分支）==\n" +
             runCatching { NativeRootProbe.snapshot(context) }
                 .getOrElse { "取证失败：${it.message}" } + "\n"
         val fileName = "hypersidebar_selfcheck_" +

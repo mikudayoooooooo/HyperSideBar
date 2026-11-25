@@ -172,13 +172,20 @@ object InsetProbe {
         // 2026-10-17 修正：比较**来源种类**（`metrics`/`viewHook`/`overlay`/`imService`），
         // 否则同一个 viewHook 换了类名就被当成"别的来源"，键盘收起后清不掉 ⇒ 整段下半屏被误杀 ✗。
         if (px == 0 && imeBottomRaw > 0 && kindOf(src) != kindOf(source)) return
-        if (px == imeBottomRaw && src == source) return
+        // 2026-11-24 降噪（issue #13 取证实测）：原判据按 (px, src) 配对去重，而 view 兜底钩子
+        // 会在**每个状态栏 view** 上各回调一次（chips/BatteryIndicator/ChipTextView…），src 各不相同
+        // ⇒ 去重永不命中，10 分钟灌 457 行 `ime bottom=0`，占满 sys 环 84%，把 gesture end 挤掉。
+        // 改为「值没变就不打」：状态照旧更新（source 跟随最近一次来源），只在读数变化时留行——
+        // 这行本身的价值就是「哪个来源给出了新值」，重复同值零信息量。
+        val changed = px != imeBottomRaw
+        val srcChangedSamePx = px == imeBottomRaw && src == source
+        if (srcChangedSamePx) return
         imeBottomRaw = px
         imeBottomAt = android.os.SystemClock.uptimeMillis()
         imeKnown = true
         imeStampAt = imeBottomAt
         source = src
-        HLog.i(TAG, "ime bottom=$px via $src")
+        if (changed) HLog.i(TAG, "ime bottom=$px via $src")
     }
 
     /**
@@ -245,11 +252,20 @@ object InsetProbe {
         //  ② 浮层键盘（搜狗「游戏键盘」）⇒ insets 帧高 0 ⇒ **矩形不可知**，只能"不动作"。
         val romFloating = ImeRectMath.isFloating(box, navBar)
         val floating = visible && resolved.isEmpty
-        floatingIme = floating
         val rect = if (visible && !floating)
             android.graphics.Rect(resolved.left, resolved.top, resolved.right, resolved.bottom)
         else null
+        // 2026-11-24 修（issue #13 取证实锤）：本函数**从来没有把 rect 写进 imeRectRaw/imeBottomRaw**
+        // （git 追溯：自 e0b4a4e 建文件起就漏了），两个后果都是真的——
+        //   ① `changed` 恒真 ⇒ 每次 WMShell 回调都打一行 `ime rect=`（同矩形重复 7 次/40s）；
+        //   ② [imeRect] 恒 null ⇒ [wmShellSaysHidden] 的"权威否定"判据失效，键盘弹着也报 hidden，
+        //      只能靠 [imeActive]/服务阀兜底（本机服务阀还坏了：没有 getInputMethodWindowVisibleHeight）
+        //      ⇒ 正是注释里那条"键盘触摸被当空白点击吃掉"的路径。
+        // 顺序也一并纠正：先取旧值算 changed，再统一落状态（原实现把 floatingIme 先赋值了，该项恒 false）。
         val changed = imeRectRaw != rect || imeBottomRaw != (rect?.height() ?: 0) || floatingIme != floating
+        floatingIme = floating
+        imeRectRaw = rect
+        imeBottomRaw = rect?.height() ?: 0
         imeBottomAt = android.os.SystemClock.uptimeMillis()
         imeKnown = true
         imeStampAt = imeBottomAt
